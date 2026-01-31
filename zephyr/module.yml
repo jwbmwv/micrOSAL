@@ -1,0 +1,4 @@
+name: microsal
+build:
+  cmake: .
+  kconfig: Kconfig

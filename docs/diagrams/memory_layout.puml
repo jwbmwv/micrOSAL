@@ -1,0 +1,58 @@
+@startuml memory_layout
+!theme plain
+!include _render_profile.puml
+skinparam backgroundColor #FEFEFE
+skinparam defaultFontName "Segoe UI"
+
+title **MicrOSAL — Config / Data Split (FLASH vs RAM)**
+
+' ============================================================================
+' FLASH (.rodata) — immutable config structs
+' ============================================================================
+
+rectangle "**FLASH / .rodata**" as flash #E8F5E9 {
+    card "mutex_config\n{ type }" as mc #C8E6C9
+    card "semaphore_config\n{ type, initial_count,\n  max_count }" as sc #C8E6C9
+    card "timer_config\n{ callback, arg, period,\n  mode, name }" as tc #C8E6C9
+    card "thread_config\n{ entry, arg, priority,\n  affinity, stack,\n  stack_bytes, name }" as thc #C8E6C9
+    card "work_queue_config\n{ stack, stack_bytes,\n  depth, name }" as wqc #C8E6C9
+    card "memory_pool_config\n{ buffer, buf_bytes,\n  block_size, block_count,\n  name }" as mpc #C8E6C9
+}
+
+' ============================================================================
+' RAM (.data / .bss) — mutable runtime handles
+' ============================================================================
+
+rectangle "**RAM / .data + .bss**" as ram #E3F2FD {
+    card "mutex\n{ handle_, valid_ }\n≤ 12 B" as m #BBDEFB
+    card "semaphore\n{ handle_, valid_ }\n≤ 12 B" as s #BBDEFB
+    card "timer\n{ handle_, valid_ }\n≤ 12 B" as t #BBDEFB
+    card "thread\n{ handle_, valid_ }\n≤ 12 B" as th #BBDEFB
+    card "work_queue\n{ handle_, valid_ }\n≤ 12 B" as wq #BBDEFB
+    card "memory_pool\n{ handle_, valid_,\n  block_size_ }\n≤ 20 B" as mp #BBDEFB
+}
+
+' ============================================================================
+' Relationships — config feeds into constructor
+' ============================================================================
+
+mc -[#4CAF50]-> m : "ctor"
+sc -[#4CAF50]-> s : "ctor"
+tc -[#4CAF50]-> t : "ctor"
+thc -[#4CAF50]-> th : "create()"
+wqc -[#4CAF50]-> wq : "ctor"
+mpc -[#4CAF50]-> mp : "ctor"
+
+note bottom of flash
+  Config structs are declared **const / constexpr**.
+  The linker places them in **.rodata** (FLASH).
+  Zero RAM cost for the descriptors themselves.
+end note
+
+note bottom of ram
+  Only the OS handle (void*) and a valid flag
+  reside in RAM. Dead stored fields (type_ from
+  mutex, type_ from semaphore) were removed.
+end note
+
+@enduml

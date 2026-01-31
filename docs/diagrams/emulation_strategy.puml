@@ -1,0 +1,428 @@
+@startuml emulation_strategy
+!theme plain
+!include _render_profile.puml
+skinparam backgroundColor #FEFEFE
+skinparam defaultFontName "Segoe UI"
+skinparam componentStyle rectangle
+skinparam pageOrientation landscape
+left to right direction
+
+title **MicrOSAL — Native vs Emulated Primitives**
+
+scale max 1400 width
+
+' ============================================================================
+' Mailbox
+' ============================================================================
+package "Mailbox (osal::mailbox<T>)" as mb_pkg #F1F8E9 {
+
+        package "Header-only adapter (all 17 backends)" as mb_all #DCEDC8 {
+                component "mailbox.hpp" as mb_hdr #AED581
+                note bottom of mb_hdr
+                    **queue<T,1> wrapper**
+                    ─────────────────────
+                    • No new backend ABI
+                    • Single-slot typed handoff
+                    • Inherits queue timed/ISR semantics
+                    • Queue support implies mailbox support
+                end note
+
+                [All backends\nvia osal::queue<T,1>] as mb_backends
+                [ChibiOS\nqueue path already uses\nnative mailbox_t] as mb_ch
+        }
+
+        mb_backends ..> mb_hdr : uses
+        mb_ch ..> mb_hdr : native mailbox via queue
+}
+
+' ============================================================================
+' Condvar
+' ============================================================================
+package "Condition Variable (osal::condvar)" as cv_pkg #E8F5E9 {
+
+    package "Native (9 backends)" as cv_native #C8E6C9 {
+        [POSIX\npthread_cond_t] as cv_po
+        [Linux\npthread_cond_t\nCLOCK_MONOTONIC] as cv_li
+        [QNX\npthread_cond_t\nmonotonic] as cv_qx
+        [NuttX\nnxsem-based] as cv_nx
+        [RTEMS\npthread_cond_t] as cv_rt
+        [INTEGRITY\npthread_cond_t] as cv_in
+        [Zephyr\nk_condvar\n(static pool)] as cv_zy
+        [ChibiOS\ncondition_variable_t\n(static pool)] as cv_ch
+        [VxWorks\ncondVarLib] as cv_vx
+    }
+
+    package "Emulated (8 backends)" as cv_emu #FFECB3 {
+        component "emulated_condvar.inl" as cv_inl #FFE082
+        note bottom of cv_inl
+          **Birrell's pattern**
+          ────────────────────
+          • Guard mutex (osal::mutex)
+          • Array of binary semaphores
+            (OSAL_CONDVAR_MAX_WAITERS = 8)
+          • Pre-allocated at create time
+          • notify_one: give first waiter's sem
+          • notify_all: give all waiters' sems
+        end note
+
+        [FreeRTOS] as cv_fr
+        [ThreadX] as cv_tx
+        [PX5] as cv_px
+        [Micrium] as cv_mi
+        [embOS] as cv_em
+        [Bare-metal] as cv_bm
+        [CMSIS-RTOS] as cv_c1
+        [CMSIS-RTOS2] as cv_c2
+    }
+
+    cv_fr ..> cv_inl : #include
+    cv_tx ..> cv_inl : #include
+    cv_px ..> cv_inl : #include
+    cv_mi ..> cv_inl : #include
+    cv_em ..> cv_inl : #include
+    cv_bm ..> cv_inl : #include
+    cv_c1 ..> cv_inl : #include
+    cv_c2 ..> cv_inl : #include
+}
+
+' ============================================================================
+' Work Queue
+' ============================================================================
+package "Work Queue (osal::work_queue)" as wq_pkg #E3F2FD {
+
+    package "Native (3 backends)" as wq_native #BBDEFB {
+        [Zephyr\nk_work_queue] as wq_zy
+        [NuttX\nwork_queue()] as wq_nx
+        [VxWorks\njobQueueLib] as wq_vx
+    }
+
+    package "Emulated — OSAL primitives (10 backends)" as wq_emu #FFECB3 {
+        component "emulated_work_queue.inl" as wq_inl #FFE082
+        note bottom of wq_inl
+          **Thread + ring buffer**
+          ──────────────────────
+          • Dedicated worker thread
+          • Circular buffer (configurable depth)
+          • Mutex + semaphore for sync
+          • FIFO execution guarantee
+        end note
+
+        [FreeRTOS] as wq_fr
+        [ThreadX] as wq_tx
+        [PX5] as wq_px
+        [QNX] as wq_qx
+        [Micrium] as wq_mi
+        [ChibiOS] as wq_ch
+        [embOS] as wq_em
+        [Bare-metal] as wq_bm
+        [CMSIS-RTOS] as wq_c1
+        [CMSIS-RTOS2] as wq_c2
+    }
+
+    package "Emulated — POSIX pthread (4 backends)" as wq_posix #D1C4E9 {
+        component "posix_pthread_work_queue.inl" as wq_posix_inl #C5CAE9
+        note bottom of wq_posix_inl
+          **pthread thread + ring buffer**
+          ────────────────────────────────
+          • Dedicated pthread worker
+          • Circular buffer (configurable depth)
+          • pthread_mutex_t + pthread_cond_t
+          • CLOCK_MONOTONIC timed waits
+          • Drop-in replacement for emu_wq
+            on POSIX-family hosts
+        end note
+
+        [POSIX] as wq_po
+        [Linux] as wq_li
+        [RTEMS] as wq_rt
+        [INTEGRITY] as wq_in
+    }
+
+    wq_fr ..> wq_inl : #include
+    wq_tx ..> wq_inl : #include
+    wq_px ..> wq_inl : #include
+    wq_qx ..> wq_inl : #include
+    wq_mi ..> wq_inl : #include
+    wq_ch ..> wq_inl : #include
+    wq_em ..> wq_inl : #include
+    wq_bm ..> wq_inl : #include
+    wq_c1 ..> wq_inl : #include
+    wq_c2 ..> wq_inl : #include
+
+    wq_po ..> wq_posix_inl : #include
+    wq_li ..> wq_posix_inl : #include
+    wq_rt ..> wq_posix_inl : #include
+    wq_in ..> wq_posix_inl : #include
+}
+
+' ============================================================================
+' Memory Pool
+' ============================================================================
+package "Memory Pool (osal::memory_pool)" as mp_pkg #FFF3E0 {
+
+    package "Native (8 backends)" as mp_native #FFE0B2 {
+        [ThreadX\ntx_block_pool] as mp_tx
+        [PX5\ntx_block_pool] as mp_px
+        [VxWorks\nmemPartLib] as mp_vx
+        [Micrium\nOSMemCreate] as mp_mi
+        [ChibiOS\nchPoolInit] as mp_ch
+        [embOS\nOS_MEMPOOL] as mp_em
+        [CMSIS-RTOS\nosPool] as mp_c1
+        [CMSIS-RTOS2\nosMemoryPool] as mp_c2
+    }
+
+    package "Emulated (9 backends)" as mp_emu #FFECB3 {
+        component "emulated_memory_pool.inl" as mp_inl #FFE082
+        note bottom of mp_inl
+          **Bitmap-based allocator**
+          ──────────────────────────
+          • Caller-supplied backing buffer
+          • uint32_t bitmap (1 bit per block)
+          • OSAL mutex guards bitmap
+          • Counting semaphore for timed alloc
+          • O(1) free, O(n) alloc worst case
+        end note
+
+        [FreeRTOS] as mp_fr
+        [Zephyr] as mp_zy
+        [POSIX] as mp_po
+        [Linux] as mp_li
+        [NuttX] as mp_nx
+        [QNX] as mp_qx
+        [RTEMS] as mp_rt
+        [INTEGRITY] as mp_in
+        [Bare-metal] as mp_bm
+    }
+
+    mp_fr ..> mp_inl : #include
+    mp_zy ..> mp_inl : #include
+    mp_po ..> mp_inl : #include
+    mp_li ..> mp_inl : #include
+    mp_nx ..> mp_inl : #include
+    mp_qx ..> mp_inl : #include
+    mp_rt ..> mp_inl : #include
+    mp_in ..> mp_inl : #include
+    mp_bm ..> mp_inl : #include
+}
+
+' ============================================================================
+' Read-Write Lock
+' ============================================================================
+package "Read-Write Lock (osal::rwlock)" as rw_pkg #E8EAF6 {
+
+    package "Native (6 backends)" as rw_native #C5CAE9 {
+        [POSIX\npthread_rwlock_t] as rw_po
+        [Linux\npthread_rwlock_t\nCLOCK_MONOTONIC] as rw_li
+        [NuttX\npthread_rwlock_t] as rw_nx
+        [QNX\npthread_rwlock_t\nmonotonic] as rw_qx
+        [RTEMS\npthread_rwlock_t] as rw_rt
+        [INTEGRITY\npthread_rwlock_t] as rw_in
+    }
+
+    package "Emulated (11 backends)" as rw_emu #FFECB3 {
+        component "emulated_rwlock.inl" as rw_inl #FFE082
+        note bottom of rw_inl
+          **Mutex + condvar + counter**
+          ─────────────────────────────
+          • OSAL mutex protects state
+          • OSAL condvar for blocking
+          • reader_count + writer_active
+          • Deadline-aware timed waits
+          • broadcast on every unlock
+        end note
+
+        [FreeRTOS] as rw_fr
+        [Zephyr] as rw_zy
+        [ThreadX] as rw_tx
+        [PX5] as rw_px
+        [VxWorks] as rw_vx
+        [Micrium] as rw_mi
+        [ChibiOS] as rw_ch
+        [embOS] as rw_em
+        [Bare-metal] as rw_bm
+        [CMSIS-RTOS] as rw_c1
+        [CMSIS-RTOS2] as rw_c2
+    }
+
+    rw_fr ..> rw_inl : #include
+    rw_zy ..> rw_inl : #include
+    rw_tx ..> rw_inl : #include
+    rw_px ..> rw_inl : #include
+    rw_vx ..> rw_inl : #include
+    rw_mi ..> rw_inl : #include
+    rw_ch ..> rw_inl : #include
+    rw_em ..> rw_inl : #include
+    rw_bm ..> rw_inl : #include
+    rw_c1 ..> rw_inl : #include
+    rw_c2 ..> rw_inl : #include
+}
+
+' ============================================================================
+' Event Flags
+' ============================================================================
+package "Event Flags (osal::event_flags)" as ef_pkg #FFF3E0 {
+
+    package "Native (8 backends)" as ef_native #FFE0B2 {
+        [FreeRTOS\nxEventGroupCreate] as ef_fr
+        [Zephyr\nk_event] as ef_zy
+        [ThreadX\ntx_event_flags] as ef_tx
+        [PX5\npx5_event_flags] as ef_px
+        [Micrium\nOSFlagCreate] as ef_mi
+        [ChibiOS\nevent_source_t] as ef_ch
+        [embOS\nOS_EVENT] as ef_em
+        [CMSIS-RTOS2\nosEventFlagsNew] as ef_c2
+    }
+
+    package "Emulated (9 backends)" as ef_emu #FFECB3 {
+        component "emulated_event_flags.inl" as ef_inl #FFE082
+        note bottom of ef_inl
+          **Mutex + per-waiter semaphore array**
+          ──────────────────────────────────────
+          • OSAL mutex guards bits + waiter array
+          • Each waiter gets a binary semaphore slot
+          • set() : OR bits, give all waiter semas
+          • set_isr() : volatile OR + give_isr
+          • wait : claim slot → sem_take → re-check
+          • Static pool, zero heap allocation
+        end note
+
+        [POSIX] as ef_po
+        [Linux] as ef_li
+        [Bare-metal] as ef_bm
+        [VxWorks] as ef_vx
+        [NuttX] as ef_nx
+        [QNX] as ef_qx
+        [RTEMS] as ef_rt
+        [INTEGRITY] as ef_in
+        [CMSIS-RTOS] as ef_c1
+    }
+
+    ef_po ..> ef_inl : #include
+    ef_li ..> ef_inl : #include
+    ef_bm ..> ef_inl : #include
+    ef_vx ..> ef_inl : #include
+    ef_nx ..> ef_inl : #include
+    ef_qx ..> ef_inl : #include
+    ef_rt ..> ef_inl : #include
+    ef_in ..> ef_inl : #include
+    ef_c1 ..> ef_inl : #include
+}
+
+' ============================================================================
+' Stream Buffer
+' ============================================================================
+package "Stream Buffer (osal::stream_buffer)" as sb_pkg #EDE7F6 {
+
+    package "Native (1 backend)" as sb_native #D1C4E9 {
+        [FreeRTOS\nxStreamBufferCreate\nxStreamBufferSendFromISR] as sb_fr
+    }
+
+    package "Emulated (16 backends)" as sb_emu #FFECB3 {
+        component "emulated_stream_buffer.inl" as sb_inl #FFE082
+        note bottom of sb_inl
+          **SPSC ring + 2 binary semaphores**
+          ─────────────────────────────────
+          • Byte-oriented bulk read/write
+          • data_sem: signals bytes available
+          • space_sem: signals space available
+          • TriggerLevel: min bytes before wake
+          • head_ stored once per write (atomic)
+          • ISR path: osal_semaphore_give_isr
+        end note
+
+        [Zephyr] as sb_zy
+        [ThreadX] as sb_tx
+        [PX5] as sb_px
+        [POSIX] as sb_po
+        [Linux] as sb_li
+        [QNX] as sb_qx
+        [NuttX] as sb_nx
+        [RTEMS] as sb_rt
+        [INTEGRITY] as sb_in
+        [VxWorks] as sb_vx
+        [Micrium] as sb_mi
+        [ChibiOS] as sb_ch
+        [embOS] as sb_em
+        [Bare-metal] as sb_bm
+        [CMSIS-RTOS] as sb_c1
+        [CMSIS-RTOS2] as sb_c2
+    }
+
+    sb_zy ..> sb_inl : #include
+    sb_tx ..> sb_inl : #include
+    sb_px ..> sb_inl : #include
+    sb_po ..> sb_inl : #include
+    sb_li ..> sb_inl : #include
+    sb_qx ..> sb_inl : #include
+    sb_nx ..> sb_inl : #include
+    sb_rt ..> sb_inl : #include
+    sb_in ..> sb_inl : #include
+    sb_vx ..> sb_inl : #include
+    sb_mi ..> sb_inl : #include
+    sb_ch ..> sb_inl : #include
+    sb_em ..> sb_inl : #include
+    sb_bm ..> sb_inl : #include
+    sb_c1 ..> sb_inl : #include
+    sb_c2 ..> sb_inl : #include
+}
+
+' ============================================================================
+' Message Buffer
+' ============================================================================
+package "Message Buffer (osal::message_buffer)" as mb_pkg #FCE4EC {
+
+    package "Native (1 backend)" as mb_native #F8BBD0 {
+        [FreeRTOS\nxMessageBufferCreate\nxMessageBufferSendFromISR] as mb_fr
+    }
+
+    package "Emulated (16 backends)" as mb_emu #FFECB3 {
+        component "emulated_message_buffer.inl" as mb_inl #FFE082
+        note bottom of mb_inl
+          **Length-prefixed SPSC ring**
+          ────────────────────────────
+          • Wire: [uint16_t len][payload]
+          • emu_mb_ prefix avoids anon-NS
+            collision with stream_buffer.inl
+          • head_ updated once after header
+            + payload (no partial-frame reads)
+          • Truncation on oversized receive
+            (FreeRTOS-compatible semantics)
+        end note
+
+        [Zephyr] as mb_zy
+        [ThreadX] as mb_tx
+        [PX5] as mb_px
+        [POSIX] as mb_po
+        [Linux] as mb_li
+        [QNX] as mb_qx
+        [NuttX] as mb_nx
+        [RTEMS] as mb_rt
+        [INTEGRITY] as mb_in
+        [VxWorks] as mb_vx
+        [Micrium] as mb_mi
+        [ChibiOS] as mb_ch
+        [embOS] as mb_em
+        [Bare-metal] as mb_bm
+        [CMSIS-RTOS] as mb_c1
+        [CMSIS-RTOS2] as mb_c2
+    }
+
+    mb_zy ..> mb_inl : #include
+    mb_tx ..> mb_inl : #include
+    mb_px ..> mb_inl : #include
+    mb_po ..> mb_inl : #include
+    mb_li ..> mb_inl : #include
+    mb_qx ..> mb_inl : #include
+    mb_nx ..> mb_inl : #include
+    mb_rt ..> mb_inl : #include
+    mb_in ..> mb_inl : #include
+    mb_vx ..> mb_inl : #include
+    mb_mi ..> mb_inl : #include
+    mb_ch ..> mb_inl : #include
+    mb_em ..> mb_inl : #include
+    mb_bm ..> mb_inl : #include
+    mb_c1 ..> mb_inl : #include
+    mb_c2 ..> mb_inl : #include
+}
+
+@enduml

@@ -1,0 +1,495 @@
+@startuml capability_matrix
+!theme plain
+!include _render_profile.puml
+skinparam backgroundColor #FEFEFE
+skinparam defaultFontName "Segoe UI"
+skinparam pageOrientation landscape
+
+title **MicrOSAL — Backend Capability Matrix**
+
+scale max 1400 width
+
+<style>
+  map {
+    FontSize 11
+    BackgroundColor #F8F8FF
+  }
+</style>
+
+map "FreeRTOS" as fr {
+  recursive_mutex => ✓
+  timed_mutex => ✓
+  priority_inheritance => ✓
+  isr_semaphore => ✓
+  thread_affinity => ✗
+  timed_join => ✗
+  thread_suspend_resume => cfg
+  thread_local_data => emu
+  dynamic_thread_priority => ✓
+  task_notification => ✓
+  stack_overflow_detection => cfg
+  cpu_load_stats => cfg
+  wait_set => ✗
+  native_event_flags => ✓
+  native_work_queue => ✗
+  native_condvar => ✗
+  native_memory_pool => ✗
+  native_stream_buffer => ✓
+  isr_stream_buffer => ✓
+  native_message_buffer => ✓
+  isr_message_buffer => ✓
+  native_rwlock => ✗
+  spinlock => ✗
+  barrier => ✗
+  monotonic_clock => ✓
+}
+
+map "Zephyr" as zy {
+  recursive_mutex => ✓
+  timed_mutex => ✓
+  priority_inheritance => ✓
+  isr_semaphore => ✓
+  thread_affinity => ✓
+  timed_join => ✓
+  thread_suspend_resume => ✓
+  thread_local_data => emu
+  dynamic_thread_priority => ✓
+  task_notification => ✗
+  stack_overflow_detection => ✓
+  cpu_load_stats => ✓
+  wait_set => ✗
+  native_event_flags => ✓
+  native_work_queue => ✓
+  native_condvar => ✓
+  native_memory_pool => ✗
+  native_stream_buffer => ✗
+  isr_stream_buffer => ✗
+  native_message_buffer => ✗
+  isr_message_buffer => ✗
+  native_rwlock => ✗
+  spinlock => ✓
+  barrier => ✗
+  monotonic_clock => ✓
+}
+
+map "Linux" as li {
+  recursive_mutex => ✓
+  timed_mutex => ✓
+  priority_inheritance => ✓
+  isr_semaphore => ✗
+  thread_affinity => ✓
+  timed_join => ✗
+  thread_suspend_resume => ✗
+  thread_local_data => emu
+  dynamic_thread_priority => ✓
+  task_notification => ✗
+  stack_overflow_detection => ✗
+  cpu_load_stats => ✗
+  wait_set => ✓
+  native_event_flags => ✗
+  native_work_queue => ✗
+  native_condvar => ✓
+  native_memory_pool => ✗
+  native_stream_buffer => ✗
+  isr_stream_buffer => ✗
+  native_message_buffer => ✗
+  isr_message_buffer => ✗
+  native_rwlock => ✓
+  spinlock => ✗
+  barrier => ✓
+  monotonic_clock => ✓
+}
+
+map "POSIX" as po {
+  recursive_mutex => ✓
+  timed_mutex => ✓
+  priority_inheritance => ✓
+  isr_semaphore => ✗
+  thread_affinity => ✗
+  timed_join => ✗
+  thread_suspend_resume => ✗
+  thread_local_data => emu
+  dynamic_thread_priority => ✓
+  task_notification => ✗
+  stack_overflow_detection => ✗
+  cpu_load_stats => ✗
+  wait_set => ✓
+  native_event_flags => ✗
+  native_work_queue => ✗
+  native_condvar => ✓
+  native_memory_pool => ✗
+  native_stream_buffer => ✗
+  isr_stream_buffer => ✗
+  native_message_buffer => ✗
+  isr_message_buffer => ✗
+  native_rwlock => ✓
+  spinlock => ✗
+  barrier => ✓
+  monotonic_clock => ✓
+}
+
+map "RTEMS" as rt {
+  recursive_mutex => ✓
+  timed_mutex => ✓
+  priority_inheritance => ✓
+  isr_semaphore => ✗
+  thread_affinity => ✗
+  timed_join => ✗
+  thread_suspend_resume => ✗
+  thread_local_data => emu
+  dynamic_thread_priority => ✓
+  task_notification => ✗
+  stack_overflow_detection => ✗
+  cpu_load_stats => ✗
+  wait_set => ✓
+  native_event_flags => ✗
+  native_work_queue => ✗
+  native_condvar => ✓
+  native_memory_pool => ✗
+  native_stream_buffer => ✗
+  isr_stream_buffer => ✗
+  native_message_buffer => ✗
+  isr_message_buffer => ✗
+  native_rwlock => ✓
+  spinlock => ✗
+  barrier => ✓
+  monotonic_clock => ✓
+}
+
+map "INTEGRITY" as gi {
+  recursive_mutex => ✓
+  timed_mutex => ✓
+  priority_inheritance => ✓
+  isr_semaphore => ✗
+  thread_affinity => ✗
+  timed_join => ✗
+  thread_suspend_resume => ✗
+  thread_local_data => emu
+  dynamic_thread_priority => ✓
+  task_notification => ✗
+  stack_overflow_detection => ✗
+  cpu_load_stats => ✗
+  wait_set => ✓
+  native_event_flags => ✗
+  native_work_queue => ✗
+  native_condvar => ✓
+  native_memory_pool => ✗
+  native_stream_buffer => ✗
+  isr_stream_buffer => ✗
+  native_message_buffer => ✗
+  isr_message_buffer => ✗
+  native_rwlock => ✓
+  spinlock => ✗
+  barrier => ✓
+  monotonic_clock => ✓
+}
+
+map "ThreadX" as tx {
+  recursive_mutex => ✓
+  timed_mutex => ✓
+  priority_inheritance => ✓
+  isr_semaphore => ✓
+  thread_affinity => ✗
+  timed_join => ✗
+  thread_suspend_resume => ✗
+  thread_local_data => emu
+  dynamic_thread_priority => ✓
+  task_notification => ✗
+  stack_overflow_detection => ✗
+  cpu_load_stats => ✗
+  wait_set => ✗
+  native_event_flags => ✓
+  native_work_queue => ✗
+  native_condvar => ✗
+  native_memory_pool => ✓
+  native_stream_buffer => ✗
+  isr_stream_buffer => ✗
+  native_message_buffer => ✗
+  isr_message_buffer => ✗
+  native_rwlock => ✗
+  spinlock => ✗
+  barrier => ✗
+  monotonic_clock => ✓
+}
+
+map "VxWorks" as vx {
+  recursive_mutex => ✓
+  timed_mutex => ✓
+  priority_inheritance => ✓
+  isr_semaphore => ✓
+  thread_affinity => ✗
+  timed_join => ✗
+  thread_suspend_resume => ✗
+  thread_local_data => emu
+  dynamic_thread_priority => ✓
+  task_notification => ✗
+  stack_overflow_detection => ✗
+  cpu_load_stats => ✗
+  wait_set => ✗
+  native_event_flags => ✗
+  native_work_queue => ✓
+  native_condvar => ✓
+  native_memory_pool => ✓
+  native_stream_buffer => ✗
+  isr_stream_buffer => ✗
+  native_message_buffer => ✗
+  isr_message_buffer => ✗
+  native_rwlock => ✗
+  spinlock => ✗
+  barrier => ✗
+  monotonic_clock => ✓
+}
+
+map "NuttX" as nx {
+  recursive_mutex => ✓
+  timed_mutex => ✓
+  priority_inheritance => ✓
+  isr_semaphore => ✗
+  thread_affinity => ✗
+  timed_join => ✗
+  thread_suspend_resume => ✗
+  thread_local_data => emu
+  dynamic_thread_priority => ✓
+  task_notification => ✗
+  stack_overflow_detection => ✓
+  cpu_load_stats => ✗
+  wait_set => ✗
+  native_event_flags => ✗
+  native_work_queue => ✓
+  native_condvar => ✓
+  native_memory_pool => ✗
+  native_stream_buffer => ✗
+  isr_stream_buffer => ✗
+  native_message_buffer => ✗
+  isr_message_buffer => ✗
+  native_rwlock => ✓
+  spinlock => ✗
+  barrier => ✓
+  monotonic_clock => ✓
+}
+
+map "QNX" as qx {
+  recursive_mutex => ✓
+  timed_mutex => ✓
+  priority_inheritance => ✓
+  isr_semaphore => ✗
+  thread_affinity => ✓
+  timed_join => ✓
+  thread_suspend_resume => ✗
+  thread_local_data => emu
+  dynamic_thread_priority => ✓
+  task_notification => ✗
+  stack_overflow_detection => ✗
+  cpu_load_stats => ✗
+  wait_set => ✗
+  native_event_flags => ✗
+  native_work_queue => ✗
+  native_condvar => ✓
+  native_memory_pool => ✗
+  native_stream_buffer => ✗
+  isr_stream_buffer => ✗
+  native_message_buffer => ✗
+  isr_message_buffer => ✗
+  native_rwlock => ✓
+  spinlock => ✗
+  barrier => ✓
+  monotonic_clock => ✓
+}
+
+map "ChibiOS" as ch {
+  recursive_mutex => ✗
+  timed_mutex => ✗
+  priority_inheritance => ✓
+  isr_semaphore => ✓
+  thread_affinity => ✗
+  timed_join => ✗
+  thread_suspend_resume => ✗
+  thread_local_data => emu
+  dynamic_thread_priority => ✓
+  task_notification => ✗
+  stack_overflow_detection => ✗
+  cpu_load_stats => ✗
+  wait_set => ✗
+  native_event_flags => ✓
+  native_work_queue => ✗
+  native_condvar => ✓
+  native_memory_pool => ✓
+  native_stream_buffer => ✗
+  isr_stream_buffer => ✗
+  native_message_buffer => ✗
+  isr_message_buffer => ✗
+  native_rwlock => ✗
+  spinlock => ✗
+  barrier => ✗
+  monotonic_clock => ✓
+}
+
+map "Bare-metal" as bm {
+  recursive_mutex => ✗
+  timed_mutex => ✗
+  priority_inheritance => ✗
+  isr_semaphore => ✓
+  thread_affinity => ✗
+  timed_join => ✗
+  thread_suspend_resume => ✗
+  thread_local_data => emu
+  dynamic_thread_priority => ✗
+  task_notification => ✗
+  stack_overflow_detection => ✗
+  cpu_load_stats => ✗
+  wait_set => ✗
+  native_event_flags => ✗
+  native_work_queue => ✗
+  native_condvar => ✗
+  native_memory_pool => ✗
+  native_stream_buffer => ✗
+  isr_stream_buffer => ✗
+  native_message_buffer => ✗
+  isr_message_buffer => ✗
+  native_rwlock => ✗
+  spinlock => ✗
+  barrier => ✗
+  monotonic_clock => ✓
+}
+
+map "PX5" as px {
+  recursive_mutex => ✓
+  timed_mutex => ✓
+  priority_inheritance => ✓
+  isr_semaphore => ✓
+  thread_affinity => ✗
+  timed_join => ✗
+  thread_suspend_resume => ✗
+  thread_local_data => emu
+  dynamic_thread_priority => ✓
+  task_notification => ✗
+  stack_overflow_detection => ✗
+  cpu_load_stats => ✗
+  wait_set => ✓
+  native_event_flags => ✓
+  native_work_queue => ✗
+  native_condvar => ✗
+  native_memory_pool => ✓
+  native_stream_buffer => ✗
+  isr_stream_buffer => ✗
+  native_message_buffer => ✗
+  isr_message_buffer => ✗
+  native_rwlock => ✗
+  spinlock => ✗
+  barrier => ✗
+  monotonic_clock => ✓
+}
+
+map "Micrium" as mi {
+  recursive_mutex => ✓
+  timed_mutex => ✓
+  priority_inheritance => ✓
+  isr_semaphore => ✓
+  thread_affinity => ✗
+  timed_join => ✗
+  thread_suspend_resume => ✗
+  thread_local_data => emu
+  dynamic_thread_priority => ✓
+  task_notification => ✗
+  stack_overflow_detection => ✗
+  cpu_load_stats => ✗
+  wait_set => ✗
+  native_event_flags => ✓
+  native_work_queue => ✗
+  native_condvar => ✗
+  native_memory_pool => ✓
+  native_stream_buffer => ✗
+  isr_stream_buffer => ✗
+  native_message_buffer => ✗
+  isr_message_buffer => ✗
+  native_rwlock => ✗
+  spinlock => ✗
+  barrier => ✗
+  monotonic_clock => ✓
+}
+
+map "embOS" as em {
+  recursive_mutex => ✓
+  timed_mutex => ✓
+  priority_inheritance => ✓
+  isr_semaphore => ✓
+  thread_affinity => ✗
+  timed_join => ✗
+  thread_suspend_resume => ✗
+  thread_local_data => emu
+  dynamic_thread_priority => ✓
+  task_notification => ✓
+  stack_overflow_detection => ✓
+  cpu_load_stats => ✓
+  wait_set => ✗
+  native_event_flags => ✓
+  native_work_queue => ✗
+  native_condvar => ✗
+  native_memory_pool => ✓
+  native_stream_buffer => ✗
+  isr_stream_buffer => ✗
+  native_message_buffer => ✗
+  isr_message_buffer => ✗
+  native_rwlock => ✗
+  spinlock => ✗
+  barrier => ✗
+  monotonic_clock => ✓
+}
+
+map "CMSIS-RTOS" as c1 {
+  recursive_mutex => ✓
+  timed_mutex => ✓
+  priority_inheritance => ✓
+  isr_semaphore => ✓
+  thread_affinity => ✗
+  timed_join => ✗
+  thread_suspend_resume => ✗
+  thread_local_data => emu
+  dynamic_thread_priority => ✓
+  task_notification => ✗
+  stack_overflow_detection => ✗
+  cpu_load_stats => ✗
+  wait_set => ✗
+  native_event_flags => ✗
+  native_work_queue => ✗
+  native_condvar => ✗
+  native_memory_pool => ✓
+  native_stream_buffer => ✗
+  isr_stream_buffer => ✗
+  native_message_buffer => ✗
+  isr_message_buffer => ✗
+  native_rwlock => ✗
+  spinlock => ✗
+  barrier => ✗
+  monotonic_clock => ✓
+}
+
+map "CMSIS-RTOS2" as c2 {
+  recursive_mutex => ✓
+  timed_mutex => ✓
+  priority_inheritance => ✓
+  isr_semaphore => ✓
+  thread_affinity => ✗
+  timed_join => ✗
+  thread_suspend_resume => ✗
+  thread_local_data => emu
+  dynamic_thread_priority => ✓
+  task_notification => ✗
+  stack_overflow_detection => ✗
+  cpu_load_stats => ✗
+  wait_set => ✗
+  native_event_flags => ✓
+  native_work_queue => ✗
+  native_condvar => ✗
+  native_memory_pool => ✓
+  native_stream_buffer => ✗
+  isr_stream_buffer => ✗
+  native_message_buffer => ✗
+  isr_message_buffer => ✗
+  native_rwlock => ✗
+  spinlock => ✗
+  barrier => ✗
+  monotonic_clock => ✓
+}
+
+@enduml

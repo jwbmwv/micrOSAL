@@ -1,0 +1,13 @@
+// SPDX-License-Identifier: Apache-2.0
+/// @file integrity_backend.cpp
+/// @brief INTEGRITY RTOS implementation of all OSAL C-linkage functions
+/// @details INTEGRITY uses the shared POSIX-family backend implementation and
+///          therefore requires the pthread/semaphore/timer/poll profile used
+///          by the generic POSIX backend.
+
+#ifndef OSAL_BACKEND_INTEGRITY
+#define OSAL_BACKEND_INTEGRITY
+#endif
+
+#define OSAL_POSIXLIKE_BACKEND_SELECTED 1
+#include "../posix/posix_backend.cpp"

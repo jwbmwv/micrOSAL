@@ -1,0 +1,207 @@
+@startuml architecture
+!theme plain
+!include _render_profile.puml
+skinparam backgroundColor #FEFEFE
+skinparam defaultFontName "Segoe UI"
+skinparam componentStyle rectangle
+skinparam PackageBorderColor #555
+skinparam PackageBackgroundColor #F8F8FF
+skinparam NoteBorderColor #AAA
+
+title **MicrOSAL — Layered Architecture**
+skinparam pageOrientation landscape
+left to right direction
+scale max 1400 width
+
+package "Application Code" as app #E8F5E9 {
+    [User Application] as user
+}
+
+package "C++17 Header-Only API" as api #E3F2FD {
+    [osal::mutex] as mutex
+    [osal::semaphore] as sem
+    [osal::thread] as thread
+    [osal::queue<T,N>] as queue
+    [osal::mailbox<T>] as mailbox
+    [osal::timer] as timer
+    [osal::event_flags] as eflags
+    [osal::wait_set] as wset
+    [osal::condvar] as condvar
+    [osal::work_queue] as wq
+    [osal::memory_pool] as mpool
+    [osal::rwlock] as rwlock
+    [osal::ring_buffer<T,N>] as rbuf
+    [osal::thread_local_data] as tls
+    [osal::clock] as clock
+}
+
+package "Compile-Time Dispatch" as dispatch #FFF8E1 {
+    [backends.hpp\n<active_backend>] as backends
+    [capabilities<B>\n(constexpr bool flags)] as caps
+    [backend_traits<B>\n(handle types, sizes)] as traits
+}
+
+package "extern \"C\" Bridge Layer" as bridge #FFF3E0 {
+    [osal_mutex_create / lock / unlock ...] as c_mutex
+    [osal_semaphore_create / give / take ...] as c_sem
+    [osal_thread_create / join / sleep ...] as c_thread
+    [osal_queue_create / send / receive ...] as c_queue
+    [osal_timer_create / start / stop ...] as c_timer
+    [osal_event_flags_create / set / wait ...] as c_eflags
+    [osal_wait_set_create / add / wait ...] as c_wset
+    [osal_condvar_create / wait / notify ...] as c_condvar
+    [osal_work_queue_create / submit ...] as c_wq
+    [osal_memory_pool_create / allocate ...] as c_mpool
+    [osal_rwlock_create / read_lock / write_lock ...] as c_rwlock
+    [osal_clock_monotonic_ms / ticks ...] as c_clock
+}
+
+package "Backend Implementations\n(one .cpp compiled per target)" as backend #FFEBEE {
+    [FreeRTOS] as be_fr
+    [Zephyr] as be_zy
+    [ThreadX] as be_tx
+    [PX5] as be_px
+    [POSIX] as be_po
+    [Linux] as be_li
+    [Bare-metal] as be_bm
+    [VxWorks] as be_vx
+    [NuttX] as be_nx
+    [Micrium] as be_mi
+    [ChibiOS] as be_ch
+    [embOS] as be_em
+    [QNX] as be_qx
+    [RTEMS] as be_rt
+    [INTEGRITY] as be_in
+    [CMSIS-RTOS] as be_c1
+    [CMSIS-RTOS2] as be_c2
+}
+
+package "Shared Emulations" as shared #F3E5F5 {
+    [emulated_work_queue.inl\n(thread + ring buffer + condvar)] as emu_wq
+    [emulated_condvar.inl\n(Birrell's: mutex + semaphore array)] as emu_cv
+    [emulated_memory_pool.inl\n(bitmap + mutex + counting sem)] as emu_mp
+    [emulated_rwlock.inl\n(mutex + condvar + reader counter)] as emu_rw
+
+    package "POSIX shared (src/common/posix/)" as posix_shared #EDE7F6 {
+        [posix_clock.inl\n(clock_gettime MONOTONIC/REALTIME)] as posix_clock
+        [posix_rwlock.inl\n(pthread_rwlock_t)] as posix_rw
+        [posix_condvar.inl\n(pthread_cond_t + CLOCK_MONOTONIC)] as posix_cv
+        [posix_pthread_work_queue.inl\n(pthread thread + ring buffer)] as posix_wq
+    }
+}
+
+package "RTOS / OS Kernel" as kernel #ECEFF1 {
+    [Native RTOS API\n(FreeRTOS, Zephyr, ThreadX,\npthread, Wind River,\nCMSIS-RTOS, CMSIS-RTOS2, etc.)] as native
+}
+
+' ---- Connections ----
+user -down-> api : includes <osal/osal.hpp>
+
+mutex -down-> dispatch
+sem -down-> dispatch
+thread -down-> dispatch
+queue -down-> dispatch
+mailbox -down-> queue : wraps queue<T,1>
+timer -down-> dispatch
+eflags -down-> dispatch
+wset -down-> dispatch
+condvar -down-> dispatch
+wq -down-> dispatch
+mpool -down-> dispatch
+rwlock -down-> dispatch
+clock -down-> dispatch
+
+dispatch -down-> bridge : "inline calls to\nextern \"C\" functions"
+
+bridge -down-> backend : "exactly one backend\nlinked per build"
+
+be_fr -left-> emu_wq
+be_tx -left-> emu_wq
+be_px -left-> emu_wq
+be_bm -left-> emu_wq
+be_mi -left-> emu_wq
+be_ch -left-> emu_wq
+be_em -left-> emu_wq
+be_qx -left-> emu_wq
+
+be_c1 -left-> emu_wq
+be_c2 -left-> emu_wq
+
+be_po -left-> posix_wq
+be_li -left-> posix_wq
+be_rt -left-> posix_wq
+be_in -left-> posix_wq
+be_po -left-> posix_cv
+be_li -left-> posix_cv
+be_qx -left-> posix_cv
+be_rt -left-> posix_cv
+be_in -left-> posix_cv
+be_po -left-> posix_rw
+be_li -left-> posix_rw
+be_nx -left-> posix_rw
+be_qx -left-> posix_rw
+be_rt -left-> posix_rw
+be_in -left-> posix_rw
+be_po -left-> posix_clock
+be_li -left-> posix_clock
+be_nx -left-> posix_clock
+be_qx -left-> posix_clock
+be_rt -left-> posix_clock
+be_in -left-> posix_clock
+
+be_fr -left-> emu_cv
+be_tx -left-> emu_cv
+be_px -left-> emu_cv
+be_bm -left-> emu_cv
+be_mi -left-> emu_cv
+be_em -left-> emu_cv
+be_c1 -left-> emu_cv
+be_c2 -left-> emu_cv
+
+be_fr -left-> emu_mp
+be_tx -left-> emu_mp
+be_px -left-> emu_mp
+be_bm -left-> emu_mp
+be_mi -left-> emu_mp
+be_ch -left-> emu_mp
+be_em -left-> emu_mp
+be_po -left-> emu_mp
+be_li -left-> emu_mp
+be_zy -left-> emu_mp
+be_nx -left-> emu_mp
+be_qx -left-> emu_mp
+be_rt -left-> emu_mp
+be_in -left-> emu_mp
+be_vx -left-> emu_mp
+
+be_fr -left-> emu_rw
+be_tx -left-> emu_rw
+be_px -left-> emu_rw
+be_bm -left-> emu_rw
+be_mi -left-> emu_rw
+be_ch -left-> emu_rw
+be_em -left-> emu_rw
+be_zy -left-> emu_rw
+be_vx -left-> emu_rw
+
+be_c1 -left-> emu_rw
+be_c2 -left-> emu_rw
+
+backend -down-> kernel
+
+note right of dispatch
+  **Zero-cost dispatch**
+  No virtual functions.
+  No RTTI. All resolved
+  at compile time via
+  template specializations
+  and if constexpr.
+end note
+
+note right of shared
+  Backends without native
+  support #include the
+  shared .inl emulations.
+end note
+
+@enduml

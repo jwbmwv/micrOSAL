@@ -1,0 +1,65 @@
+@startuml sequence_work_queue
+!theme plain
+!include _render_profile.puml
+skinparam backgroundColor #FEFEFE
+skinparam defaultFontName "Segoe UI"
+skinparam sequenceMessageAlign center
+
+title Work Queue - Submit / Execute Flow
+
+participant "App Thread" as app #E8F5E9
+participant "osal::work_queue" as wq #E3F2FD
+participant "extern C bridge\nosal_work_queue_*()" as bridge #FFF3E0
+participant "Worker Thread\n(internal)" as worker #FFEBEE
+
+== Create ==
+
+app -> wq : work_queue(stack, 16, "my_wq")
+activate wq
+wq -> bridge : osal_work_queue_create(...)
+bridge -> worker : spawn worker thread
+note right of worker : blocks on empty queue
+wq --> app : valid() == true
+deactivate wq
+
+== Submit work items ==
+
+app -> wq : submit(handler_A, ctx_A)
+activate wq
+wq -> bridge : osal_work_queue_submit(...)
+bridge -> bridge : enqueue {handler_A, ctx_A}
+bridge -> bridge : signal worker
+wq --> app : result{ok}
+deactivate wq
+
+app -> wq : submit(handler_B, ctx_B)
+activate wq
+wq -> bridge : osal_work_queue_submit(...)
+bridge -> bridge : enqueue {handler_B, ctx_B}
+wq --> app : result{ok}
+deactivate wq
+
+== Worker executes items (FIFO) ==
+
+activate worker #FFCDD2
+worker -> worker : dequeue {handler_A, ctx_A}
+worker -> worker : handler_A(ctx_A)
+worker -> worker : dequeue {handler_B, ctx_B}
+worker -> worker : handler_B(ctx_B)
+deactivate worker
+note right of worker : queue empty, blocks again
+
+== Flush (synchronize) ==
+
+app -> wq : flush(5000ms)
+activate wq
+wq -> bridge : osal_work_queue_flush(...)
+note right of bridge
+  blocks until queue
+  is drained or timeout
+end note
+bridge --> wq : result{ok}
+wq --> app : result{ok}
+deactivate wq
+
+@enduml

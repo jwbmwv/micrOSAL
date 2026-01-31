@@ -1,0 +1,134 @@
+@startuml backend_map
+!theme plain
+!include _render_profile.puml
+skinparam backgroundColor #FEFEFE
+skinparam defaultFontName "Segoe UI"
+skinparam componentStyle rectangle
+skinparam PackageBorderColor #666
+
+title **MicrOSAL — Backend Map & Native Support**
+
+' ============================================================================
+' Legend
+' ============================================================================
+legend top left
+  |= Color |= Meaning |
+  | <#C8E6C9> | Full-featured / desktop OS |
+  | <#BBDEFB> | Real-time kernel (RTOS) |
+  | <#FFE0B2> | Minimal / cooperative |
+endlegend
+
+' ============================================================================
+' POSIX-family
+' ============================================================================
+package "POSIX-Family" as posix_fam #C8E6C9 {
+    component "POSIX\n(any POSIX:2008)" as be_po
+    component "Linux\n(≥ 4.11, extends POSIX)" as be_li
+    component "QNX\n(Neutrino RTOS)" as be_qx
+    component "NuttX\n(Apache, ≥ 12)" as be_nx
+  component "RTEMS\n(POSIX profile)" as be_rt
+  component "INTEGRITY\n(pthread profile)" as be_in
+}
+
+note right of posix_fam
+  Shared implementation files in
+  `src/common/posix/`:
+
+  • `posix_clock.inl`   — all 6 backends
+  • `posix_rwlock.inl`  — all 6 backends
+  • `posix_condvar.inl` — POSIX, Linux, QNX, RTEMS, INTEGRITY
+  • `posix_pthread_work_queue.inl` — POSIX, Linux, RTEMS, INTEGRITY
+
+  Tick-width guard:
+  `OSAL_CFG_NATIVE_TICK_BITS`
+  enforces `sizeof(osal::tick_t)`
+  <= native tick width at compile time.
+end note
+
+' ============================================================================
+' Commercial RTOS
+' ============================================================================
+package "Commercial RTOS" as commercial #BBDEFB {
+    component "FreeRTOS\n(all chip families)" as be_fr
+    component "Zephyr\n(≥ 3.0)" as be_zy
+    component "ThreadX\n(Azure RTOS)" as be_tx
+    component "PX5\n(ThreadX superset)" as be_px
+    component "VxWorks\n(Wind River 7)" as be_vx
+}
+
+' ============================================================================
+' Specialty RTOS
+' ============================================================================
+package "Specialty RTOS" as specialty #BBDEFB {
+    component "Micrium\n(µC/OS-III)" as be_mi
+    component "ChibiOS\n(RT ≥ 21)" as be_ch
+    component "embOS\n(SEGGER)" as be_em
+}
+
+' ============================================================================
+' ARM CMSIS
+' ============================================================================
+package "ARM CMSIS" as cmsis_fam #BBDEFB {
+    component "CMSIS-RTOS\n(v1, cmsis_os.h)" as be_c1
+    component "CMSIS-RTOS2\n(v2, cmsis_os2.h)" as be_c2
+}
+
+' ============================================================================
+' Bare-metal
+' ============================================================================
+package "No-OS" as noos #FFE0B2 {
+    component "Bare-metal\n(cooperative, single-core)" as be_bm
+}
+
+' ============================================================================
+' Capability annotations (right side)
+' ============================================================================
+
+note right of be_li
+  **Native condvar:** ✓ (pthread_cond_t, CLOCK_MONOTONIC)
+  **Native rwlock:** ✓ (pthread_rwlock_t)
+  **Native work queue:** ✗ (emulated)
+  **Wait-set:** ✓ (epoll)
+  **Timed join:** ✗
+end note
+
+note right of be_zy
+  **Native condvar:** ✓ (k_condvar)
+  **Native event flags:** ✓ (k_event)
+  **Native work queue:** ✓ (k_work_queue)
+  **Native memory pool:** ✗ (emulated)
+  **ISR semaphore:** ✓
+  **Timed join:** ✓
+end note
+
+note right of be_fr
+  **Native condvar:** ✗ (emulated)
+  **Native work queue:** ✗ (emulated)
+  **ISR semaphore:** ✓
+  **Event flags:** ✓ (native xEventGroup)
+  **Stream buffer:** ✓ (xStreamBufferCreate)
+  **Message buffer:** ✓ (xMessageBufferCreate)
+  **ISR stream buffer:** ✓
+end note
+
+note bottom of be_bm
+  Cooperative round-robin.
+  No preemption. Priority
+  ignored. All advanced
+  features emulated.
+end note
+
+note right of be_c2
+  **Native event flags:** ✓ (osEventFlags)
+  **Native memory pool:** ✓ (osMemoryPool)
+  **ISR semaphore:** ✓
+  **Recursive mutex:** ✓
+end note
+
+note right of be_c1
+  **Native memory pool:** ✓ (osPool)
+  **ISR semaphore:** ✓
+  **Event flags:** emulated (osSignal is per-thread)
+end note
+
+@enduml

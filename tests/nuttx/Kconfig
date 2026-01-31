@@ -1,0 +1,41 @@
+# SPDX-License-Identifier: Apache-2.0
+# tests/nuttx/Kconfig
+#
+# Kconfig stanza for the MicrOSAL NuttX test application.
+# Consumed by the NuttX build system when this directory is placed under
+# nuttx-apps/testing/microsal_test.
+
+config TESTING_MICROSAL_TEST
+    tristate "MicrOSAL OSAL primitive tests"
+    default n
+    select LIBC_STRTOD
+    select CPLUSPLUS
+    select HAVE_CXX
+    depends on !DISABLE_PTHREAD
+    ---help---
+        Builds the MicrOSAL doctest suite against the NuttX backend.
+        The test application is registered as the built-in command
+        "microsal_test".  Run it from the NuttX shell (NSH) or configure
+        it as the init task (CONFIG_INIT_ENTRYPOINT="microsal_test_main").
+
+        Enable this option in CI with sim/nsh to exercise the full NuttX
+        OSAL backend on a hosted (Linux) simulation.
+
+if TESTING_MICROSAL_TEST
+
+config TESTING_MICROSAL_TEST_STACKSIZE
+    int "Stack size for the MicrOSAL test task"
+    default 65536
+    ---help---
+        Stack size in bytes for the test runner task.  The doctest framework
+        uses significant stack for test result bookkeeping; 64 KiB is the
+        recommended minimum.
+
+config TESTING_MICROSAL_TEST_PRIORITY
+    int "Priority of the MicrOSAL test task"
+    default 100
+    ---help---
+        NuttX scheduling priority (higher = higher priority).
+        100 is mid-range on the default SCHED_PRIORITY_DEFAULT scale.
+
+endif # TESTING_MICROSAL_TEST

@@ -1,0 +1,127 @@
+@startuml sequence_ring_buffer
+!theme plain
+!include _render_profile.puml
+skinparam backgroundColor #FEFEFE
+skinparam defaultFontName "Segoe UI"
+skinparam sequenceMessageAlign center
+
+title Ring Buffer (SPSC) — Lock-Free Producer / Consumer
+
+participant "Producer Thread\n(single)" as prod #E8F5E9
+participant "osal::ring_buffer<T,N>" as rb #E3F2FD
+participant "Consumer Thread\n(single)" as cons #FFF8E1
+
+note over prod, cons
+  Header-only, no OS dependency.
+  Uses std::atomic with acquire/release semantics.
+  Exactly one producer and one consumer thread.
+end note
+
+== Construction ==
+
+prod -> rb : ring_buffer<uint16_t, 64> rb;
+note right of rb
+  head_ = 0, tail_ = 0
+  Internal array: N+1 slots (sentinel)
+  Capacity: 64 usable slots
+end note
+
+== Producer pushes items ==
+
+prod -> rb : rb.try_push(42)
+activate rb #E3F2FD
+note right of rb
+  1. Load head_ (relaxed)
+  2. Compute next = (head+1) % (N+1)
+  3. Load tail_ (acquire) — check not full
+  4. Write item to buf_[head]
+  5. Store head_ = next (release)
+end note
+rb --> prod : true (enqueued)
+deactivate rb
+
+prod -> rb : rb.try_push(99)
+activate rb #E3F2FD
+rb --> prod : true (enqueued)
+deactivate rb
+
+== Consumer pops items ==
+
+cons -> rb : rb.try_pop(item)
+activate rb #E3F2FD
+note left of rb
+  1. Load tail_ (relaxed)
+  2. Load head_ (acquire) — check not empty
+  3. Read item = buf_[tail]
+  4. Store tail_ = (tail+1) % (N+1) (release)
+end note
+rb --> cons : true, item = 42
+deactivate rb
+
+cons -> rb : rb.try_pop(item)
+activate rb #E3F2FD
+rb --> cons : true, item = 99
+deactivate rb
+
+== Buffer empty ==
+
+cons -> rb : rb.try_pop(item)
+activate rb #E3F2FD
+note left of rb
+  tail_ == head_ → empty
+end note
+rb --> cons : false (empty)
+deactivate rb
+
+== Buffer full ==
+
+note over prod
+  Producer fills all 64 slots ...
+end note
+
+prod -> rb : rb.try_push(val)
+activate rb #E3F2FD
+note right of rb
+  next == tail_ → full
+  (sentinel slot consumed)
+end note
+rb --> prod : false (full)
+deactivate rb
+
+== Peek without consuming ==
+
+cons -> rb : rb.peek(item)
+activate rb #E3F2FD
+note left of rb
+  Reads buf_[tail] without
+  advancing tail_.
+end note
+rb --> cons : true, item = oldest
+deactivate rb
+
+== Query operations (either thread) ==
+
+prod -> rb : rb.size()
+rb --> prod : current count (snapshot)
+
+cons -> rb : rb.empty()
+rb --> cons : true / false
+
+prod -> rb : rb.full()
+rb --> prod : true / false
+
+prod -> rb : ring_buffer::capacity()
+rb --> prod : 64 (constexpr)
+
+== Reset (consumer thread only) ==
+
+cons -> rb : rb.reset()
+activate rb #E3F2FD
+note left of rb
+  tail_ = head_ (release)
+  Discards all items.
+end note
+rb --> cons
+deactivate rb
+
+@enduml

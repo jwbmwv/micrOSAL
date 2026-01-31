@@ -1,0 +1,409 @@
+# SPDX-License-Identifier: Apache-2.0
+# CI workflow for MicrOSAL
+# Runs on every push/PR to main.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    # Optional: Add inputs here if needed
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # -------------------------------------------------------------------
+  # Formatting gate
+  # -------------------------------------------------------------------
+  format-check:
+    name: clang-format check
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install clang-format
+        run: sudo apt-get update && sudo apt-get install -y clang-format-18
+      - name: Check formatting
+        run: |
+          find include src -type f \( -name '*.hpp' -o -name '*.cpp' \) -print0 \
+            | xargs -0 clang-format-18 --dry-run --Werror --style=file
+
+  # -------------------------------------------------------------------
+  # Build + test matrix (hosted backends)
+  # -------------------------------------------------------------------
+  build-test:
+    name: "Build & Test (${{ matrix.backend }})"
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        # Bare-metal uses the hosted self-tick/context helper when tests are
+        # enabled, so the doctest suite is self-driving on the CI host while
+        # production bare-metal builds still depend on the target tick ISR.
+        include:
+          - backend: LINUX
+            run_tests: true
+          - backend: POSIX
+            run_tests: true
+          - backend: RTEMS
+            run_tests: true
+          - backend: INTEGRITY
+            run_tests: true
+          - backend: BAREMETAL
+            run_tests: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure
+        run: |
+          cmake -B build \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+            -DOSAL_BACKEND=${{ matrix.backend }} \
+            -DOSAL_BUILD_TESTS=ON
+
+      - name: Build
+        run: cmake --build build -j $(nproc)
+
+      - name: Test
+        if: matrix.run_tests
+        run: ctest --test-dir build --output-on-failure --timeout 60
+
+  # -------------------------------------------------------------------
+  # Static analysis (clang-tidy on Linux backend)
+  # -------------------------------------------------------------------
+  clang-tidy:
+    name: clang-tidy
+    runs-on: ubuntu-24.04
+    needs: build-test
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install clang-tidy
+        run: sudo apt-get update && sudo apt-get install -y clang-tidy
+
+      - name: Configure (for compile_commands.json)
+        run: |
+          cmake -B build \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+            -DOSAL_BACKEND=LINUX
+
+      - name: Build (needed for headers)
+        run: cmake --build build -j $(nproc)
+
+      - name: Run clang-tidy
+        run: |
+          find src/linux include -type f \( -name '*.cpp' -o -name '*.hpp' \) -print0 \
+            | xargs -0 clang-tidy -p build --warnings-as-errors='*' || true
+        # NOTE: Using || true initially so tidy warnings don't block CI.
+        # Remove || true once the codebase is tidy-clean.
+
+  # -------------------------------------------------------------------
+  # Compile-check only: backends without a full simulation port
+  # -------------------------------------------------------------------
+  compile-check:
+    name: "Compile check (${{ matrix.backend }})"
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # ThreadX, PX5, VxWorks etc. need proprietary headers — verify only
+          # that the CMake plumbing and our public header structure compile.
+          - backend: LINUX
+            extra_args: ""
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: |
+          cmake -B build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DOSAL_BACKEND=${{ matrix.backend }} \
+            ${{ matrix.extra_args }}
+      - name: Build
+        run: cmake --build build -j $(nproc)
+
+  # -------------------------------------------------------------------
+  # FreeRTOS v11 — POSIX simulation port (runs as a Linux process)
+  # -------------------------------------------------------------------
+  freertos-test:
+    name: "FreeRTOS v11 test (POSIX sim)"
+    runs-on: ubuntu-24.04
+    needs: build-test
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: sudo apt-get update && sudo apt-get install -y build-essential cmake
+
+      - name: Configure
+        # FreeRTOS-Kernel v11 and doctest are fetched automatically by
+        # tests/freertos/CMakeLists.txt via FetchContent.
+        run: |
+          cmake -B build-freertos tests/freertos \
+            -DCMAKE_BUILD_TYPE=Debug
+
+      - name: Build
+        run: cmake --build build-freertos -j $(nproc)
+
+      - name: Test
+        # Timeout generous to allow FreeRTOS scheduler start + all tests
+        run: ctest --test-dir build-freertos --output-on-failure --timeout 120
+
+  # -------------------------------------------------------------------
+  # Apache NuttX (latest main) — sim/nsh on x86_64 Linux
+  # -------------------------------------------------------------------
+  nuttx-test:
+    name: "NuttX sim test (latest main)"
+    runs-on: ubuntu-24.04
+    needs: build-test
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: microsal
+
+      - name: Install NuttX build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            bison flex gettext texinfo \
+            libncurses5-dev libncursesw5-dev \
+            xxd u-boot-tools gperf genromfs \
+            build-essential cmake ninja-build \
+            python3 python3-pip
+          pip3 install pyelftools kconfiglib
+
+      - name: Clone NuttX and apps (latest main)
+        run: |
+          git clone --depth 1 https://github.com/apache/nuttx.git nuttx
+          git clone --depth 1 https://github.com/apache/nuttx-apps.git nuttx-apps
+
+      - name: Download doctest header
+        run: |
+          mkdir -p microsal/tests/nuttx/vendor/doctest/doctest
+          wget -q \
+            https://github.com/doctest/doctest/releases/download/v2.4.11/doctest.h \
+            -O microsal/tests/nuttx/vendor/doctest/doctest/doctest.h
+
+      - name: Install MicrOSAL test app into nuttx-apps
+        run: |
+          # Symlink our test directory into the NuttX apps tree
+          ln -s "$(pwd)/microsal/tests/nuttx" \
+                nuttx-apps/testing/microsal_test
+
+      - name: Configure NuttX sim/nsh with MicrOSAL test enabled
+        run: |
+          cd nuttx
+          cmake -B build \
+            -DBOARD_CONFIG=sim/nsh \
+            -DNUTTX_APPS_DIR="$(pwd)/../nuttx-apps" \
+            -DMICROSAL_INCLUDE_DIR="$(pwd)/../microsal/include" \
+            -G Ninja
+          # Append Kconfig overrides
+          cat >> build/.config <<'EOF'
+          CONFIG_TESTING_MICROSAL_TEST=y
+          CONFIG_TESTING_MICROSAL_TEST_STACKSIZE=65536
+          CONFIG_TESTING_MICROSAL_TEST_PRIORITY=100
+          CONFIG_CPP=y
+          CONFIG_HAVE_CXX=y
+          CONFIG_STD_CXX17=y
+          EOF
+          cmake build   # re-run to apply updated .config
+
+      - name: Build NuttX + MicrOSAL test
+        run: ninja -C nuttx/build -j $(nproc)
+
+      - name: Run NuttX sim and execute test
+        run: |
+          # Pipe "microsal_test\nexit\n" into the NuttX shell.
+          # Capture output and detect doctest pass/fail.
+          printf "microsal_test\nexit\n" | timeout 120 ./nuttx/build/nuttx \
+            2>&1 | tr -d '\r' | tee nuttx_test_output.txt || true
+          echo "--- NuttX test output ---"
+          cat nuttx_test_output.txt
+          # The custom NuttX printf-based framework prints:
+          #   [microsal_test] N/N passed              <- all green (ends here)
+          #   [microsal_test] N/M passed  *** K FAILED ***  <- failures present
+          # NuttX UART uses \r\n; tr -d '\r' above normalises to \n so that
+          # the $ anchor matches the true end of line.
+          if grep -qE "\[microsal_test\] [0-9]+/[0-9]+ passed$" \
+                  nuttx_test_output.txt; then
+            echo "NuttX MicrOSAL tests PASSED"
+          else
+            echo "::error::NuttX MicrOSAL tests FAILED or produced no output"
+            exit 1
+          fi
+
+  # -------------------------------------------------------------------
+  # Zephyr backend tests
+  #   • native_sim  — fast Linux process, no emulator              (v3.7 + v4.3)
+  #   • nrf52840dk  — real ARM Cortex-M4F via Renode simulation    (v3.7 + v4.3)
+  #
+  # Rationale for Renode over QEMU:
+  #   Renode simulates the full SoC peripheral model (UART, clock, GPIO,
+  #   timers) rather than just the CPU core.  This surfaces hardware-timing
+  #   bugs that native_sim or bare QEMU miss.  The nRF52840 platform
+  #   description is well-maintained in both Renode and Zephyr and requires
+  #   no additional hardware.  QEMU qemu_cortex_m3 entries are replaced
+  #   because Renode provides an equal or better fidelity/CI speed ratio.
+  # -------------------------------------------------------------------
+  zephyr-test:
+    name: "Zephyr ztest (${{ matrix.zephyr_version }} / ${{ matrix.board }})"
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # ---- native_sim (Linux process, x86-64) ---------------------------
+          - zephyr_version: "v3.7.0"
+            zephyr_sdk_version: "0.16.8"
+            board: native_sim
+            runner: native
+            renode_version: ""
+          - zephyr_version: "v4.3.0"
+            zephyr_sdk_version: "0.17.0"
+            board: native_sim
+            runner: native
+            renode_version: ""
+
+          # ---- nRF52840-DK via Renode (Cortex-M4F SoC model) ----------------
+          - zephyr_version: "v3.7.0"
+            zephyr_sdk_version: "0.16.8"
+            board: nrf52840dk/nrf52840
+            runner: renode
+            renode_version: "1.15.3"
+          - zephyr_version: "v4.3.0"
+            zephyr_sdk_version: "0.17.0"
+            board: nrf52840dk/nrf52840
+            runner: renode
+            renode_version: "1.15.3"
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: modules/lib/microsal
+
+      - name: Install host dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            git cmake ninja-build gperf \
+            ccache dfu-util device-tree-compiler wget \
+            python3-dev python3-pip python3-setuptools python3-tk \
+            python3-wheel python3-venv xz-utils file \
+            make gcc gcc-multilib g++-multilib libsdl2-dev libmagic1
+
+      - name: Install west and Zephyr Python dependencies
+        run: pip3 install west
+
+      - name: Initialize Zephyr workspace
+        run: |
+          west init -m https://github.com/zephyrproject-rtos/zephyr \
+               --mr ${{ matrix.zephyr_version }} zephyrproject
+          cd zephyrproject
+          west update --narrow -o=--depth=1
+          pip3 install -r zephyr/scripts/requirements.txt
+
+      - name: Install Zephyr SDK
+        run: |
+          cd zephyrproject
+          wget -q "https://github.com/zephyrproject-rtos/sdk-ng/releases/download/v${{ matrix.zephyr_sdk_version }}/zephyr-sdk-${{ matrix.zephyr_sdk_version }}_linux-x86_64_minimal.tar.xz"
+          tar xf "zephyr-sdk-${{ matrix.zephyr_sdk_version }}_linux-x86_64_minimal.tar.xz"
+          cd "zephyr-sdk-${{ matrix.zephyr_sdk_version }}"
+          ./setup.sh -t arm-zephyr-eabi -t x86_64-zephyr-elf -c
+
+      # Renode portable — only downloaded for Renode matrix entries
+      - name: Install Renode ${{ matrix.renode_version }}
+        if: matrix.runner == 'renode'
+        run: |
+          wget -q "https://github.com/renode/renode/releases/download/v${{ matrix.renode_version }}/renode-${{ matrix.renode_version }}.linux-portable.tar.gz"
+          tar xf "renode-${{ matrix.renode_version }}.linux-portable.tar.gz"
+          echo "$PWD/renode_${{ matrix.renode_version }}_portable" >> "$GITHUB_PATH"
+          # Robot Framework is required by Zephyr's twister Renode runner
+          pip3 install robotframework
+
+      - name: Symlink MicrOSAL into Zephyr modules
+        run: |
+          ln -sfn "${{ github.workspace }}/modules/lib/microsal" \
+                  zephyrproject/modules/lib/microsal
+
+      # ---- native_sim: build + run directly ----------------------------------
+      - name: "Build & run (native_sim)"
+        if: matrix.runner == 'native'
+        run: |
+          cd zephyrproject
+          export ZEPHYR_BASE=$(pwd)/zephyr
+          export ZEPHYR_SDK_INSTALL_DIR=$(pwd)/zephyr-sdk-${{ matrix.zephyr_sdk_version }}
+          west build -b ${{ matrix.board }} \
+               modules/lib/microsal/tests/zephyr \
+               -- -DEXTRA_ZEPHYR_MODULES=$(pwd)/modules/lib/microsal
+          timeout 60 ./build/zephyr/zephyr.exe || {
+            echo "::error::Zephyr ztest failed on native_sim"
+            exit 1
+          }
+
+      # ---- Renode boards: build + run directly via Renode -------------------
+      - name: "Build & run via Renode (${{ matrix.board }})"
+        if: matrix.runner == 'renode'
+        run: |
+          cd zephyrproject
+          export ZEPHYR_BASE=$(pwd)/zephyr
+          export ZEPHYR_SDK_INSTALL_DIR=$(pwd)/zephyr-sdk-${{ matrix.zephyr_sdk_version }}
+
+          # Build the firmware
+          west build -b "${{ matrix.board }}" \
+               modules/lib/microsal/tests/zephyr \
+               -- -DEXTRA_ZEPHYR_MODULES="$(pwd)/modules/lib/microsal"
+
+          ELF="$(pwd)/build/zephyr/zephyr.elf"
+          UART_LOG="/tmp/microsal_uart.log"
+          rm -f "${UART_LOG}"
+
+          # Generate the Renode script from the static template in the repo,
+          # substituting the ELF and log-file paths.  Using sed on a tracked
+          # file avoids YAML-heredoc indentation being written into the .resc.
+          RESC_TEMPLATE="modules/lib/microsal/tests/zephyr/support/nrf52840_headless.resc"
+          sed \
+            -e "s|RENODE_ELF_PLACEHOLDER|${ELF}|g" \
+            -e "s|RENODE_LOG_PLACEHOLDER|${UART_LOG}|g" \
+            "${RESC_TEMPLATE}" > /tmp/microsal_test.resc
+
+          # Run Renode headless; allow up to 180 real seconds before killing it.
+          # "|| true" prevents a non-zero exit from the Renode process itself
+          # (it exits 1 after quit in some versions) from failing the step early.
+          timeout 180 renode --disable-xwt /tmp/microsal_test.resc 2>&1 | tail -10 || true
+
+          # Show captured UART output for debugging
+          echo "=== UART output ==="
+          cat "${UART_LOG}" 2>/dev/null || echo "(no UART output captured)"
+
+          # Summarise and gate on ztest result
+          PASSED_COUNT=$(grep -c "^\s*PASS -" "${UART_LOG}" 2>/dev/null || echo 0)
+          FAILED_COUNT=$(grep -c "^\s*FAIL -" "${UART_LOG}" 2>/dev/null || echo 0)
+          echo "Renode: ${PASSED_COUNT} passed, ${FAILED_COUNT} failed"
+
+          if grep -q "PROJECT EXECUTION SUCCESSFUL" "${UART_LOG}" 2>/dev/null; then
+            echo "Renode run: PASSED"
+          else
+            echo "::error::Renode run did not complete successfully"
+            exit 1
+          fi
+
+      # twister full-discovery run on native_sim / latest Zephyr only
+      - name: Run twister full sweep (native_sim + latest Zephyr only)
+        if: matrix.runner == 'native' && matrix.zephyr_version == 'v4.3.0'
+        continue-on-error: true
+        run: |
+          cd zephyrproject
+          export ZEPHYR_BASE=$(pwd)/zephyr
+          export ZEPHYR_SDK_INSTALL_DIR=$(pwd)/zephyr-sdk-${{ matrix.zephyr_sdk_version }}
+          $ZEPHYR_BASE/scripts/twister \
+            -T modules/lib/microsal/tests/zephyr \
+            -p native_sim \
+            --inline-logs \
+            -v \
+            --extra-args="EXTRA_ZEPHYR_MODULES=$(pwd)/modules/lib/microsal"

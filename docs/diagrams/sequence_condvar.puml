@@ -1,0 +1,61 @@
+@startuml sequence_condvar
+!theme plain
+!include _render_profile.puml
+skinparam backgroundColor #FEFEFE
+skinparam defaultFontName "Segoe UI"
+skinparam sequenceMessageAlign center
+
+title Condition Variable - Wait / Notify Sequence
+
+participant "Producer\nThread" as prod #E8F5E9
+participant "osal::condvar" as cv #E3F2FD
+participant "osal::mutex" as mtx #E3F2FD
+participant "Consumer\nThread" as cons #FFF8E1
+
+note over prod, cons
+  Both threads share the same mutex (mtx) and condvar (cv).
+  A boolean flag data_ready is protected by mtx.
+end note
+
+== Consumer waits for data ==
+
+cons -> mtx : lock()
+activate cons #FFF8E1
+note right of cons : while (!data_ready)
+
+cons -> cv : wait(mtx)
+note right of cv
+  Atomically:
+  1. unlock(mtx)
+  2. sleep on cv
+end note
+deactivate cons
+note over cons : blocked
+
+== Producer signals ==
+
+prod -> mtx : lock()
+activate prod #E8F5E9
+prod -> prod : data_ready = true
+prod -> mtx : unlock()
+prod -> cv : notify_one()
+note left of cv
+  Wake one waiter:
+  consumer thread resumes
+end note
+
+== Consumer resumes ==
+
+activate cons #FFF8E1
+note right of cv
+  Atomically:
+  1. wake up
+  2. re-lock(mtx)
+end note
+cons <-- cv : wait() returns
+note right of cons : data_ready == true -> exit while loop
+cons -> cons : process data
+cons -> mtx : unlock()
+deactivate cons
+
+@enduml

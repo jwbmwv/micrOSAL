@@ -1,0 +1,13 @@
+' Shared render profile for print/PPT legibility
+' Keep diagrams readable when exported to PNG/SVG and printed on Letter paper.
+
+skinparam dpi 180
+skinparam defaultFontName "Segoe UI"
+skinparam defaultFontSize 13
+skinparam shadowing false
+skinparam Padding 8
+skinparam nodesep 28
+skinparam ranksep 32
+
+' Constrain overall size so diagrams are easier to place on Letter or slides.
+scale max 1200 width

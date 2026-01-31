@@ -1,0 +1,116 @@
+MicrOSAL
+Copyright (c) 2026 James Baldwin
+
+This product is licensed under the Apache License, Version 2.0.
+You may obtain a copy of the License at:
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+===========================================================================
+AI GENERATION DISCLOSURE
+===========================================================================
+
+A significant portion of this codebase — including source code, tests,
+benchmarks, and documentation — was substantially generated with AI coding
+assistance (tools such as GitHub Copilot and similar large-language-model-
+based systems). The human publisher and copyright holder (James Baldwin)
+directed the design, specification, review, curation, and testing of all
+AI-generated content.
+
+This disclosure is provided in the interest of transparency with downstream
+users and contributors.
+
+===========================================================================
+INTELLECTUAL PROPERTY NOTICES
+===========================================================================
+
+1. NO WARRANTY OF ORIGINALITY
+
+   No representation is made that any AI-generated portion of this Software
+   is independently copyrightable, novel, or free from resemblance to
+   content in the AI system's training data. AI systems are trained on large
+   corpora of publicly available code and text; the generated output may
+   inadvertently resemble that training material.
+
+2. NO WARRANTY OF NON-INFRINGEMENT
+
+   The publisher cannot warrant that AI-generated portions of this Software
+   do not inadvertently resemble, reproduce, or infringe upon third-party
+   copyright, patent, or trade-secret rights. Users of this Software assume
+   sole responsibility for conducting their own intellectual property review
+   prior to use, particularly for safety-critical, regulated, or commercial
+   applications.
+
+3. PATENT DISCLAIMER
+
+   The explicit patent grant and retaliation clause in the Apache License
+   2.0 (Section 3) cover only patents held by contributors to this project.
+   No representation is made that the Software does not practice third-party
+   patents. Users are responsible for determining whether a patent license
+   is required for their specific use case.
+
+4. LIMITATION OF LIABILITY (INCORPORATION BY REFERENCE)
+
+   The Apache License 2.0 Sections 7 and 8 (Disclaimer of Warranty and
+   Limitation of Liability) apply in full. The Licensor provides the Work
+   on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND,
+   including warranties of TITLE, NON-INFRINGEMENT, MERCHANTABILITY, or
+   FITNESS FOR A PARTICULAR PURPOSE. The Licensor shall not be liable for
+   any damages arising from use of this Work or any intellectual property
+   claims related to AI-generated content.
+
+===========================================================================
+COPYRIGHT ASSERTION
+===========================================================================
+
+Copyright is asserted by James Baldwin in the creative selection,
+arrangement, specification, architecture, curation, testing, documentation,
+and human-authored modifications of this work. The SPDX-License-Identifier
+and copyright notices in individual source files reflect this assertion.
+
+Whether AI-generated portions of this work are independently copyrightable
+is an unsettled legal question in many jurisdictions. This project does not
+make any representation on that question beyond asserting the human
+publisher's rights in the elements described above.
+
+===========================================================================
+RECOMMENDATION FOR REGULATED / SAFETY-CRITICAL USE
+===========================================================================
+
+For safety-critical (IEC 61508, ISO 26262, DO-178C), regulated (FDA, CE),
+or highly sensitive commercial applications, users should:
+
+  - Independently audit all AI-generated code before deployment.
+  - Engage qualified intellectual property counsel to assess any IP risks
+    specific to their use case and jurisdiction.
+  - Not rely solely on this NOTICE or the Apache 2.0 License as a
+    substitute for legal advice.
+
+===========================================================================
+THIRD-PARTY COMPONENTS
+===========================================================================
+
+The following third-party libraries are used as build-time test dependencies
+and are NOT distributed with the library headers or included in the installed
+package:
+
+  - doctest v2.4.11 — MIT License
+    https://github.com/doctest/doctest
+    Used by: Linux/POSIX/Bare-metal and FreeRTOS test suites (fetched
+    automatically via CMake FetchContent at test-configure time).
+
+  - FreeRTOS-Kernel V11.1.0 — MIT License
+    https://github.com/FreeRTOS/FreeRTOS-Kernel
+    Copyright (C) 2021 Amazon.com, Inc. or its affiliates.
+    Used by: FreeRTOS POSIX-simulation test suite (fetched automatically via
+    CMake FetchContent at test-configure time).
+
+  - Zephyr RTOS (ztest framework) — Apache License 2.0
+    https://github.com/zephyrproject-rtos/zephyr
+    Used by: Zephyr ztest suite via west; consumed as build environment only,
+    not redistributed.
+
+  - Apache NuttX RTOS — Apache License 2.0
+    https://github.com/apache/nuttx
+    Used by: NuttX sim/nsh test suite via CMake; consumed as build environment
+    only, not redistributed.
