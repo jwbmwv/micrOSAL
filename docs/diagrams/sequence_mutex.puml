@@ -1,0 +1,70 @@
+@startuml sequence_mutex
+!theme plain
+!include _render_profile.puml
+skinparam backgroundColor #FEFEFE
+skinparam defaultFontName "Segoe UI"
+skinparam sequenceMessageAlign center
+
+title Mutex Lock / Unlock - Call Flow
+
+participant "Application" as app #E8F5E9
+participant "osal::mutex\n(header-only)" as mtx #E3F2FD
+participant "extern C bridge\nosal_mutex_*()" as bridge #FFF3E0
+participant "Backend .cpp\n(e.g. Linux)" as be #FFEBEE
+participant "OS Kernel\n(e.g. pthread)" as os #ECEFF1
+
+== Construction ==
+
+app -> mtx : mutex m;
+activate mtx
+mtx -> bridge : osal_mutex_create(&handle_, false)
+bridge -> be : calls implementation
+be -> os : pthread_mutex_init()
+os --> be : 0 (success)
+be --> bridge : result{ok}
+bridge --> mtx : result{ok}
+mtx --> app : valid() == true
+deactivate mtx
+
+== Lock (blocking) ==
+
+app -> mtx : m.lock()
+activate mtx
+mtx -> mtx : ms_to_ticks(WAIT_FOREVER)
+mtx -> bridge : osal_mutex_lock(&handle_, ticks)
+bridge -> be : calls implementation
+be -> os : pthread_mutex_lock()
+os --> be : 0 (acquired)
+be --> bridge : result{ok}
+bridge --> mtx : result{ok}
+mtx --> app : result{ok}
+deactivate mtx
+
+note over app : critical section
+
+== Unlock ==
+
+app -> mtx : m.unlock()
+activate mtx
+mtx -> bridge : osal_mutex_unlock(&handle_)
+bridge -> be : calls implementation
+be -> os : pthread_mutex_unlock()
+os --> be : 0
+be --> bridge : result{ok}
+bridge --> mtx : result{ok}
+mtx --> app : result{ok}
+deactivate mtx
+
+== Destruction ==
+
+app -> mtx : ~mutex()
+activate mtx
+mtx -> bridge : osal_mutex_destroy(&handle_)
+bridge -> be : calls implementation
+be -> os : pthread_mutex_destroy() + delete
+os --> be
+be --> bridge : result{ok}
+bridge --> mtx
+deactivate mtx
+
+@enduml

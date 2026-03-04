@@ -1,0 +1,158 @@
+@startuml sequence_rwlock
+!theme plain
+!include _render_profile.puml
+skinparam backgroundColor #FEFEFE
+skinparam defaultFontName "Segoe UI"
+skinparam sequenceMessageAlign center
+
+title Read-Write Lock — Concurrent Readers / Exclusive Writer
+
+participant "Reader 1" as r1 #E8F5E9
+participant "Reader 2" as r2 #E8F5E9
+participant "Writer" as wr #FFF8E1
+participant "osal::rwlock" as rw #E3F2FD
+participant "extern C bridge\nosal_rwlock_*()" as bridge #FFF3E0
+participant "Backend\n(e.g. Linux)" as be #FFEBEE
+participant "OS / Emulation\n(e.g. pthread)" as os #ECEFF1
+
+== Construction ==
+
+r1 -> rw : rwlock rw;
+activate rw
+rw -> bridge : osal_rwlock_create(&handle_)
+bridge -> be : calls implementation
+be -> os : pthread_rwlock_init()
+os --> be : 0
+be --> bridge : result{ok}
+bridge --> rw : result{ok}
+rw --> r1 : valid() == true
+deactivate rw
+
+== Multiple concurrent readers ==
+
+r1 -> rw : rw.read_lock()
+activate rw
+rw -> bridge : osal_rwlock_read_lock(&handle_, WAIT_FOREVER)
+bridge -> be : calls implementation
+be -> os : pthread_rwlock_rdlock()
+os --> be : 0 (shared acquired)
+be --> bridge : result{ok}
+bridge --> rw : result{ok}
+rw --> r1 : result{ok}
+deactivate rw
+activate r1 #C8E6C9
+
+r2 -> rw : rw.read_lock()
+activate rw
+rw -> bridge : osal_rwlock_read_lock(&handle_, WAIT_FOREVER)
+bridge -> be : calls implementation
+be -> os : pthread_rwlock_rdlock()
+note right of os
+  Shared lock — multiple readers
+  can hold concurrently.
+end note
+os --> be : 0 (shared acquired)
+be --> bridge : result{ok}
+bridge --> rw : result{ok}
+rw --> r2 : result{ok}
+deactivate rw
+activate r2 #C8E6C9
+
+note over r1, r2 : Both readers access shared data concurrently
+
+== Writer blocked by active readers ==
+
+wr -> rw : rw.write_lock()
+activate rw
+rw -> bridge : osal_rwlock_write_lock(&handle_, WAIT_FOREVER)
+bridge -> be : calls implementation
+be -> os : pthread_rwlock_wrlock()
+note right of os
+  Exclusive lock requested —
+  blocks until all readers release.
+end note
+
+== Readers release ==
+
+r1 -> rw : rw.read_unlock()
+activate rw
+rw -> bridge : osal_rwlock_read_unlock(&handle_)
+bridge -> be : calls implementation
+be -> os : pthread_rwlock_unlock()
+os --> be : 0
+be --> bridge : result{ok}
+bridge --> rw : result{ok}
+rw --> r1 : result{ok}
+deactivate rw
+deactivate r1
+
+r2 -> rw : rw.read_unlock()
+activate rw
+rw -> bridge : osal_rwlock_read_unlock(&handle_)
+bridge -> be : calls implementation
+be -> os : pthread_rwlock_unlock()
+os --> be : 0
+be --> bridge : result{ok}
+bridge --> rw : result{ok}
+rw --> r2 : result{ok}
+deactivate rw
+deactivate r2
+
+== Writer proceeds ==
+
+os --> be : 0 (exclusive acquired)
+be --> bridge : result{ok}
+bridge --> rw : result{ok}
+rw --> wr : result{ok}
+deactivate rw
+activate wr #FFF9C4
+
+note over wr : Exclusive access — modify shared data
+
+wr -> rw : rw.write_unlock()
+activate rw
+rw -> bridge : osal_rwlock_write_unlock(&handle_)
+bridge -> be : calls implementation
+be -> os : pthread_rwlock_unlock()
+os --> be : 0
+be --> bridge : result{ok}
+bridge --> rw : result{ok}
+rw --> wr : result{ok}
+deactivate rw
+deactivate wr
+
+== RAII guards (read_guard / write_guard) ==
+
+r1 -> rw : { read_guard rg{rw};
+activate r1 #C8E6C9
+note right of r1
+  Constructor calls rw.read_lock()
+  Destructor calls rw.read_unlock()
+end note
+r1 -> r1 : // read shared data
+r1 -> rw : } // ~read_guard()
+deactivate r1
+
+wr -> rw : { write_guard wg{rw};
+activate wr #FFF9C4
+note right of wr
+  Constructor calls rw.write_lock()
+  Destructor calls rw.write_unlock()
+end note
+wr -> wr : // modify shared data
+wr -> rw : } // ~write_guard()
+deactivate wr
+
+== Destruction ==
+
+r1 -> rw : ~rwlock()
+activate rw
+rw -> bridge : osal_rwlock_destroy(&handle_)
+bridge -> be : calls implementation
+be -> os : pthread_rwlock_destroy()
+os --> be
+be --> bridge : result{ok}
+bridge --> rw
+deactivate rw
+
+@enduml

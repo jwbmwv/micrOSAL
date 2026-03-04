@@ -1,0 +1,118 @@
+@startuml sequence_memory_pool
+!theme plain
+!include _render_profile.puml
+skinparam backgroundColor #FEFEFE
+skinparam defaultFontName "Segoe UI"
+skinparam sequenceMessageAlign center
+
+title Memory Pool — Allocate / Deallocate Lifecycle
+
+participant "Application" as app #E8F5E9
+participant "osal::memory_pool\n(header-only)" as mp #E3F2FD
+participant "extern C bridge\nosal_memory_pool_*()" as bridge #FFF3E0
+participant "Backend .cpp\n(e.g. Zephyr)" as be #FFEBEE
+participant "OS / Emulation\n(e.g. k_mem_slab)" as os #ECEFF1
+
+note over app
+  Caller supplies the backing buffer
+  (stack or static, properly aligned).
+end note
+
+== Construction ==
+
+app -> mp : memory_pool pool(buf, buf_sz, blk_sz, count)
+activate mp
+mp -> bridge : osal_memory_pool_create(&handle_, buf, ...)
+bridge -> be : calls implementation
+be -> os : k_mem_slab_init() / bitmap init
+os --> be : 0 (success)
+be --> bridge : result{ok}
+bridge --> mp : result{ok}
+mp --> app : valid() == true
+deactivate mp
+
+== Allocate (non-blocking) ==
+
+app -> mp : void* blk = pool.allocate()
+activate mp
+mp -> bridge : osal_memory_pool_allocate(&handle_)
+bridge -> be : calls implementation
+be -> os : k_mem_slab_alloc(K_NO_WAIT) / bitmap scan
+os --> be : pointer to free block
+be --> bridge : blk (non-null)
+bridge --> mp : blk
+mp --> app : blk (non-null)
+deactivate mp
+
+note over app : placement new — use block
+
+== Deallocate ==
+
+app -> mp : pool.deallocate(blk)
+activate mp
+mp -> bridge : osal_memory_pool_deallocate(&handle_, blk)
+bridge -> be : calls implementation
+be -> os : k_mem_slab_free() / bitmap clear
+os --> be : 0
+be --> bridge : result{ok}
+bridge --> mp : result{ok}
+mp --> app : result{ok}
+deactivate mp
+
+== Pool exhausted ==
+
+app -> mp : void* blk2 = pool.allocate()
+activate mp
+mp -> bridge : osal_memory_pool_allocate(&handle_)
+bridge -> be : calls implementation
+be -> os : all blocks in use
+os --> be : nullptr
+be --> bridge : nullptr
+bridge --> mp : nullptr
+mp --> app : nullptr
+deactivate mp
+
+note over app : caller handles nullptr
+
+== Allocate with timeout ==
+
+app -> mp : void* blk3 = pool.allocate_for(500ms)
+activate mp
+mp -> mp : ms_to_ticks(500)
+mp -> bridge : osal_memory_pool_allocate_timed(&handle_, ticks)
+bridge -> be : calls implementation
+be -> os : k_mem_slab_alloc(ticks) / sem wait
+note right of os
+  Blocks until a block is
+  freed or timeout expires.
+end note
+os --> be : pointer (or nullptr)
+be --> bridge : blk3
+bridge --> mp : blk3
+mp --> app : blk3
+deactivate mp
+
+== Query available blocks ==
+
+app -> mp : std::size_t n = pool.available()
+activate mp
+mp -> bridge : osal_memory_pool_available(&handle_)
+bridge -> be : calls implementation
+be --> bridge : count
+bridge --> mp : count
+mp --> app : n
+deactivate mp
+
+== Destruction ==
+
+app -> mp : ~memory_pool()
+activate mp
+mp -> bridge : osal_memory_pool_destroy(&handle_)
+bridge -> be : calls implementation
+be -> os : cleanup / no-op
+os --> be
+be --> bridge : result{ok}
+bridge --> mp
+deactivate mp
+
+@enduml

@@ -1,0 +1,36 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# Headless Renode script for running MicrOSAL ztest suite on nRF52840.
+#
+# Variables (override via `sed` at CI time or set defaults here):
+#   $elf  – absolute path to zephyr.elf
+#   $log  – absolute path for UART capture output
+#
+# Usage (from CI):
+#   renode --disable-xwt /path/to/nrf52840_headless.resc
+#
+# The script loads the complete nRF52840 SoC peripheral model, redirects
+# uart0 to a log file, and runs the simulation for up to 150 virtual
+# seconds so that all ztest suites can complete before quitting.
+
+:name: MicrOSAL nRF52840 ztest
+:description: Runs MicrOSAL ztest suite on nRF52840 via Renode simulation.
+
+$elf?=@RENODE_ELF_PLACEHOLDER
+$log?=@RENODE_LOG_PLACEHOLDER
+
+using sysbus
+
+mach create
+machine LoadPlatformDescription @platforms/cpus/nrf52840.repl
+
+uart0 CreateFileBackend $log true
+
+macro reset
+"""
+    sysbus LoadELF $elf
+"""
+runMacro $reset
+start
+sleep 150
+quit

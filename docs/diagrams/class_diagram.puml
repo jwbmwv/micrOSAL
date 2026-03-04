@@ -1,0 +1,473 @@
+@startuml class_diagram
+!theme plain
+!include _render_profile.puml
+skinparam backgroundColor #FEFEFE
+skinparam defaultFontName "Segoe UI"
+skinparam classAttributeIconSize 0
+
+title **MicrOSAL — Class Diagram**
+skinparam pageOrientation landscape
+left to right direction
+scale max 1400 width
+
+' ============================================================================
+' Core types
+' ============================================================================
+
+package "osal (core)" #F5F5F5 {
+
+    enum error_code {
+        ok
+        timeout
+        would_block
+        invalid_argument
+        not_supported
+        out_of_resources
+        not_initialized
+        overflow
+        unknown
+        ...
+    }
+
+    class result <<value>> {
+        +error_code code
+        +ok() : bool {constexpr}
+        +operator bool() {constexpr}
+    }
+
+    class clock_utils <<static>> {
+        +{static} ms_to_ticks(ms) : tick_t
+    }
+
+    note right of result
+      Returned by every
+      fallible OSAL operation.
+      sizeof(result) == sizeof(int32_t)
+    end note
+}
+
+' ============================================================================
+' Compile-time traits
+' ============================================================================
+
+package "osal (compile-time)" #FFF8E1 {
+
+    class "capabilities<B>" as caps <<template>> {
+        +{static} has_recursive_mutex : bool
+        +{static} has_timed_mutex : bool
+        +{static} has_isr_semaphore : bool
+        +{static} has_thread_affinity : bool
+        +{static} has_timed_join : bool
+        +{static} has_thread_local_data : bool
+        +{static} has_wait_set : bool
+        +{static} has_native_event_flags : bool
+        +{static} has_native_work_queue : bool
+        +{static} has_native_condvar : bool
+        +{static} has_native_memory_pool : bool
+        +{static} has_native_stream_buffer : bool
+        +{static} has_isr_stream_buffer : bool
+        +{static} has_native_rwlock : bool
+        +{static} has_monotonic_clock : bool
+        +{static} has_spinlock : bool
+        +{static} has_barrier : bool
+        +{static} has_task_notification : bool
+        +{static} has_dynamic_thread_priority : bool
+        ...
+    }
+
+    class "backend_traits<B>" as traits <<template>> {
+        +{static} default_stack_bytes : size_t
+        +thread_handle_t
+        +mutex_handle_t
+        +semaphore_handle_t
+        +queue_handle_t
+        +timer_handle_t
+        +event_flags_handle_t
+        +wait_set_handle_t
+        +work_queue_handle_t
+        +condvar_handle_t
+        +memory_pool_handle_t
+        +stream_buffer_handle_t
+        +message_buffer_handle_t
+        +rwlock_handle_t
+        +spinlock_handle_t
+        +barrier_handle_t
+    }
+
+    note bottom of caps
+      13 full template
+      specializations —
+      one per backend.
+    end note
+}
+
+' ============================================================================
+' Primitive classes
+' ============================================================================
+
+package "osal (primitives)" #E3F2FD {
+
+    struct mutex_config <<value>> <<const>> {
+        +type : mutex_type = normal
+    }
+
+    class mutex {
+        -handle_ : mutex_handle_t
+        -valid_ : bool
+        --
+        +mutex(type = normal)
+        +mutex(const mutex_config&)
+        +~mutex()
+        +lock() : result
+        +try_lock() : result
+        +try_lock_for(ms) : result
+        +unlock() : result
+        +valid() : bool
+        +native_handle() : mutex_handle_t*
+        __
+        +<<inner>> lock_guard
+        +<<inner>> unique_lock
+    }
+
+    struct semaphore_config <<value>> <<const>> {
+        +type : semaphore_type = binary
+        +initial_count : unsigned = 0
+        +max_count : unsigned = 1
+    }
+
+    class semaphore {
+        -handle_ : semaphore_handle_t
+        -valid_ : bool
+        --
+        +semaphore(type, initial, max)
+        +semaphore(const semaphore_config&)
+        +~semaphore()
+        +give() : result
+        +isr_give() : result
+        +take() : result
+        +take_for(ms) : result
+        +try_take() : result
+        +valid() : bool
+    }
+
+    class thread {
+        -handle_ : thread_handle_t
+        -valid_ : bool
+        --
+        +thread()
+        +create(thread_config&) : result
+        +join() : result
+        +join_for(ms) : result
+        +detach() : result
+        +set_priority(p) : result
+        +set_affinity(a) : result
+        +suspend() : result
+        +resume() : result
+        +valid() : bool
+        __
+        +{static} yield()
+        +{static} sleep_for(ms)
+        +notify(value) : result
+        +notify_isr(value) : result
+        +{static} wait_for_notification(ms, value_out*) : result
+    }
+
+    class thread_local_data {
+        -key_ : uint8_t
+        -valid_ : bool
+        --
+        +thread_local_data()
+        +~thread_local_data()
+        +set(ptr) : result
+        +get() : void*
+        +valid() : bool
+    }
+
+    class "queue<T, N>" as queue <<template>> {
+        -handle_ : queue_handle_t
+        -storage_[N * sizeof(T)] : uint8_t
+        -valid_ : bool
+        --
+        +queue()
+        +~queue()
+        +send(item&, ms) : result
+        +send_isr(item&) : result
+        +receive(item&, ms) : result
+        +receive_isr(item&) : result
+        +peek(item&) : result
+        +count() : size_t
+        +free() : size_t
+        +valid() : bool
+    }
+
+    struct timer_config <<value>> <<const>> {
+        +callback : osal_timer_callback_t
+        +arg : void*
+        +period : milliseconds
+        +mode : timer_mode = one_shot
+        +name : const char*
+    }
+
+    class timer {
+        -handle_ : timer_handle_t
+        -valid_ : bool
+        --
+        +timer(cb, arg, period, mode, name)
+        +timer(const timer_config&)
+        +~timer()
+        +start() : result
+        +stop() : result
+        +reset() : result
+        +set_period(ms) : result
+        +is_active() : bool
+        +valid() : bool
+    }
+
+    class event_flags {
+        -handle_ : event_flags_handle_t
+        -valid_ : bool
+        --
+        +event_flags()
+        +~event_flags()
+        +set(bits) : result
+        +clear(bits) : result
+        +get() : event_bits_t
+        +wait_any(bits, ms) : result
+        +wait_all(bits, ms) : result
+        +valid() : bool
+    }
+
+    class wait_set {
+        -handle_ : wait_set_handle_t
+        -valid_ : bool
+        --
+        +wait_set()
+        +~wait_set()
+        +add(fd, events) : result
+        +remove(fd) : result
+        +wait(fds_ready, ms) : result
+        +valid() : bool
+    }
+
+    class condvar {
+        -handle_ : condvar_handle_t
+        -valid_ : bool
+        --
+        +condvar()
+        +~condvar()
+        +wait(mutex&) : result
+        +wait_for(mutex&, ms) : bool
+        +notify_one() : result
+        +notify_all() : result
+        +valid() : bool
+    }
+
+    struct work_queue_config <<value>> <<const>> {
+        +stack : void*
+        +stack_bytes : size_t
+        +depth : size_t = 16
+        +name : const char* = "wq"
+    }
+
+    class work_queue {
+        -handle_ : work_queue_handle_t
+        -valid_ : bool
+        --
+        +work_queue(stack, bytes, depth, name)
+        +work_queue(const work_queue_config&)
+        +~work_queue()
+        +submit(fn, arg) : result
+        +submit_from_isr(fn, arg) : result
+        +flush(ms) : result
+        +cancel_all() : result
+        +pending() : size_t
+        +valid() : bool
+    }
+
+    struct memory_pool_config <<value>> <<const>> {
+        +buffer : void*
+        +buf_bytes : size_t
+        +block_size : size_t
+        +block_count : size_t
+        +name : const char*
+    }
+
+    class memory_pool {
+        -handle_ : memory_pool_handle_t
+        -valid_ : bool
+        -block_size_ : size_t
+        --
+        +memory_pool(buffer, buf_bytes, block_size, count, name)
+        +memory_pool(const memory_pool_config&)
+        +~memory_pool()
+        +allocate() : void*
+        +allocate_for(ms) : void*
+        +deallocate(block) : result
+        +available() : size_t
+        +block_size() : size_t
+        +valid() : bool
+    }
+
+    class rwlock {
+        -handle_ : rwlock_handle_t
+        -valid_ : bool
+        --
+        +rwlock()
+        +~rwlock()
+        +read_lock() : result
+        +read_lock_for(ms) : result
+        +read_unlock() : result
+        +write_lock() : result
+        +write_lock_for(ms) : result
+        +write_unlock() : result
+        +valid() : bool
+        __
+        +<<inner>> read_guard
+        +<<inner>> write_guard
+    }
+
+    class "stream_buffer<N, TL>" as stream_buffer <<template>> {
+        +{static} capacity : size_t
+        +{static} trigger_level : size_t
+        -handle_ : stream_buffer_handle_t
+        -storage_[N+1] : uint8_t
+        -valid_ : bool
+        --
+        +stream_buffer()
+        +~stream_buffer()
+        +send(data, len) : result
+        +try_send(data, len) : bool
+        +send_for(data, len, ms) : bool
+        +send_isr(data, len) : result
+        +receive(buf, max_len) : size_t
+        +try_receive(buf, max_len) : size_t
+        +receive_for(buf, max_len, ms) : size_t
+        +receive_isr(buf, max_len) : size_t
+        +available() : size_t
+        +free_space() : size_t
+        +empty() : bool
+        +full() : bool
+        +reset() : result
+        +valid() : bool
+    }
+
+    class "message_buffer<N>" as message_buffer <<template>> {
+        +{static} capacity : size_t
+        +{static} max_message_size : size_t
+        -handle_ : message_buffer_handle_t
+        -storage_[N+1] : uint8_t
+        -valid_ : bool
+        --
+        +message_buffer()
+        +~message_buffer()
+        +send(msg, len) : result
+        +try_send(msg, len) : bool
+        +send_for(msg, len, ms) : bool
+        +send_isr(msg, len) : result
+        +receive(buf, max_len) : size_t
+        +try_receive(buf, max_len) : size_t
+        +receive_for(buf, max_len, ms) : size_t
+        +receive_isr(buf, max_len) : size_t
+        +next_message_size() : size_t
+        +free_space() : size_t
+        +empty() : bool
+        +reset() : result
+        +valid() : bool
+    }
+
+    class spinlock {
+        -handle_ : spinlock_handle_t
+        -valid_ : bool
+        --
+        +spinlock()
+        +~spinlock()
+        +lock() : result
+        +try_lock() : bool
+        +unlock()
+        +valid() : bool
+        __
+        +<<inner>> lock_guard
+    }
+
+    class barrier {
+        -handle_ : barrier_handle_t
+        -valid_ : bool
+        --
+        +barrier(count)
+        +~barrier()
+        +wait() : result
+        +valid() : bool
+    }
+
+    class "ring_buffer<T, N>" as ring_buffer <<template>> {
+        -buf_[N+1] : T
+        -head_ : atomic<size_t>
+        -tail_ : atomic<size_t>
+        --
+        +try_push(val) : bool
+        +try_pop(val&) : bool
+        +peek(val&) : bool
+        +size() : size_t
+        +free() : size_t
+        +empty() : bool
+        +full() : bool
+        +capacity() : size_t
+        +reset()
+    }
+
+    struct thread_config <<value>> {
+        +entry : void(*)(void*)
+        +arg : void*
+        +priority : priority_t
+        +affinity : affinity_t
+        +stack : void*
+        +stack_bytes : stack_size_t
+        +name : const char*
+    }
+}
+
+' ============================================================================
+' Relationships
+' ============================================================================
+
+mutex ..> traits : "stores mutex_handle_t"
+semaphore ..> traits : "stores semaphore_handle_t"
+thread ..> traits : "stores thread_handle_t"
+queue ..> traits : "stores queue_handle_t"
+timer ..> traits : "stores timer_handle_t"
+event_flags ..> traits : "stores event_flags_handle_t"
+wait_set ..> traits : "stores wait_set_handle_t"
+condvar ..> traits : "stores condvar_handle_t"
+work_queue ..> traits : "stores work_queue_handle_t"
+memory_pool ..> traits : "stores memory_pool_handle_t"
+stream_buffer ..> traits : "stores stream_buffer_handle_t"
+message_buffer ..> traits : "stores message_buffer_handle_t"
+rwlock ..> traits : "stores rwlock_handle_t"
+spinlock ..> traits : "stores spinlock_handle_t"
+barrier ..> traits : "stores barrier_handle_t"
+
+condvar ..> mutex : "wait(mutex&)"
+thread ..> thread_config : "create(cfg)"
+mutex ..> mutex_config : "ctor(cfg)"
+semaphore ..> semaphore_config : "ctor(cfg)"
+timer ..> timer_config : "ctor(cfg)"
+work_queue ..> work_queue_config : "ctor(cfg)"
+memory_pool ..> memory_pool_config : "ctor(cfg)"
+
+mutex ..> result : returns
+semaphore ..> result : returns
+thread ..> result : returns
+queue ..> result : returns
+timer ..> result : returns
+event_flags ..> result : returns
+condvar ..> result : returns
+work_queue ..> result : returns
+memory_pool ..> result : returns
+stream_buffer ..> result : returns
+message_buffer ..> result : returns
+rwlock ..> result : returns
+spinlock ..> result : returns
+barrier ..> result : returns
+thread_local_data ..> result : returns
+
+@enduml

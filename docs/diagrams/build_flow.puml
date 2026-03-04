@@ -1,0 +1,74 @@
+@startuml build_flow
+!theme plain
+!include _render_profile.puml
+skinparam backgroundColor #FEFEFE
+skinparam defaultFontName "Segoe UI"
+skinparam ActivityBackgroundColor #E3F2FD
+skinparam ActivityBorderColor #1565C0
+
+title **MicrOSAL — Build & Compilation Flow**
+
+start
+
+:Developer sets backend in CMake;
+note right
+  cmake -B build
+    -DOSAL_BACKEND=LINUX
+    -DOSAL_BUILD_TESTS=ON
+end note
+
+:CMakeLists.txt maps backend
+to source and macro;
+note right
+  OSAL_BACKEND_SRC =
+    src/linux/linux_backend.cpp
+  OSAL_BACKEND_MACRO =
+    OSAL_BACKEND_LINUX
+end note
+
+fork
+  :Compile **header-only API**
+  (osal.hpp includes all primitives)
+  → all resolved at compile time;
+fork again
+  :Compile **one backend .cpp**
+  with OSAL_BACKEND_LINUX defined
+  → implements extern "C" functions;
+end fork
+
+if (Backend uses shared emulations?) then (yes)
+  :Backend .cpp  **#includes**
+  emulated_work_queue.inl,
+  emulated_condvar.inl,
+  emulated_memory_pool.inl,
+  and/or emulated_rwlock.inl;
+else (no)
+  :Backend provides full
+  native implementations;
+endif
+
+:Linker resolves extern "C"
+symbols from header API
+to backend .cpp definitions;
+
+:Link into **libmicrosal.a**
+(static library);
+
+if (OSAL_BUILD_TESTS=ON?) then (yes)
+  :Build 15 test executables
+  (doctest framework);
+  :Register with CTest;
+  :Run **ctest**;
+  if (All tests pass?) then (yes)
+    #C8E6C9:✓ Build successful;
+  else (no)
+    #FFCDD2:✗ Test failure;
+    stop
+  endif
+else (no)
+  #C8E6C9:✓ Library built;
+endif
+
+stop
+
+@enduml

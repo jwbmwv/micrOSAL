@@ -1,0 +1,13 @@
+' Shared PRINT profile for Letter/PPT exports
+' Tuned for legibility when printed on 8.5x11 or pasted into slides.
+
+skinparam dpi 220
+skinparam defaultFontName "Segoe UI"
+skinparam defaultFontSize 14
+skinparam shadowing false
+skinparam Padding 10
+skinparam nodesep 34
+skinparam ranksep 38
+
+' Keep within practical page/slide bounds while preserving readability.
+scale max 1050 width

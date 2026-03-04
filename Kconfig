@@ -1,0 +1,112 @@
+# SPDX-License-Identifier: Apache-2.0
+# Kconfig — MicrOSAL Zephyr module configuration
+
+config MICRO_OSAL
+	bool "MicrOSAL — Zephyr backend"
+	default n
+	help
+	  Enables the Micro Operating System Abstraction Layer compiled
+	  against the Zephyr RTOS backend.  Only one backend can be active
+	  per build.
+
+if MICRO_OSAL
+
+choice MICRO_OSAL_BACKEND
+	prompt "OSAL backend selection"
+	default MICRO_OSAL_BACKEND_ZEPHYR
+	help
+	  Selects the underlying RTOS backend used by the OSAL.
+
+config MICRO_OSAL_BACKEND_ZEPHYR
+	bool "Zephyr"
+	help
+	  Use the Zephyr RTOS backend.  k_thread, k_mutex, k_sem,
+	  k_msgq, k_timer, and k_condvar are used.
+
+config MICRO_OSAL_BACKEND_BAREMETAL
+	bool "Bare-metal (cooperative)"
+	help
+	  Use the software-only bare-metal backend.  No RTOS headers
+	  are required.  Cooperative multitasking via setjmp/longjmp.
+
+endchoice
+
+config MICRO_OSAL_STACK_SIZE_DEFAULT
+	int "Default thread stack size (bytes)"
+	default 2048
+	help
+	  Default stack allocation when the application does not provide
+	  an explicit stack for a thread.
+
+choice MICRO_OSAL_TICK_WIDTH
+	prompt "OSAL tick type width"
+	default MICRO_OSAL_TICK_WIDTH_32
+	help
+	  Selects the width of osal::tick_t / osal_tick_t used at the
+	  OSAL API boundary.
+
+config MICRO_OSAL_TICK_WIDTH_32
+	bool "32-bit tick type (uint32_t)"
+	help
+	  Uses a 32-bit timeout token. This is ABI-compact and sufficient
+	  for most embedded systems.
+
+config MICRO_OSAL_TICK_WIDTH_64
+	bool "64-bit tick type (uint64_t)"
+	help
+	  Uses a 64-bit timeout token. Useful when very large finite
+	  timeouts must be represented directly at the OSAL API boundary.
+
+endchoice
+
+config MICRO_OSAL_STRICT_TICK_INFERENCE
+	bool "Strict tick compatibility checks"
+	default n
+	help
+	  Enables strict tick compatibility behavior in the build system.
+	  Intended for CI/release builds where ambiguous tick-width inference
+	  should be treated as an error rather than a warning.
+
+config MICRO_OSAL_WAIT_SET_MAX_ENTRIES
+	int "Maximum number of entries in a wait_set"
+	default 16
+	range 1 64
+	help
+	  Sets the compile-time limit on how many file descriptors or
+	  kernel objects can be tracked in a single wait_set instance.
+
+config MICRO_OSAL_TIMER_MAX
+	int "Maximum number of concurrent software timers"
+	default 8
+	range 1 64
+	help
+	  Maximum number of simultaneously live osal::timer instances.
+
+config MICRO_OSAL_THREAD_MAX
+	int "Maximum number of concurrent threads"
+	default 8
+	range 1 64
+	help
+	  Maximum number of simultaneously live osal::thread instances.
+
+config MICRO_OSAL_MUTEX_MAX
+	int "Maximum number of concurrent mutexes"
+	default 16
+	range 1 64
+
+config MICRO_OSAL_SEMAPHORE_MAX
+	int "Maximum number of concurrent semaphores"
+	default 16
+	range 1 64
+
+config MICRO_OSAL_QUEUE_MAX
+	int "Maximum number of concurrent queues"
+	default 8
+	range 1 32
+
+config MICRO_OSAL_EVENT_FLAGS_MAX
+	int "Maximum number of concurrent event flag groups"
+	default 8
+	range 1 32
+
+endif # MICRO_OSAL

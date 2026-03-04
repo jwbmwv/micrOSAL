@@ -1,0 +1,73 @@
+@startuml sequence_thread_lifecycle
+!theme plain
+!include _render_profile.puml
+skinparam backgroundColor #FEFEFE
+skinparam defaultFontName "Segoe UI"
+skinparam sequenceMessageAlign center
+
+title Thread Lifecycle - Create / Run / Join
+
+participant "Application" as app #E8F5E9
+participant "osal::thread" as t #E3F2FD
+participant "extern C bridge\nosal_thread_*()" as bridge #FFF3E0
+participant "Backend .cpp" as be #FFEBEE
+participant "OS Kernel" as os #ECEFF1
+
+== Configuration ==
+
+app -> app : thread_config cfg{}
+note right of app
+  cfg.entry = my_task;
+  cfg.arg   = &context;
+  cfg.stack = static_stack;
+  cfg.stack_bytes = 4096;
+  cfg.priority = PRIORITY_NORMAL;
+  cfg.name = "worker";
+end note
+
+== Create ==
+
+app -> t : t.create(cfg)
+activate t
+t -> bridge : osal_thread_create(&handle_, ...)
+bridge -> be : implementation
+be -> os : pthread_create() / xTaskCreateStatic() / ...
+activate os #ECEFF1
+os --> be : success
+be --> bridge : result{ok}
+bridge --> t : result{ok}
+t --> app : result{ok}, valid() == true
+deactivate t
+
+note over os : Thread running asynchronously
+
+== Thread executes ==
+
+os -> os : cfg.entry(cfg.arg)
+note right of os
+  my_task(&context)
+  runs to completion
+end note
+deactivate os
+
+== Join ==
+
+app -> t : t.join()
+activate t
+t -> bridge : osal_thread_join(&handle_, WAIT_FOREVER)
+bridge -> be : implementation
+be -> os : pthread_join() / xTaskNotifyWait() / ...
+note right of os : blocks until thread exits
+os --> be : success
+be --> bridge : result{ok}
+bridge --> t : result{ok}
+t -> t : valid_ = false
+t --> app : result{ok}
+deactivate t
+
+note over app
+  Thread handle cleared.
+  Object may be reused or destroyed.
+end note
+
+@enduml

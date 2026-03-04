@@ -1,0 +1,78 @@
+# Git attributes for MicrOSAL
+
+# Auto detect text files and normalize line endings to LF
+* text=auto eol=lf
+
+# C++ source
+*.cpp text diff=cpp
+*.hpp text diff=cpp
+*.h text diff=cpp
+*.c text diff=cpp
+
+# CMake
+CMakeLists.txt text
+*.cmake text
+*.cmake.in text
+
+# Documentation
+*.md text diff=markdown
+*.txt text
+
+# Configuration
+*.yaml text
+*.yml text
+*.json text
+*.conf text
+*.toml text
+Kconfig* text
+*.prj text
+
+# Shell scripts
+*.sh text eol=lf
+*.bash text eol=lf
+
+# Windows scripts
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+
+# Git
+.gitignore text
+.gitattributes text
+.gitmodules text
+
+# Editor / tool configs
+.editorconfig text
+.clang-format text
+.clang-tidy text
+
+# Binary files — never diff/merge
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.pdf binary
+*.zip binary
+*.tar binary
+*.gz binary
+*.7z binary
+
+# Compiled artefacts
+*.a binary
+*.lib binary
+*.so binary
+*.dll binary
+*.dylib binary
+*.exe binary
+*.out binary
+*.elf binary
+*.hex binary
+*.bin binary
+
+# Linguist overrides (GitHub language statistics)
+*.hpp linguist-language=C++
+*.h linguist-language=C++
+docs/* linguist-documentation
+*.md linguist-documentation
+tests/* linguist-documentation=false
