@@ -7,6 +7,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <doctest/doctest.h>
 #include <osal/osal.hpp>
+#include <atomic>
 #include <cstring>
 
 // ---------------------------------------------------------------------------
@@ -31,7 +32,8 @@ TEST_CASE("integration: cross-thread event_flags wait_all")
     (void)ef.clear(0xFFFFFFFFU);
 
     // Thread sets bits 0x01 and 0x02 with a small delay between.
-    auto setter = [](void*) {
+    auto setter = [](void*)
+    {
         osal::thread::sleep_for(osal::milliseconds{20});
         (void)ef.set(0x01);
         osal::thread::sleep_for(osal::milliseconds{20});
@@ -39,17 +41,17 @@ TEST_CASE("integration: cross-thread event_flags wait_all")
     };
 
     alignas(16) static std::uint8_t stack[65536];
-    osal::thread t;
-    osal::thread_config cfg{};
-    cfg.entry = setter;
-    cfg.arg   = nullptr;
-    cfg.stack = stack;
+    osal::thread                    t;
+    osal::thread_config             cfg{};
+    cfg.entry       = setter;
+    cfg.arg         = nullptr;
+    cfg.stack       = stack;
     cfg.stack_bytes = sizeof(stack);
-    cfg.name  = "ef_all";
+    cfg.name        = "ef_all";
     REQUIRE(t.create(cfg).ok());
 
     osal::event_bits_t actual = 0;
-    auto r = ef.wait_all(0x03, &actual, true, osal::milliseconds{2000});
+    auto               r      = ef.wait_all(0x03, &actual, true, osal::milliseconds{2000});
     CHECK(r.ok());
     CHECK((actual & 0x03) == 0x03);
 
@@ -68,10 +70,10 @@ TEST_CASE("integration: timer reset restarts countdown")
         return;
     }
 
-    static volatile std::uint32_t count = 0;
-    auto cb = [](void*) { ++count; };
+    static std::atomic<std::uint32_t> count{0U};
+    auto                              cb = [](void*) { count.fetch_add(1U); };
 
-    count = 0;
+    count.store(0U);
     // Long period so it won't fire during reset window.
     osal::timer tmr{cb, nullptr, osal::milliseconds{300}, osal::timer_mode::one_shot};
     REQUIRE(tmr.valid());
@@ -85,12 +87,12 @@ TEST_CASE("integration: timer reset restarts countdown")
     // push the fire time to ~400 ms total.  Wait only 100 ms more;
     // the timer should NOT have fired yet.
     osal::thread::sleep_for(osal::milliseconds{100});
-    CHECK(count == 0);
+    CHECK(count.load() == 0U);
 
     // Now wait enough for it to fire.
     osal::thread::sleep_for(osal::milliseconds{350});
     REQUIRE(tmr.stop().ok());
-    CHECK(count == 1);
+    CHECK(count.load() == 1U);
 }
 
 // ---------------------------------------------------------------------------
@@ -102,47 +104,48 @@ TEST_CASE("integration: mutex try_lock_for timeout under contention")
     static osal::mutex mtx;
     REQUIRE(mtx.valid());
 
-    static volatile bool holder_ready = false;
-    static volatile bool holder_release = false;
+    static std::atomic<bool> holder_ready{false};
+    static std::atomic<bool> holder_release{false};
 
-    auto holder = [](void*) {
+    auto holder = [](void*)
+    {
         mtx.lock();
-        holder_ready = true;
-        while (!holder_release)
+        holder_ready.store(true);
+        while (!holder_release.load())
         {
             osal::thread::yield();
         }
         mtx.unlock();
     };
 
-    holder_ready   = false;
-    holder_release = false;
+    holder_ready.store(false);
+    holder_release.store(false);
 
     alignas(16) static std::uint8_t stack[65536];
-    osal::thread t;
-    osal::thread_config cfg{};
-    cfg.entry = holder;
-    cfg.arg   = nullptr;
-    cfg.stack = stack;
+    osal::thread                    t;
+    osal::thread_config             cfg{};
+    cfg.entry       = holder;
+    cfg.arg         = nullptr;
+    cfg.stack       = stack;
     cfg.stack_bytes = sizeof(stack);
-    cfg.name  = "holder";
+    cfg.name        = "holder";
     REQUIRE(t.create(cfg).ok());
 
-    while (!holder_ready)
+    while (!holder_ready.load())
     {
         osal::thread::yield();
     }
 
     // Attempt to lock with a short timeout — should fail.
     auto before = osal::monotonic_clock::now();
-    bool got = mtx.try_lock_for(osal::milliseconds{50});
+    bool got    = mtx.try_lock_for(osal::milliseconds{50});
     auto after  = osal::monotonic_clock::now();
 
     CHECK_FALSE(got);
     auto elapsed = std::chrono::duration_cast<osal::milliseconds>(after - before);
     CHECK(elapsed.count() >= 30);
 
-    holder_release = true;
+    holder_release.store(true);
     REQUIRE(t.join().ok());
 
     // After release the mutex should be available.
@@ -160,10 +163,10 @@ TEST_CASE("integration: queue receive_for timeout on empty")
     REQUIRE(q.valid());
     REQUIRE(q.empty());
 
-    auto before = osal::monotonic_clock::now();
-    std::uint32_t val = 0;
-    bool got = q.receive_for(val, osal::milliseconds{50});
-    auto after  = osal::monotonic_clock::now();
+    auto          before = osal::monotonic_clock::now();
+    std::uint32_t val    = 0;
+    bool          got    = q.receive_for(val, osal::milliseconds{50});
+    auto          after  = osal::monotonic_clock::now();
 
     CHECK_FALSE(got);
     auto elapsed = std::chrono::duration_cast<osal::milliseconds>(after - before);
@@ -176,28 +179,26 @@ TEST_CASE("integration: queue receive_for timeout on empty")
 
 TEST_CASE("integration: thread re-creation")
 {
-    static volatile int run_count = 0;
-    run_count = 0;
+    static std::atomic<int> run_count{0};
+    run_count.store(0);
 
-    auto entry = [](void*) {
-        ++run_count;
-    };
+    auto entry = [](void*) { run_count.fetch_add(1); };
 
     alignas(16) static std::uint8_t stack[65536];
-    osal::thread t;
+    osal::thread                    t;
 
     for (int i = 0; i < 3; ++i)
     {
         osal::thread_config cfg{};
-        cfg.entry = entry;
-        cfg.arg   = nullptr;
-        cfg.stack = stack;
+        cfg.entry       = entry;
+        cfg.arg         = nullptr;
+        cfg.stack       = stack;
         cfg.stack_bytes = sizeof(stack);
-        cfg.name  = "reuse";
+        cfg.name        = "reuse";
         REQUIRE(t.create(cfg).ok());
         REQUIRE(t.join().ok());
         CHECK_FALSE(t.valid());
     }
 
-    CHECK(run_count == 3);
+    CHECK(run_count.load() == 3);
 }

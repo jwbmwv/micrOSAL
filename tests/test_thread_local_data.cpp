@@ -57,20 +57,28 @@ TEST_CASE("thread_local_data: each thread sees its own value")
     static osal::thread_local_data tls;
     REQUIRE(tls.valid());
 
-    static int val_a = 100;
-    static int val_b = 200;
+    static int               val_a = 100;
+    static int               val_b = 200;
     static std::atomic<bool> a_ready{false};
     static std::atomic<bool> b_ready{false};
     static std::atomic<bool> a_ok{false};
     static std::atomic<bool> b_ok{false};
-    a_ready.store(false); b_ready.store(false);
-    a_ok.store(false);    b_ok.store(false);
+    a_ready.store(false);
+    b_ready.store(false);
+    a_ok.store(false);
+    b_ok.store(false);
 
-    struct ctx_t { int* val; std::atomic<bool>* ready; std::atomic<bool>* ok; };
+    struct ctx_t
+    {
+        int*               val;
+        std::atomic<bool>* ready;
+        std::atomic<bool>* ok;
+    };
     static ctx_t ctx_a{&val_a, &a_ready, &a_ok};
     static ctx_t ctx_b{&val_b, &b_ready, &b_ok};
 
-    auto worker = [](void* arg) {
+    auto worker = [](void* arg)
+    {
         auto* c = static_cast<ctx_t*>(arg);
         tls.set(c->val);
         c->ready->store(true, std::memory_order_release);
@@ -87,14 +95,20 @@ TEST_CASE("thread_local_data: each thread sees its own value")
     alignas(16) static std::uint8_t stack_b[65536];
 
     osal::thread_config cfg{};
-    osal::thread ta, tb;
+    osal::thread        ta, tb;
 
-    cfg.entry = worker; cfg.arg = &ctx_a;
-    cfg.stack = stack_a; cfg.stack_bytes = sizeof(stack_a); cfg.name = "tls_a";
+    cfg.entry       = worker;
+    cfg.arg         = &ctx_a;
+    cfg.stack       = stack_a;
+    cfg.stack_bytes = sizeof(stack_a);
+    cfg.name        = "tls_a";
     REQUIRE(ta.create(cfg).ok());
 
-    cfg.entry = worker; cfg.arg = &ctx_b;
-    cfg.stack = stack_b; cfg.stack_bytes = sizeof(stack_b); cfg.name = "tls_b";
+    cfg.entry       = worker;
+    cfg.arg         = &ctx_b;
+    cfg.stack       = stack_b;
+    cfg.stack_bytes = sizeof(stack_b);
+    cfg.name        = "tls_b";
     REQUIRE(tb.create(cfg).ok());
 
     REQUIRE(ta.join().ok());
@@ -113,19 +127,23 @@ TEST_CASE("thread_local_data: parent does not see child value")
     static osal::thread_local_data tls;
     REQUIRE(tls.valid());
 
-    static int child_val = 999;
+    static int               child_val = 999;
     static std::atomic<bool> child_set{false};
     child_set.store(false);
 
-    auto child = [](void*) {
+    auto child = [](void*)
+    {
         tls.set(&child_val);
         child_set.store(true, std::memory_order_release);
     };
 
     alignas(16) static std::uint8_t stack[65536];
-    osal::thread_config cfg{};
-    cfg.entry = child; cfg.arg = nullptr;
-    cfg.stack = stack; cfg.stack_bytes = sizeof(stack); cfg.name = "child";
+    osal::thread_config             cfg{};
+    cfg.entry       = child;
+    cfg.arg         = nullptr;
+    cfg.stack       = stack;
+    cfg.stack_bytes = sizeof(stack);
+    cfg.name        = "child";
 
     // Parent's value before thread creation.
     static int parent_val = 1;
@@ -193,7 +211,7 @@ TEST_CASE("thread_local_data: destroyed key returns nullptr on get")
 
 TEST_CASE("thread_local_data: exhausting all keys returns invalid")
 {
-    constexpr std::size_t kMax = OSAL_THREAD_LOCAL_MAX_KEYS;
+    constexpr std::size_t                 kMax = OSAL_THREAD_LOCAL_MAX_KEYS;
     std::vector<osal::thread_local_data*> keys;
     keys.reserve(kMax);
 
@@ -212,5 +230,6 @@ TEST_CASE("thread_local_data: exhausting all keys returns invalid")
     // At most kMax can be valid.
     CHECK(valid_count <= kMax);
 
-    for (auto* k : keys) delete k;
+    for (auto* k : keys)
+        delete k;
 }

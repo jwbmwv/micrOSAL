@@ -27,14 +27,13 @@
 
 #include <pthread.h>
 #include <semaphore.h>
-#include <time.h>
-#include <errno.h>
+#include <ctime>
+#include <cerrno>
 #include <poll.h>
-#include <signal.h>
-#include <stdint.h>
-#include <string.h>
-#include <cassert>
+#include <csignal>
+#include <cstdint>
 #include <cstring>
+#include <cassert>
 #include <cstdlib>
 #include <cstdio>
 #include <new>
@@ -44,40 +43,58 @@
 // Helpers
 // ---------------------------------------------------------------------------
 
+namespace
+{
+
+template<typename Handle>
+[[nodiscard]] constexpr bool handle_is_null(const Handle* handle) noexcept
+{
+    return (handle == nullptr) || (handle->native == nullptr);
+}
+
+constexpr int          kPosixMaxAffinityCpus      = 64;
+constexpr std::size_t  kPosixMaxPollFds           = 16U;
+constexpr std::int64_t kNanosecondsPerMillisecond = 1'000'000LL;
+
 /// @brief Determine the best clock for condvars.
 /// macOS lacks pthread_condattr_setclock, so fall back to CLOCK_REALTIME.
 #if defined(__APPLE__) || !defined(_POSIX_MONOTONIC_CLOCK)
-static constexpr clockid_t kCondClock = CLOCK_REALTIME;
+constexpr clockid_t kCondClock = CLOCK_REALTIME;
 #else
-static constexpr clockid_t kCondClock = CLOCK_MONOTONIC;
+constexpr clockid_t kCondClock = CLOCK_MONOTONIC;
 #endif
 
 /// @brief Build an absolute timespec relative to the given clock.
-static struct timespec ms_to_abs_timespec(clockid_t clk, osal::tick_t timeout_ticks) noexcept
+[[nodiscard]] timespec ms_to_abs_timespec(clockid_t clk, osal::tick_t timeout_ticks) noexcept
 {
     return osal::detail::backend_timeout_adapter::to_abs_timespec(clk, timeout_ticks);
 }
 
 /// @brief Absolute timespec for sem_timedwait / pthread_mutex_timedlock.
 /// POSIX mandates these use CLOCK_REALTIME (no clockid parameter).
-static struct timespec ms_to_abs_timespec_realtime(osal::tick_t timeout_ticks) noexcept
+[[nodiscard]] timespec ms_to_abs_timespec_realtime(osal::tick_t timeout_ticks) noexcept
 {
     return ms_to_abs_timespec(CLOCK_REALTIME, timeout_ticks);
 }
 
 /// @brief Absolute timespec for condvar waits (uses MONOTONIC where available).
-static struct timespec ms_to_abs_timespec_cond(osal::tick_t timeout_ticks) noexcept
+[[nodiscard]] timespec ms_to_abs_timespec_cond(osal::tick_t timeout_ticks) noexcept
 {
     return ms_to_abs_timespec(kCondClock, timeout_ticks);
 }
 
+[[nodiscard]] int to_poll_timeout_ms(osal::tick_t timeout_ticks) noexcept
+{
+    return osal::detail::backend_timeout_adapter::to_poll_timeout_ms(timeout_ticks);
+}
+
 /// @brief Init a condvar with CLOCK_MONOTONIC where supported.
-static int cond_init_monotonic(pthread_cond_t* cond) noexcept
+int cond_init_monotonic(pthread_cond_t* cond) noexcept
 {
 #if defined(__APPLE__) || !defined(_POSIX_MONOTONIC_CLOCK)
     return pthread_cond_init(cond, nullptr);
 #else
-    pthread_condattr_t attr;
+    pthread_condattr_t attr{};
     pthread_condattr_init(&attr);
     pthread_condattr_setclock(&attr, CLOCK_MONOTONIC);
     const int rc = pthread_cond_init(cond, &attr);
@@ -85,6 +102,27 @@ static int cond_init_monotonic(pthread_cond_t* cond) noexcept
     return rc;
 #endif
 }
+
+struct posix_thread_ctx
+{
+    void (*entry)(void*);
+    void* arg;
+};
+
+void* posix_thread_entry(void* ctx_raw) noexcept
+{
+    auto* const ctx = static_cast<posix_thread_ctx*>(ctx_raw);
+    if (ctx == nullptr)
+    {
+        return nullptr;
+    }
+
+    ctx->entry(ctx->arg);
+    delete ctx;
+    return nullptr;
+}
+
+}  // namespace
 
 // ---------------------------------------------------------------------------
 // Shared-include macro contracts for posix_rwlock.inl, posix_condvar.inl,
@@ -121,20 +159,6 @@ extern "C"
     // Thread
     // ---------------------------------------------------------------------------
 
-    struct posix_thread_ctx
-    {
-        void (*entry)(void*);
-        void* arg;
-    };
-
-    static void* posix_thread_entry(void* ctx_raw) noexcept
-    {
-        auto* ctx = static_cast<posix_thread_ctx*>(ctx_raw);
-        ctx->entry(ctx->arg);
-        delete ctx;
-        return nullptr;
-    }
-
     /// @brief Create a POSIX pthread.
     /// @details Uses SCHED_FIFO when @p priority differs from PRIORITY_NORMAL.
     ///          On Linux, sets CPU affinity via pthread_setaffinity_np() if @p affinity != AFFINITY_ANY.
@@ -149,19 +173,26 @@ extern "C"
                                     osal::priority_t priority, osal::affinity_t affinity, void* stack,
                                     osal::stack_size_t stack_bytes, const char* /*name*/) noexcept
     {
-        assert(handle && entry);
+        assert((handle != nullptr) && (entry != nullptr));
 
         auto* ctx = new (std::nothrow) posix_thread_ctx{entry, arg};
-        if (!ctx)
+        if (ctx == nullptr)
         {
             return osal::error_code::out_of_resources;
         }
 
-        pthread_attr_t attr;
+        auto* thread_id = new (std::nothrow) pthread_t{};
+        if (thread_id == nullptr)
+        {
+            delete ctx;
+            return osal::error_code::out_of_resources;
+        }
+
+        pthread_attr_t attr{};
         pthread_attr_init(&attr);
         pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_JOINABLE);
 
-        if (stack && stack_bytes > 0U)
+        if ((stack != nullptr) && (stack_bytes > 0U))
         {
             pthread_attr_setstack(&attr, stack, stack_bytes);
         }
@@ -169,10 +200,12 @@ extern "C"
         // Set FIFO scheduling if priority != default.
         if (priority != osal::PRIORITY_NORMAL)
         {
-            struct sched_param sp;
-            const int          policy = SCHED_FIFO;
-            const int          max_p  = sched_get_priority_max(policy);
-            const int          min_p  = sched_get_priority_min(policy);
+            struct sched_param sp
+            {
+            };
+            const int policy = SCHED_FIFO;
+            const int max_p  = sched_get_priority_max(policy);
+            const int min_p  = sched_get_priority_min(policy);
             sp.sched_priority =
                 min_p +
                 static_cast<int>((static_cast<std::uint32_t>(priority) * static_cast<std::uint32_t>(max_p - min_p)) /
@@ -182,35 +215,35 @@ extern "C"
             pthread_attr_setinheritsched(&attr, PTHREAD_EXPLICIT_SCHED);
         }
 
-        pthread_t tid;
-        const int rc = pthread_create(&tid, &attr, posix_thread_entry, ctx);
+        const int rc = pthread_create(thread_id, &attr, posix_thread_entry, ctx);
         pthread_attr_destroy(&attr);
 
         if (rc != 0)
         {
             delete ctx;
+            delete thread_id;
             return osal::error_code::out_of_resources;
         }
 
 #if defined(__linux__)
         if (affinity != osal::AFFINITY_ANY)
         {
-            cpu_set_t cpuset;
+            cpu_set_t cpuset{};
             CPU_ZERO(&cpuset);
-            for (int cpu = 0; cpu < 64; ++cpu)
+            for (int cpu = 0; cpu < kPosixMaxAffinityCpus; ++cpu)
             {
                 if ((affinity & (1U << static_cast<unsigned>(cpu))) != 0U)
                 {
                     CPU_SET(cpu, &cpuset);
                 }
             }
-            pthread_setaffinity_np(tid, sizeof(cpuset), &cpuset);
+            pthread_setaffinity_np(*thread_id, sizeof(cpuset), &cpuset);
         }
 #else
         (void)affinity;
 #endif
 
-        handle->native = reinterpret_cast<void*>(tid);
+        handle->native = thread_id;
         return osal::ok();
     }
 
@@ -220,26 +253,27 @@ extern "C"
     /// @return osal::ok() on success; osal::error_code::timeout, ::unknown, or ::not_initialized.
     osal::result osal_thread_join(osal::active_traits::thread_handle_t* handle, osal::tick_t timeout_ticks) noexcept
     {
-        if (!handle || !handle->native)
+        if (handle_is_null(handle))
         {
             return osal::error_code::not_initialized;
         }
-        const pthread_t tid = reinterpret_cast<pthread_t>(handle->native);
+        auto* const thread_id = static_cast<pthread_t*>(handle->native);
 
         if (timeout_ticks == osal::WAIT_FOREVER)
         {
-            const int rc = pthread_join(tid, nullptr);
+            const int rc = pthread_join(*thread_id, nullptr);
             if (rc != 0)
             {
                 return osal::error_code::unknown;
             }
+            delete thread_id;
             handle->native = nullptr;
             return osal::ok();
         }
 
 #if defined(_POSIX_TIMEOUTS) && (_POSIX_TIMEOUTS >= 200112L)
         const struct timespec abs = ms_to_abs_timespec_realtime(timeout_ticks);
-        const int             rc  = pthread_timedjoin_np(tid, nullptr, &abs);  // Linux extension
+        const int             rc  = pthread_timedjoin_np(*thread_id, nullptr, &abs);  // Linux extension
         if (rc == ETIMEDOUT)
         {
             return osal::error_code::timeout;
@@ -248,15 +282,17 @@ extern "C"
         {
             return osal::error_code::unknown;
         }
+        delete thread_id;
         handle->native = nullptr;
         return osal::ok();
 #else
-        const int rc = pthread_join(tid, nullptr);
+        const int rc = pthread_join(*thread_id, nullptr);
         (void)timeout_ticks;
         if (rc != 0)
         {
             return osal::error_code::unknown;
         }
+        delete thread_id;
         handle->native = nullptr;
         return osal::ok();
 #endif
@@ -267,11 +303,13 @@ extern "C"
     /// @return osal::ok() on success; osal::error_code::not_initialized if the handle is null.
     osal::result osal_thread_detach(osal::active_traits::thread_handle_t* handle) noexcept
     {
-        if (!handle || !handle->native)
+        if (handle_is_null(handle))
         {
             return osal::error_code::not_initialized;
         }
-        pthread_detach(reinterpret_cast<pthread_t>(handle->native));
+        auto* const thread_id = static_cast<pthread_t*>(handle->native);
+        pthread_detach(*thread_id);
+        delete thread_id;
         handle->native = nullptr;
         return osal::ok();
     }
@@ -283,20 +321,23 @@ extern "C"
     osal::result osal_thread_set_priority(osal::active_traits::thread_handle_t* handle,
                                           osal::priority_t                      priority) noexcept
     {
-        if (!handle || !handle->native)
+        if (handle_is_null(handle))
         {
             return osal::error_code::not_initialized;
         }
-        struct sched_param sp;
-        int                policy;
-        pthread_getschedparam(reinterpret_cast<pthread_t>(handle->native), &policy, &sp);
+        auto* const thread_id = static_cast<pthread_t*>(handle->native);
+        struct sched_param sp
+        {
+        };
+        int policy{0};
+        pthread_getschedparam(*thread_id, &policy, &sp);
         const int max_p = sched_get_priority_max(policy);
         const int min_p = sched_get_priority_min(policy);
         sp.sched_priority =
             min_p +
             static_cast<int>((static_cast<std::uint32_t>(priority) * static_cast<std::uint32_t>(max_p - min_p)) /
                              static_cast<std::uint32_t>(osal::PRIORITY_HIGHEST));
-        const int rc = pthread_setschedparam(reinterpret_cast<pthread_t>(handle->native), policy, &sp);
+        const int rc = pthread_setschedparam(*thread_id, policy, &sp);
         return (rc == 0) ? osal::ok() : osal::error_code::permission_denied;
     }
 
@@ -308,20 +349,21 @@ extern "C"
                                           osal::affinity_t                      affinity) noexcept
     {
 #if defined(__linux__)
-        if (!handle || !handle->native)
+        if (handle_is_null(handle))
         {
             return osal::error_code::not_initialized;
         }
-        cpu_set_t cpuset;
+        auto* const thread_id = static_cast<pthread_t*>(handle->native);
+        cpu_set_t   cpuset{};
         CPU_ZERO(&cpuset);
-        for (int cpu = 0; cpu < 64; ++cpu)
+        for (int cpu = 0; cpu < kPosixMaxAffinityCpus; ++cpu)
         {
             if ((affinity & (1U << static_cast<unsigned>(cpu))) != 0U)
             {
                 CPU_SET(cpu, &cpuset);
             }
         }
-        const int rc = pthread_setaffinity_np(reinterpret_cast<pthread_t>(handle->native), sizeof(cpuset), &cpuset);
+        const int rc = pthread_setaffinity_np(*thread_id, sizeof(cpuset), &cpuset);
         return (rc == 0) ? osal::ok() : osal::error_code::unknown;
 #else
         (void)handle;
@@ -355,9 +397,10 @@ extern "C"
     /// @param ms Delay in milliseconds.
     void osal_thread_sleep_ms(std::uint32_t ms) noexcept
     {
-        struct timespec ts
+        const auto nanoseconds = static_cast<std::int64_t>(ms % 1000U) * kNanosecondsPerMillisecond;
+        const struct timespec ts
         {
-            static_cast<time_t>(ms / 1000U), static_cast<long>((ms % 1000U) * 1'000'000L)
+            static_cast<time_t>(ms / 1000U), static_cast<decltype(timespec{}.tv_nsec)>(nanoseconds),
         };
         nanosleep(&ts, nullptr);
     }
@@ -373,12 +416,12 @@ extern "C"
     osal::result osal_mutex_create(osal::active_traits::mutex_handle_t* handle, bool recursive) noexcept
     {
         auto* m = new (std::nothrow) pthread_mutex_t;
-        if (!m)
+        if (m == nullptr)
         {
             return osal::error_code::out_of_resources;
         }
 
-        pthread_mutexattr_t attr;
+        pthread_mutexattr_t attr{};
         pthread_mutexattr_init(&attr);
         pthread_mutexattr_settype(&attr, recursive ? PTHREAD_MUTEX_RECURSIVE : PTHREAD_MUTEX_ERRORCHECK);
         const int rc = pthread_mutex_init(m, &attr);
@@ -398,7 +441,7 @@ extern "C"
     /// @return osal::ok() always.
     osal::result osal_mutex_destroy(osal::active_traits::mutex_handle_t* handle) noexcept
     {
-        if (!handle || !handle->native)
+        if (handle_is_null(handle))
         {
             return osal::ok();
         }
@@ -415,7 +458,7 @@ extern "C"
     /// @return osal::ok() on success; osal::error_code::would_block, ::timeout, or ::unknown on failure.
     osal::result osal_mutex_lock(osal::active_traits::mutex_handle_t* handle, osal::tick_t timeout_ticks) noexcept
     {
-        if (!handle || !handle->native)
+        if (handle_is_null(handle))
         {
             return osal::error_code::not_initialized;
         }
@@ -455,7 +498,7 @@ extern "C"
     /// @return osal::ok() on success; osal::error_code::not_initialized or ::not_owner on failure.
     osal::result osal_mutex_unlock(osal::active_traits::mutex_handle_t* handle) noexcept
     {
-        if (!handle || !handle->native)
+        if (handle_is_null(handle))
         {
             return osal::error_code::not_initialized;
         }
@@ -475,7 +518,7 @@ extern "C"
                                        unsigned /*max_count*/) noexcept
     {
         auto* s = new (std::nothrow) sem_t;
-        if (!s)
+        if (s == nullptr)
         {
             return osal::error_code::out_of_resources;
         }
@@ -493,7 +536,7 @@ extern "C"
     /// @return osal::ok() always.
     osal::result osal_semaphore_destroy(osal::active_traits::semaphore_handle_t* handle) noexcept
     {
-        if (!handle || !handle->native)
+        if (handle_is_null(handle))
         {
             return osal::ok();
         }
@@ -508,7 +551,7 @@ extern "C"
     /// @return osal::ok() on success; osal::error_code::not_initialized or ::unknown on failure.
     osal::result osal_semaphore_give(osal::active_traits::semaphore_handle_t* handle) noexcept
     {
-        if (!handle || !handle->native)
+        if (handle_is_null(handle))
         {
             return osal::error_code::not_initialized;
         }
@@ -532,7 +575,7 @@ extern "C"
     osal::result osal_semaphore_take(osal::active_traits::semaphore_handle_t* handle,
                                      osal::tick_t                             timeout_ticks) noexcept
     {
-        if (!handle || !handle->native)
+        if (handle_is_null(handle))
         {
             return osal::error_code::not_initialized;
         }
@@ -596,21 +639,21 @@ extern "C"
     /// @param item_size Size in bytes of each element.
     /// @param capacity  Maximum number of elements the queue can hold.
     /// @return osal::ok() on success; osal::error_code::out_of_resources on failure.
-    osal::result osal_queue_create(osal::active_traits::queue_handle_t* handle, void* buffer, std::size_t item_size,
-                                   std::size_t capacity) noexcept
+    osal::result osal_queue_create(osal::active_traits::queue_handle_t* handle, void* buf, std::size_t item_sz,
+                                   std::size_t cap) noexcept
     {
-        assert(buffer && item_size > 0 && capacity > 0);
+        assert((buf != nullptr) && (item_sz > 0U) && (cap > 0U));
         auto* q = new (std::nothrow) posix_queue_obj{};
-        if (!q)
+        if (q == nullptr)
         {
             return osal::error_code::out_of_resources;
         }
         pthread_mutex_init(&q->mutex, nullptr);
         cond_init_monotonic(&q->not_full);
         cond_init_monotonic(&q->not_empty);
-        q->buf       = static_cast<std::uint8_t*>(buffer);
-        q->item_size = item_size;
-        q->capacity  = capacity;
+        q->buf       = static_cast<std::uint8_t*>(buf);
+        q->item_size = item_sz;
+        q->capacity  = cap;
         q->head = q->tail = q->count = 0U;
         handle->native               = static_cast<void*>(q);
         return osal::ok();
@@ -621,7 +664,7 @@ extern "C"
     /// @return osal::ok() always.
     osal::result osal_queue_destroy(osal::active_traits::queue_handle_t* handle) noexcept
     {
-        if (!handle || !handle->native)
+        if (handle_is_null(handle))
         {
             return osal::ok();
         }
@@ -642,7 +685,7 @@ extern "C"
     osal::result osal_queue_send(osal::active_traits::queue_handle_t* handle, const void* item,
                                  osal::tick_t timeout_ticks) noexcept
     {
-        if (!handle || !handle->native)
+        if (handle_is_null(handle))
         {
             return osal::error_code::not_initialized;
         }
@@ -695,7 +738,7 @@ extern "C"
     osal::result osal_queue_receive(osal::active_traits::queue_handle_t* handle, void* item,
                                     osal::tick_t timeout_ticks) noexcept
     {
-        if (!handle || !handle->native)
+        if (handle_is_null(handle))
         {
             return osal::error_code::not_initialized;
         }
@@ -747,7 +790,7 @@ extern "C"
     osal::result osal_queue_peek(osal::active_traits::queue_handle_t* handle, void* item,
                                  osal::tick_t /*timeout_ticks*/) noexcept
     {
-        if (!handle || !handle->native)
+        if (handle_is_null(handle))
         {
             return osal::error_code::not_initialized;
         }
@@ -768,11 +811,11 @@ extern "C"
     /// @return Approximate item count (non-atomic read); 0 if the handle is invalid.
     std::size_t osal_queue_count(const osal::active_traits::queue_handle_t* handle) noexcept
     {
-        if (!handle || !handle->native)
+        if (handle_is_null(handle))
         {
             return 0U;
         }
-        auto* q = static_cast<const posix_queue_obj*>(handle->native);
+        const auto* const q = static_cast<const posix_queue_obj*>(handle->native);
         // Non-atomic: caller must be ok with approximate count.
         return q->count;
     }
@@ -782,11 +825,11 @@ extern "C"
     /// @return Approximate free count (capacity - count); 0 if the handle is invalid.
     std::size_t osal_queue_free(const osal::active_traits::queue_handle_t* handle) noexcept
     {
-        if (!handle || !handle->native)
+        if (handle_is_null(handle))
         {
             return 0U;
         }
-        auto* q = static_cast<const posix_queue_obj*>(handle->native);
+        const auto* const q = static_cast<const posix_queue_obj*>(handle->native);
         return q->capacity - q->count;
     }
 
@@ -817,9 +860,9 @@ extern "C"
                                    osal_timer_callback_t cb, void* arg, osal::tick_t period_ticks,
                                    bool auto_reload) noexcept
     {
-        assert(handle && cb);
+        assert((handle != nullptr) && (cb != nullptr));
         auto* ctx = new (std::nothrow) posix_timer_ctx{};
-        if (!ctx)
+        if (ctx == nullptr)
         {
             return osal::error_code::out_of_resources;
         }
@@ -827,22 +870,24 @@ extern "C"
         ctx->arg         = arg;
         ctx->auto_reload = auto_reload;
 
-        const time_t sec              = static_cast<time_t>(period_ticks / 1000U);
-        const long   nsec             = static_cast<long>((period_ticks % 1000U) * 1'000'000L);
+        const time_t sec  = static_cast<time_t>(period_ticks / 1000U);
+        const auto   nsec = static_cast<decltype(timespec{}.tv_nsec)>(static_cast<std::int64_t>(period_ticks % 1000U) *
+                                                                      kNanosecondsPerMillisecond);
         ctx->spec.it_value.tv_sec     = sec;
         ctx->spec.it_value.tv_nsec    = nsec;
         ctx->spec.it_interval.tv_sec  = auto_reload ? sec : 0;
-        ctx->spec.it_interval.tv_nsec = auto_reload ? nsec : 0L;
+        ctx->spec.it_interval.tv_nsec = auto_reload ? nsec : 0;
 
         struct sigevent sev
         {
         };
-        sev.sigev_notify          = SIGEV_THREAD;
+        sev.sigev_notify = SIGEV_THREAD;
+        // NOLINTNEXTLINE(cppcoreguidelines-pro-type-union-access)
         sev.sigev_value.sival_ptr = static_cast<void*>(ctx);
         sev.sigev_notify_function = [](union sigval sv)
         {
             auto* c = static_cast<posix_timer_ctx*>(sv.sival_ptr);
-            if (c && c->alive.load(std::memory_order_acquire) && c->fn)
+            if ((c != nullptr) && c->alive.load(std::memory_order_acquire) && (c->fn != nullptr))
             {
                 c->fn(c->arg);
             }
@@ -862,7 +907,7 @@ extern "C"
     /// @return osal::ok() always.
     osal::result osal_timer_destroy(osal::active_traits::timer_handle_t* handle) noexcept
     {
-        if (!handle || !handle->native)
+        if (handle_is_null(handle))
         {
             return osal::ok();
         }
@@ -876,10 +921,10 @@ extern "C"
         ctx->alive.store(false, std::memory_order_release);
         timer_delete(ctx->id);
         // Brief yield to allow in-flight callback threads to finish.
-        struct timespec ts
+        const struct timespec ts
         {
-            0, 2'000'000L
-        };  // 2 ms
+            0, static_cast<decltype(timespec{}.tv_nsec)>(2 * kNanosecondsPerMillisecond)
+        };
         nanosleep(&ts, nullptr);
         delete ctx;
         handle->native = nullptr;
@@ -891,7 +936,7 @@ extern "C"
     /// @return osal::ok() on success; osal::error_code::not_initialized or ::unknown on failure.
     osal::result osal_timer_start(osal::active_traits::timer_handle_t* handle) noexcept
     {
-        if (!handle || !handle->native)
+        if (handle_is_null(handle))
         {
             return osal::error_code::not_initialized;
         }
@@ -904,7 +949,7 @@ extern "C"
     /// @return osal::ok() on success; osal::error_code::not_initialized or ::unknown on failure.
     osal::result osal_timer_stop(osal::active_traits::timer_handle_t* handle) noexcept
     {
-        if (!handle || !handle->native)
+        if (handle_is_null(handle))
         {
             return osal::error_code::not_initialized;
         }
@@ -928,19 +973,20 @@ extern "C"
     /// @param handle      Timer handle.
     /// @param new_period  New period in OSAL ticks (milliseconds); applied via timer_settime().
     /// @return osal::ok() on success; osal::error_code::not_initialized or ::unknown on failure.
-    osal::result osal_timer_set_period(osal::active_traits::timer_handle_t* handle, osal::tick_t new_period) noexcept
+    osal::result osal_timer_set_period(osal::active_traits::timer_handle_t* handle, osal::tick_t p) noexcept
     {
-        if (!handle || !handle->native)
+        if (handle_is_null(handle))
         {
             return osal::error_code::not_initialized;
         }
         auto*        ctx              = static_cast<posix_timer_ctx*>(handle->native);
-        const time_t sec              = static_cast<time_t>(new_period / 1000U);
-        const long   nsec             = static_cast<long>((new_period % 1000U) * 1'000'000L);
+        const time_t sec              = static_cast<time_t>(p / 1000U);
+        const auto   nsec             = static_cast<decltype(timespec{}.tv_nsec)>(static_cast<std::int64_t>(p % 1000U) *
+                                                                                  kNanosecondsPerMillisecond);
         ctx->spec.it_value.tv_sec     = sec;
         ctx->spec.it_value.tv_nsec    = nsec;
         ctx->spec.it_interval.tv_sec  = ctx->auto_reload ? sec : 0;
-        ctx->spec.it_interval.tv_nsec = ctx->auto_reload ? nsec : 0L;
+        ctx->spec.it_interval.tv_nsec = ctx->auto_reload ? nsec : 0;
         return (timer_settime(ctx->id, 0, &ctx->spec, nullptr) == 0) ? osal::ok() : osal::error_code::unknown;
     }
 
@@ -949,7 +995,7 @@ extern "C"
     /// @return True if it_value is non-zero.
     bool osal_timer_is_active(const osal::active_traits::timer_handle_t* handle) noexcept
     {
-        if (!handle || !handle->native)
+        if (handle_is_null(handle))
         {
             return false;
         }
@@ -966,14 +1012,12 @@ extern "C"
     // ---------------------------------------------------------------------------
 #include "../common/emulated_event_flags.inl"
 
-// ---------------------------------------------------------------------------
-// Wait-set (poll())
-// ---------------------------------------------------------------------------
-#define OSAL_POSIX_MAX_POLL_FDS 16
-
+    // ---------------------------------------------------------------------------
+    // Wait-set (poll())
+    // ---------------------------------------------------------------------------
     struct posix_wait_set_obj
     {
-        struct pollfd fds[OSAL_POSIX_MAX_POLL_FDS];
+        struct pollfd fds[kPosixMaxPollFds];
         std::size_t   n_fds;
     };
 
@@ -983,7 +1027,7 @@ extern "C"
     osal::result osal_wait_set_create(osal::active_traits::wait_set_handle_t* handle) noexcept
     {
         auto* ws = new (std::nothrow) posix_wait_set_obj{};
-        if (!ws)
+        if (ws == nullptr)
         {
             return osal::error_code::out_of_resources;
         }
@@ -997,7 +1041,7 @@ extern "C"
     /// @return osal::ok() always.
     osal::result osal_wait_set_destroy(osal::active_traits::wait_set_handle_t* handle) noexcept
     {
-        if (!handle || !handle->native)
+        if (handle_is_null(handle))
         {
             return osal::ok();
         }
@@ -1014,16 +1058,16 @@ extern "C"
     osal::result osal_wait_set_add(osal::active_traits::wait_set_handle_t* handle, int fd,
                                    std::uint32_t events) noexcept
     {
-        if (!handle || !handle->native)
+        if (handle_is_null(handle))
         {
             return osal::error_code::not_initialized;
         }
         auto* ws = static_cast<posix_wait_set_obj*>(handle->native);
-        if (ws->n_fds >= OSAL_POSIX_MAX_POLL_FDS)
+        if (ws->n_fds >= kPosixMaxPollFds)
         {
             return osal::error_code::out_of_resources;
         }
-        ws->fds[ws->n_fds] = {fd, static_cast<short>(events), 0};
+        ws->fds[ws->n_fds] = {fd, static_cast<decltype(pollfd{}.events)>(events), 0};
         ws->n_fds++;
         return osal::ok();
     }
@@ -1034,7 +1078,7 @@ extern "C"
     /// @return osal::ok() if found and removed; osal::error_code::invalid_argument if not found.
     osal::result osal_wait_set_remove(osal::active_traits::wait_set_handle_t* handle, int fd) noexcept
     {
-        if (!handle || !handle->native)
+        if (handle_is_null(handle))
         {
             return osal::error_code::not_initialized;
         }
@@ -1060,19 +1104,17 @@ extern "C"
     osal::result osal_wait_set_wait(osal::active_traits::wait_set_handle_t* handle, int* fds_ready,
                                     std::size_t max_ready, std::size_t* n_ready, osal::tick_t timeout_ticks) noexcept
     {
-        if (!handle || !handle->native)
+        if (handle_is_null(handle))
         {
             return osal::error_code::not_initialized;
         }
         auto* ws = static_cast<posix_wait_set_obj*>(handle->native);
-        if (n_ready)
+        if (n_ready != nullptr)
         {
             *n_ready = 0U;
         }
 
-        const int to_ms = (timeout_ticks == osal::WAIT_FOREVER) ? -1
-                          : (timeout_ticks == osal::NO_WAIT)    ? 0
-                                                                : static_cast<int>(timeout_ticks);
+        const int to_ms = to_poll_timeout_ms(timeout_ticks);
 
         // Reset revents.
         for (std::size_t i = 0; i < ws->n_fds; ++i)
@@ -1095,14 +1137,14 @@ extern "C"
         {
             if (ws->fds[i].revents != 0)
             {
-                if (fds_ready)
+                if (fds_ready != nullptr)
                 {
                     fds_ready[out] = ws->fds[i].fd;
                 }
                 out++;
             }
         }
-        if (n_ready)
+        if (n_ready != nullptr)
         {
             *n_ready = out;
         }

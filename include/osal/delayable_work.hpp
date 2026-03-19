@@ -25,7 +25,7 @@
 #include "types.hpp"
 #include "work_queue.hpp"
 
-#include <atomic>
+#include "detail/atomic_compat.hpp"
 #include <cstddef>
 #include <cstdint>
 
@@ -44,21 +44,36 @@ namespace osal
 ///
 ///          The type is intentionally non-copyable and supports at most one
 ///          armed delay at a time.
+///
+/// @warning **Polling cost:** The `flush()` method uses busy-polling with
+///          `thread::sleep_for()` to wait for the item to become idle.  This
+///          is safe on all backends (including ISR-timer backends that cannot
+///          signal a condition variable) but consumes CPU while waiting.
+///          Prefer short timeouts or infrequent calls to `flush()`.
 class delayable_work
 {
 public:
+    /// @brief True when the active backend can safely support delayable work.
+    static constexpr bool is_supported = supports_requirement<support_requirement::delayable_work>;
+
+    /// @brief Enforce delayable-work support at compile time.
+    template<typename Backend = active_backend>
+    static consteval void require_support()
+    {
+        require_backend_support<support_requirement::delayable_work, Backend>();
+    }
+
     /// @brief Construct a delayable work item.
     /// @param queue Target work queue used to execute the callback.
     /// @param func Callback invoked when the delay expires.
     /// @param arg Opaque pointer passed back to @p func.
     /// @param name Optional debug name for the backing timer.
     delayable_work(work_queue& queue, work_func_t func, void* arg = nullptr, const char* name = "dw") noexcept
-        : queue_(&queue), func_(func), arg_(arg), mtx_{},
+        : queue_(&queue), func_(func), arg_(arg),
           timer_{timer_thunk, this, milliseconds{1}, timer_mode::one_shot, name},
           state_(static_cast<std::uint8_t>(state::idle)), dispatch_error_(static_cast<std::int32_t>(error_code::ok)),
           dispatch_failed_(false), valid_(queue.valid() && (func != nullptr) && mtx_.valid() && timer_.valid() &&
-                                          (!active_capabilities::timer_callbacks_may_run_in_isr ||
-                                           active_capabilities::has_isr_work_queue_submit))
+                                          delayable_work_backend<active_backend>)
     {
     }
 
@@ -334,10 +349,10 @@ private:
 
     bool compare_exchange_state(state& expected, state desired) noexcept
     {
-        std::uint8_t expected_raw = static_cast<std::uint8_t>(expected);
-        const bool   exchanged    = state_.compare_exchange_strong(expected_raw, static_cast<std::uint8_t>(desired),
-                                                                   std::memory_order_acq_rel, std::memory_order_acquire);
-        expected                  = static_cast<state>(expected_raw);
+        auto       expected_raw = static_cast<std::uint8_t>(expected);
+        const bool exchanged    = state_.compare_exchange_strong(expected_raw, static_cast<std::uint8_t>(desired),
+                                                                 std::memory_order_acq_rel, std::memory_order_acquire);
+        expected                = static_cast<state>(expected_raw);
         return exchanged;
     }
 

@@ -1,6 +1,6 @@
 # C Interface Layer
 
-MicrOSAL's primary API is C++17, but a pure-C interface is provided so that
+MicrOSAL's primary API is C++20, but a pure-C interface is provided so that
 C modules (drivers, legacy code, mixed-language projects) can use the same
 OSAL primitives without a C++ compiler.
 
@@ -11,7 +11,7 @@ OSAL primitives without a C++ compiler.
 | File | Purpose |
 | --- | --- |
 | `include/osal/osal_c.h` | Pure C11 header — types, constants, functions |
-| `src/common/osal_c.cpp` | C++17 bridge — thin wrappers → backend calls |
+| `src/common/osal_c.cpp` | C++20 bridge — thin wrappers → backend calls |
 
 `osal_c.h` is self-contained; it does **not** `#include` any C++ headers.
 Both C and C++ translation units can include it (guarded by `extern "C"`).
@@ -30,7 +30,9 @@ typedef struct { void* native; } osal_mutex_handle;
 
 The C++ handles (`osal::active_traits::mutex_handle_t`, …) have the
 identical layout.  The bridge implementation `reinterpret_cast`s between
-the two — no copying, no allocation.
+the two — no copying, no allocation.  Layout compatibility is enforced at
+compile time by `static_assert`s in `osal_c.cpp` that verify matching
+`sizeof` and `alignof` for every handle pair.
 
 `osal_notification_handle` and `osal_delayable_work_handle` are the
 intentional exceptions. `osal_notification_handle` is a composite pure-C helper

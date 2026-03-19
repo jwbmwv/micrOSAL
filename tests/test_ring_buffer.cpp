@@ -80,7 +80,7 @@ TEST_CASE("ring_buffer: try_push fails when full")
 TEST_CASE("ring_buffer: try_pop fails when empty")
 {
     osal::ring_buffer<int, 4> rb;
-    int val = 0;
+    int                       val = 0;
     CHECK_FALSE(rb.try_pop(val));
 }
 
@@ -107,7 +107,7 @@ TEST_CASE("ring_buffer: peek does not remove the item")
 TEST_CASE("ring_buffer: peek fails when empty")
 {
     osal::ring_buffer<int, 4> rb;
-    int val = 0;
+    int                       val = 0;
     CHECK_FALSE(rb.peek(val));
 }
 
@@ -120,22 +120,29 @@ TEST_CASE("ring_buffer: wrap-around maintains FIFO order")
     osal::ring_buffer<int, 4> rb;  // Internal capacity N+1=5.
 
     // Fill to capacity.
-    for (int i = 0; i < 4; ++i) CHECK(rb.try_push(i));
+    for (int i = 0; i < 4; ++i)
+        CHECK(rb.try_push(i));
 
     // Consume two.
     int v;
-    CHECK(rb.try_pop(v)); CHECK(v == 0);
-    CHECK(rb.try_pop(v)); CHECK(v == 1);
+    CHECK(rb.try_pop(v));
+    CHECK(v == 0);
+    CHECK(rb.try_pop(v));
+    CHECK(v == 1);
 
     // Push two more (triggers wrap-around).
     CHECK(rb.try_push(10));
     CHECK(rb.try_push(11));
 
     // Now drain: should be 2, 3, 10, 11.
-    CHECK(rb.try_pop(v)); CHECK(v == 2);
-    CHECK(rb.try_pop(v)); CHECK(v == 3);
-    CHECK(rb.try_pop(v)); CHECK(v == 10);
-    CHECK(rb.try_pop(v)); CHECK(v == 11);
+    CHECK(rb.try_pop(v));
+    CHECK(v == 2);
+    CHECK(rb.try_pop(v));
+    CHECK(v == 3);
+    CHECK(rb.try_pop(v));
+    CHECK(v == 10);
+    CHECK(rb.try_pop(v));
+    CHECK(v == 11);
     CHECK(rb.empty());
 }
 
@@ -146,7 +153,8 @@ TEST_CASE("ring_buffer: wrap-around maintains FIFO order")
 TEST_CASE("ring_buffer: reset discards all items")
 {
     osal::ring_buffer<int, 8> rb;
-    for (int i = 0; i < 5; ++i) rb.try_push(i);
+    for (int i = 0; i < 5; ++i)
+        rb.try_push(i);
     CHECK(rb.size() == 5U);
 
     rb.reset();
@@ -161,7 +169,11 @@ TEST_CASE("ring_buffer: reset discards all items")
 
 TEST_CASE("ring_buffer: works with struct types")
 {
-    struct Pair { int x; int y; };
+    struct Pair
+    {
+        int x;
+        int y;
+    };
     osal::ring_buffer<Pair, 4> rb;
 
     CHECK(rb.try_push({1, 2}));
@@ -205,16 +217,17 @@ TEST_CASE("ring_buffer: SPSC producer + consumer correctness")
     static osal::ring_buffer<std::uint32_t, 64> rb;
     rb.reset();
 
-    static std::atomic<bool> producer_done{false};
+    static std::atomic<bool>          producer_done{false};
     static std::atomic<std::uint32_t> consumed_count{0};
-    static std::atomic<bool> order_violation{false};
+    static std::atomic<bool>          order_violation{false};
     producer_done.store(false);
     consumed_count.store(0);
     order_violation.store(false);
 
     constexpr std::uint32_t kItems = 10000U;
 
-    auto producer = [](void*) {
+    auto producer = [](void*)
+    {
         for (std::uint32_t i = 0; i < kItems; ++i)
         {
             while (!rb.try_push(i))
@@ -225,7 +238,8 @@ TEST_CASE("ring_buffer: SPSC producer + consumer correctness")
         producer_done.store(true, std::memory_order_release);
     };
 
-    auto consumer = [](void*) {
+    auto consumer = [](void*)
+    {
         std::uint32_t expected = 0;
         while (expected < kItems)
         {
@@ -248,15 +262,21 @@ TEST_CASE("ring_buffer: SPSC producer + consumer correctness")
 
     alignas(16) static std::uint8_t stack_p[65536];
     alignas(16) static std::uint8_t stack_c[65536];
-    osal::thread tp, tc;
-    osal::thread_config cfg{};
+    osal::thread                    tp, tc;
+    osal::thread_config             cfg{};
 
-    cfg.entry = producer; cfg.arg = nullptr;
-    cfg.stack = stack_p; cfg.stack_bytes = sizeof(stack_p); cfg.name = "prod";
+    cfg.entry       = producer;
+    cfg.arg         = nullptr;
+    cfg.stack       = stack_p;
+    cfg.stack_bytes = sizeof(stack_p);
+    cfg.name        = "prod";
     REQUIRE(tp.create(cfg).ok());
 
-    cfg.entry = consumer; cfg.arg = nullptr;
-    cfg.stack = stack_c; cfg.stack_bytes = sizeof(stack_c); cfg.name = "cons";
+    cfg.entry       = consumer;
+    cfg.arg         = nullptr;
+    cfg.stack       = stack_c;
+    cfg.stack_bytes = sizeof(stack_c);
+    cfg.name        = "cons";
     REQUIRE(tc.create(cfg).ok());
 
     REQUIRE(tp.join().ok());

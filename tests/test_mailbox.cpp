@@ -51,8 +51,8 @@ TEST_CASE("mailbox: cross-thread send and receive")
     auto producer = [](void*) { (void)mb.send(99U); };
 
     alignas(16) static std::uint8_t stack[65536];
-    osal::thread thread;
-    osal::thread_config cfg{};
+    osal::thread                    thread;
+    osal::thread_config             cfg{};
     cfg.entry       = producer;
     cfg.stack       = stack;
     cfg.stack_bytes = sizeof(stack);

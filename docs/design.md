@@ -3,7 +3,8 @@
 ## Overview
 
 The Micro Operating System Abstraction Layer (OSAL) provides a thin,
-zero-cost C++17 interface to common RTOS primitives across seventeen backends:
+zero-cost interface built on MicrOSAL's required C++ feature set across
+seventeen backends:
 
 | Backend | Target | File |
 | --- | --- | --- |
@@ -30,7 +31,7 @@ zero-cost C++17 interface to common RTOS primitives across seventeen backends:
 ## Design Principles
 
 1. **No virtual functions** — all dispatch is resolved at compile-time via
-   template traits and `if constexpr`.
+    template traits, concepts, and `if constexpr`.
 
 2. **No RTTI** — compile with `-fno-rtti`.
 
@@ -260,16 +261,41 @@ Key flags and which backends support them:
 | `has_isr_message_buffer` | ✓ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ |
 | `has_native_rwlock` | ✗ | ✗ | ✗ | ✗ | ✓ | ✓ | ✗ | ✗ | ✓ | ✗ | ✗ | ✗ | ✓ | ✓ | ✓ | ✗ | ✗ |
 | `has_spinlock` | ✗ | ✓ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ |
-| `has_barrier` | ✗ | ✗ | ✗ | ✗ | ✓ | ✓ | ✗ | ✗ | ✓ | ✗ | ✗ | ✗ | ✓ | ✓ | ✓ | ✗ | ✗ |
+ | `has_barrier` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 
 FR=FreeRTOS, ZY=Zephyr, TX=ThreadX, PX=PX5, PO=POSIX, LI=Linux, BM=Bare-metal, VX=VxWorks,
 NX=NuttX, MI=Micrium, CH=ChibiOS, EM=embOS, QX=QNX, RT=RTEMS, IN=INTEGRITY,
 C1=CMSIS-RTOS, C2=CMSIS-RTOS2
 
 \* `cfg` = depends on backend configuration (`INCLUDE_vTaskSuspend == 1` for FreeRTOS).
-† `emu` = provided by the header-only `osal::thread_local_data` emulation (guaranteed under MicrOSAL's C++17 baseline).
+† `emu` = provided by the header-only `osal::thread_local_data`
+emulation (guaranteed under MicrOSAL's required feature-set baseline).
 ‡ `cfg` = depends on `configCHECK_FOR_STACK_OVERFLOW > 0` (FreeRTOS).
 § `cfg` = depends on `configGENERATE_RUN_TIME_STATS == 1` (FreeRTOS).
+
+### Compile-time support helpers
+
+Capability flags remain the primary way to branch portable code with
+`if constexpr`, but native-only or optional wrappers now also expose explicit
+support helpers:
+
+- `osal::spinlock::is_supported` / `require_support()`
+- `osal::wait_set::is_supported` / `require_support()`
+- `osal::timer::is_supported` / `require_support()`
+- `osal::delayable_work::is_supported` / `require_support()`
+- `osal::thread::supports_timed_join`, `supports_affinity`,
+    `supports_dynamic_priority`, `supports_task_notification`,
+    `supports_suspend_resume`, plus matching `require_*_support()` helpers
+
+Use these when a code path must fail the build on unsupported backends instead
+of falling back to the runtime `error_code::not_supported` path.
+
+Two practical rules follow from the current architecture:
+
+- `osal::barrier` is now a portable feature because MicrOSAL supplies a shared
+    emulation where the kernel lacks a native barrier.
+- `osal::wait_set` and `osal::spinlock` remain native-only APIs; prefer
+    `osal::object_wait_set` and `osal::mutex` when portability matters.
 
 ### Thread-local data
 
@@ -796,28 +822,31 @@ for contexts where sleeping is not permitted (e.g. interrupt service routines
 or real-time critical sections).  It is intentionally minimal — no recursion,
 no ownership transfer.
 
-Where native RTOS spinlock support is not available the operations return
-`error_code::not_supported` (capability-guarded at compile time via
-`has_spinlock`).
+MicrOSAL intentionally does **not** emulate spinlocks.  Where native spinlock
+support is unavailable the operations return `error_code::not_supported`, while
+`osal::spinlock::is_supported` and `osal::spinlock::require_support()` provide
+the compile-time branch or hard-fail option.
 
 ### Spinlock API Surface
 
 | Method | Description |
 | --- | --- |
+| `is_supported` | `true` only on backends with a native spinlock implementation. |
+| `require_support()` | Emit a compile-time diagnostic when native spinlocks are mandatory. |
 | `lock()` | Acquire the spinlock; busy-waits until free.  Returns `result::ok()` or `not_supported`. |
 | `try_lock()` | Non-blocking attempt.  Returns `true` if acquired, `false` otherwise. |
-| `unlock()` | Release the spinlock.  No-op on stub backends. |
+| `unlock()` | Release the spinlock.  No-op when the unsupported path is active. |
 | `valid()` | Returns `true` if the underlying native handle was initialised successfully. |
 
 RAII helper: `osal::spinlock::lock_guard g{sl};` acquires on construction and
 releases on destruction.
 
-### Spinlock Native vs Stub
+### Spinlock Native vs Unsupported Path
 
 | Strategy | Backends | Implementation |
 | --- | --- | --- |
 | Native — `k_spinlock` | Zephyr | `src/zephyr/zephyr_spinlock.inl` |
-| Stub (`not_supported`) | All other 16 backends | `src/common/emulated_spinlock.inl` |
+| Unsupported path (`not_supported`) | All other 16 backends | `src/common/emulated_spinlock.inl` |
 
 ---
 
@@ -829,23 +858,26 @@ arrived.  One thread — the _serial thread_ — receives `error_code::barrier_s
 from `wait()` to indicate it is responsible for any once-per-cycle
 post-barrier work; all others receive `result::ok()`.
 
-Where native barrier support is unavailable `wait()` returns
-`error_code::not_supported` (gated by `has_barrier`).
+MicrOSAL now treats barriers as a portable feature.  POSIX-family backends use
+native `pthread_barrier_t`, while the remaining backends use a shared
+generation-counter emulation built from `osal::mutex` and `osal::condvar`.
+`has_barrier` therefore reflects portable availability, not just kernel-native
+barrier APIs.
 
 ### Barrier API Surface
 
 | Method | Description |
 | --- | --- |
-| `barrier(count)` | Construct a barrier for `count` threads.  Check `valid()` after construction. |
-| `wait()` | Block until `count` threads have called `wait()`.  Returns `barrier_serial` for the serial thread, `ok` for all others, or `not_supported` on stub backends. |
-| `valid()` | Returns `true` if the native handle was initialised successfully. |
+| `barrier(count)` | Construct a barrier for `count` threads.  `count == 0` is rejected as invalid. |
+| `wait()` | Block until `count` threads have called `wait()`.  Returns `barrier_serial` for the serial thread and `ok` for all others. |
+| `valid()` | Returns `true` if the native or shared-emulated handle was initialised successfully. |
 
-### Barrier Native vs Stub
+### Barrier Native vs Emulated
 
 | Strategy | Backends | Implementation |
 | --- | --- | --- |
 | Native — `pthread_barrier_t` | POSIX, Linux, NuttX, QNX, RTEMS, INTEGRITY | `src/common/posix/posix_barrier.inl` |
-| Stub (`not_supported`) | All other 11 backends | `src/common/emulated_barrier.inl` |
+| Shared emulation — mutex + condvar + generation counter | FreeRTOS, Zephyr, ThreadX, PX5, Bare-metal, VxWorks, Micrium, ChibiOS, embOS, CMSIS-RTOS, CMSIS-RTOS2 | `src/common/emulated_barrier.inl` |
 
 `error_code::barrier_serial` (value 14) mirrors the POSIX constant
 `PTHREAD_BARRIER_SERIAL_THREAD` and identifies the serial thread.
@@ -863,7 +895,9 @@ set.
 This is most useful on RTOS kernels that provide native task-notification
 primitives (FreeRTOS `xTaskNotify`, embOS task events).  On all other
 backends the calls return `error_code::not_supported` (gated by
-`has_task_notification`).
+`has_task_notification`).  `osal::thread::supports_task_notification` and
+`require_task_notification_support()` provide the corresponding compile-time
+query and hard-fail helper.
 
 For richer, backend-agnostic notification semantics that are not tied to a
 specific thread object, use `osal::notification<Slots>` below.
@@ -876,13 +910,13 @@ specific thread object, use `osal::notification<Slots>` below.
 | `notify_isr(value = 0)` | Post `value` from an ISR context (uses the RTOS ISR-safe variant). |
 | `static wait_for_notification(timeout, value_out*)` | Block until a notification arrives or `timeout` expires.  Optionally receive the posted value via `value_out`. |
 
-### Task Notification Native vs Stub
+### Task Notification Native vs Unsupported Path
 
 | Strategy | Backends | Implementation |
 | --- | --- | --- |
 | Native — `xTaskNotify` / `xTaskNotifyWait` | FreeRTOS | Inline in `src/freertos/freertos_backend.cpp` |
 | Native — `OS_TASKEVENT_Set` / `GetMasked` | embOS | Inline in `src/embos/embos_backend.cpp` |
-| Stub (`not_supported`) | All other 13 backends | `src/common/emulated_task_notify.inl` |
+| Unsupported path (`not_supported`) | All other 13 backends | `src/common/emulated_task_notify.inl` |
 
 ---
 
@@ -928,6 +962,9 @@ objects that already expose non-destructive readiness queries.  It is distinct
 from `osal::wait_set`, which remains reserved for native descriptor/object wait
 APIs such as Linux `epoll`, POSIX `poll`, and PX5 wait sets.
 
+Code that genuinely requires a native descriptor wait can branch on
+`osal::wait_set::is_supported` or call `osal::wait_set::require_support()`.
+
 The current portable object wait-set supports:
 
 - `osal::queue<T, N>`
@@ -966,4 +1003,3 @@ does not currently expose a non-destructive semaphore count/availability query.
 
 This is intentionally a conservative, portable complement to native wait-set
 backends, not a replacement for OS-level descriptor waiting.
-

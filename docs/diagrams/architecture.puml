@@ -17,19 +17,26 @@ package "Application Code" as app #E8F5E9 {
     [User Application] as user
 }
 
-package "C++17 Header-Only API" as api #E3F2FD {
+package "C++20 Header-Only API" as api #E3F2FD {
     [osal::mutex] as mutex
     [osal::semaphore] as sem
     [osal::thread] as thread
     [osal::queue<T,N>] as queue
     [osal::mailbox<T>] as mailbox
     [osal::timer] as timer
+    [osal::delayable_work] as dwork
     [osal::event_flags] as eflags
     [osal::wait_set] as wset
     [osal::condvar] as condvar
     [osal::work_queue] as wq
     [osal::memory_pool] as mpool
     [osal::rwlock] as rwlock
+    [osal::spinlock] as spinlock
+    [osal::barrier] as barrier
+    [osal::stream_buffer<N,TL>] as sbuf
+    [osal::message_buffer<N>] as mbuf
+    [osal::notification<Slots>] as notif
+    [osal::object_wait_set] as owset
     [osal::ring_buffer<T,N>] as rbuf
     [osal::thread_local_data] as tls
     [osal::clock] as clock
@@ -39,6 +46,9 @@ package "Compile-Time Dispatch" as dispatch #FFF8E1 {
     [backends.hpp\n<active_backend>] as backends
     [capabilities<B>\n(constexpr bool flags)] as caps
     [backend_traits<B>\n(handle types, sizes)] as traits
+    [concepts.hpp\n(backend + storage\nconstraints)] as concepts
+    [supports_requirement<R,B>\n+ require_backend_support<>] as support_req
+    [consteval validation\n(tick + backend selection)] as constevals
 }
 
 package "extern \"C\" Bridge Layer" as bridge #FFF3E0 {
@@ -53,6 +63,10 @@ package "extern \"C\" Bridge Layer" as bridge #FFF3E0 {
     [osal_work_queue_create / submit ...] as c_wq
     [osal_memory_pool_create / allocate ...] as c_mpool
     [osal_rwlock_create / read_lock / write_lock ...] as c_rwlock
+    [osal_spinlock_create / lock / unlock ...] as c_spinlock
+    [osal_barrier_create / wait / destroy ...] as c_barrier
+    [osal_stream_buffer_create / send / receive ...] as c_sbuf
+    [osal_message_buffer_create / send / receive ...] as c_mbuf
     [osal_clock_monotonic_ms / ticks ...] as c_clock
 }
 
@@ -81,6 +95,10 @@ package "Shared Emulations" as shared #F3E5F5 {
     [emulated_condvar.inl\n(Birrell's: mutex + semaphore array)] as emu_cv
     [emulated_memory_pool.inl\n(bitmap + mutex + counting sem)] as emu_mp
     [emulated_rwlock.inl\n(mutex + condvar + reader counter)] as emu_rw
+    [emulated_barrier.inl\n(mutex + condvar + generation)] as emu_barrier
+    [emulated_stream_buffer.inl\n(SPSC ring + binary semaphores)] as emu_sb
+    [emulated_message_buffer.inl\n(length-prefixed SPSC ring)] as emu_mb
+    [emulated_event_flags.inl\n(mutex + per-waiter semaphore array)] as emu_ef
 
     package "POSIX shared (src/common/posix/)" as posix_shared #EDE7F6 {
         [posix_clock.inl\n(clock_gettime MONOTONIC/REALTIME)] as posix_clock
@@ -103,13 +121,27 @@ thread -down-> dispatch
 queue -down-> dispatch
 mailbox -down-> queue : wraps queue<T,1>
 timer -down-> dispatch
+dwork -down-> timer : arms timer
+dwork -down-> wq : submits callback
 eflags -down-> dispatch
 wset -down-> dispatch
 condvar -down-> dispatch
 wq -down-> dispatch
 mpool -down-> dispatch
 rwlock -down-> dispatch
+spinlock -down-> dispatch
+barrier -down-> dispatch
+sbuf -down-> dispatch
+mbuf -down-> dispatch
+notif -down-> condvar : mutex + condvar
+owset ..> queue : polls readiness
+owset ..> eflags : polls readiness
 clock -down-> dispatch
+
+thread -down-> support_req : optional feature queries
+timer -down-> support_req : support helper
+wset -down-> support_req : support helper
+spinlock -down-> support_req : support helper
 
 dispatch -down-> bridge : "inline calls to\nextern \"C\" functions"
 
@@ -187,6 +219,18 @@ be_vx -left-> emu_rw
 be_c1 -left-> emu_rw
 be_c2 -left-> emu_rw
 
+be_fr -left-> emu_barrier
+be_zy -left-> emu_barrier
+be_tx -left-> emu_barrier
+be_px -left-> emu_barrier
+be_bm -left-> emu_barrier
+be_vx -left-> emu_barrier
+be_mi -left-> emu_barrier
+be_ch -left-> emu_barrier
+be_em -left-> emu_barrier
+be_c1 -left-> emu_barrier
+be_c2 -left-> emu_barrier
+
 backend -down-> kernel
 
 note right of dispatch
@@ -195,13 +239,19 @@ note right of dispatch
   No RTTI. All resolved
   at compile time via
   template specializations
-  and if constexpr.
+    and if constexpr.
+    Native-only surfaces use
+    compile-time support helpers
+    instead of fake emulation.
 end note
 
 note right of shared
   Backends without native
   support #include the
-  shared .inl emulations.
+    shared .inl emulations.
+    `barrier` stays portable via
+    native backend hooks or
+    `emulated_barrier.inl`.
 end note
 
 @enduml

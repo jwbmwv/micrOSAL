@@ -91,7 +91,8 @@ from ISR context.
 | `osal::thread` | Static task/context storage on embedded RTOS backends; heap-backed pthread control object on POSIX-family backends. Embedded backends use caller-managed stack storage; POSIX-family backends may use caller-supplied or native pthread-managed stacks. | Caller / backend |
 | `osal::timer` | Static pool on static-pool RTOS backends; heap-backed control object on POSIX-family backends | N/A |
 | `osal::event_flags` | Static pool (all backends) | N/A |
-| `osal::wait_set` | Heap-backed wait-set object on POSIX, Linux, RTEMS, and INTEGRITY; native PX5 wait-set; stub elsewhere | N/A |
+| `osal::wait_set` | Heap-backed native wait-set object on POSIX, Linux, RTEMS, and INTEGRITY; native PX5 wait-set; unsupported elsewhere. Use `osal::object_wait_set` for portable OSAL-object waiting. | N/A |
+| `osal::barrier` | Heap-backed native pthread barrier on POSIX-family backends with native support; static-pool shared emulated barrier on other backends | N/A |
 | `osal::work_queue` | Native object or worker-thread wrapper. POSIX, Linux, RTEMS, and INTEGRITY use a heap-backed pthread worker; OSAL-thread based backends use caller-managed stack storage. | Caller / backend |
 | `osal::condvar` | Static pool / emulated object on static-pool RTOS backends; heap-backed native pthread object on POSIX-family backends | N/A |
 | `osal::memory_pool` | Static control pool (all backends); **backing buffer is caller-supplied** | Caller |
@@ -102,6 +103,46 @@ Notes:
 
 - In FreeRTOS static mode, the first `sizeof(StaticTask_t)` bytes of `thread_config::stack` are used for the task control block; the remaining bytes form the usable task stack.
 - In the bare-metal backend, task metadata is stored but no independent stack switch occurs; each task runs on the scheduler's call stack.
+
+## Backend Allocation Profiles
+
+This matrix describes the current MicrOSAL backend implementations, not just the
+native RTOS APIs in isolation. Some kernels expose their own compile-time
+declaration macros, but the portable MicrOSAL API intentionally normalizes that
+into a smaller set of storage models.
+
+| Backend | Current MicrOSAL storage profile | What the application typically supplies | Notes |
+| --- | --- | --- | --- |
+| FreeRTOS | Static pool + caller-supplied storage by default | Thread / work-queue stack storage; queue, stream-buffer, message-buffer, and memory-pool backing storage | Defining `OSAL_FREERTOS_DYNAMIC_ALLOC` enables FreeRTOS dynamic-allocation paths for task/control objects. |
+| Zephyr | Static pool + caller-supplied storage | Thread / work-queue stack storage; queue and memory-pool backing storage | Current backend keeps `k_mutex`, `k_sem`, `k_msgq`, `k_timer`, and related objects in fixed backend pools. |
+| ThreadX | Static pool + caller-supplied storage | Thread / work-queue stack storage; queue and memory-pool backing storage | Current backend uses fixed slot arrays for native `TX_*` objects. |
+| PX5 | Static pool + caller-supplied storage | Thread / work-queue stack storage; queue and memory-pool backing storage | Same model as ThreadX, with PX5 native wait-set support. |
+| Bare-metal | Static pool + caller-supplied storage | Task / work-queue stack storage; queue and memory-pool backing storage | Cooperative scheduler; tasks are tracked in static pools and run on the scheduler call stack. |
+| Micrium µC/OS-III | Static pool + caller-supplied storage | Thread stack storage; queue and memory-pool backing storage | Current backend uses fixed `OS_TCB`, `OS_MUTEX`, `OS_SEM`, `OS_Q`, and `OS_TMR` pools. |
+| ChibiOS | Static pool + caller-supplied storage | Thread stack storage; mailbox / queue and memory-pool backing storage | Current backend uses fixed pools for threads, mutexes, semaphores, mailboxes, timers, events, and condvars. |
+| embOS | Static pool + caller-supplied storage | Thread stack storage; queue and memory-pool backing storage | Current backend uses fixed pools for OS tasks and synchronization objects. |
+| VxWorks | Native OS-managed objects | Thread configuration; any payload buffers required by higher-level fixed-storage wrappers | MicrOSAL calls `taskSpawn`, `semMCreate`, `semCCreate`, `msgQCreate`, and related native APIs directly; this is not a caller-supplied static-object model through the portable API. |
+| CMSIS-RTOS v1 | Wrapper slot + native OS-managed objects | Depends on the underlying CMSIS port; memory-pool backing storage stays caller-supplied | MicrOSAL keeps fixed tracking slots, but queues/mutexes/timers are created through `os*Create` APIs, so true static declaration is not portable at the MicrOSAL layer. |
+| CMSIS-RTOS2 | Wrapper slot + native OS-managed objects | Depends on the underlying CMSIS port; memory-pool backing storage stays caller-supplied | MicrOSAL keeps fixed tracking slots, but queues/mutexes/timers/event flags are created through `os*New` APIs. |
+| POSIX | Heap-backed wrapper objects for many control primitives | Optional thread / work-queue stack storage; payload storage for fixed-storage wrappers such as `queue<T,N>` and `memory_pool` | The backend heap-allocates pthread / semaphore / timer / wait-set wrapper objects with `new`, even though several higher-level OSAL containers still embed their own payload storage. |
+| Linux | Heap-backed wrapper objects for many control primitives | Optional thread / work-queue stack storage; payload storage for fixed-storage wrappers such as `queue<T,N>` and `memory_pool` | Same model as POSIX, with Linux-specific control objects such as `timerfd` / `epoll` wrappers allocated on the heap. |
+| NuttX | Heap-backed wrapper objects for many control primitives | Optional thread stack storage; payload storage for fixed-storage wrappers such as `queue<T,N>` and `memory_pool` | NuttX currently uses the POSIX-style wrapper model in MicrOSAL, even though the RTOS itself is embedded. |
+| QNX | Heap-backed wrapper objects for many control primitives | Optional thread stack storage; payload storage for fixed-storage wrappers such as `queue<T,N>` and `memory_pool` | Same general model as the POSIX-family backends. |
+| RTEMS | Heap-backed wrapper objects for many control primitives | Optional thread stack storage; payload storage for fixed-storage wrappers such as `queue<T,N>` and `memory_pool` | RTEMS currently builds through the shared POSIX-family backend implementation. |
+| INTEGRITY | Heap-backed wrapper objects for many control primitives | Optional thread stack storage; payload storage for fixed-storage wrappers such as `queue<T,N>` and `memory_pool` | INTEGRITY currently builds through the shared POSIX-family backend implementation. |
+
+Regardless of backend, the following APIs are intentionally fixed-storage at
+the C++ surface:
+
+- `osal::queue<T,N>` and `osal::mailbox<T>`
+- `osal::ring_buffer<T,N>`
+- `osal::stream_buffer<N>` and `osal::message_buffer<N>`
+- `osal::memory_pool` backing storage
+- `osal::notification<Slots>`
+
+On POSIX-family backends that does not mean the entire implementation is heap
+free; it means the payload storage is caller-owned while the backend may still
+allocate a small control object behind the handle.
 
 ### Queue storage layout
 

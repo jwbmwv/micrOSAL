@@ -93,20 +93,55 @@ config MICRO_OSAL_MUTEX_MAX
 	int "Maximum number of concurrent mutexes"
 	default 16
 	range 1 64
+	help
+	  Maximum number of simultaneously live osal::mutex instances backed by
+	  native Zephyr k_mutex objects.
 
 config MICRO_OSAL_SEMAPHORE_MAX
 	int "Maximum number of concurrent semaphores"
 	default 16
 	range 1 64
+	help
+	  Maximum number of simultaneously live osal::semaphore instances backed by
+	  native Zephyr k_sem objects.
 
 config MICRO_OSAL_QUEUE_MAX
 	int "Maximum number of concurrent queues"
 	default 8
 	range 1 32
+	help
+	  Maximum number of simultaneously live osal::queue instances backed by
+	  native Zephyr k_msgq objects.
 
 config MICRO_OSAL_EVENT_FLAGS_MAX
 	int "Maximum number of concurrent event flag groups"
 	default 8
 	range 1 32
+	help
+	  Maximum number of simultaneously live osal::event_flags instances backed by
+	  native Zephyr k_event objects.
+
+config MICRO_OSAL_CONDVAR_MAX
+	int "Maximum number of concurrent condition variables"
+	default 16
+	range 1 64
+	help
+	  Maximum number of simultaneously live osal::condvar instances backed by
+	  native Zephyr k_condvar objects.
+
+config MICRO_OSAL_WORK_QUEUE_MAX
+	int "Maximum number of concurrent work queues"
+	default 4
+	range 1 16
+	help
+	  Maximum number of simultaneously live osal::work_queue instances backed by
+	  native Zephyr k_work_q objects.
+
+config MICRO_OSAL_WORK_QUEUE_DEPTH
+	int "Maximum queued work items per work queue"
+	default 32
+	range 1 128
+	help
+	  Compile-time entry capacity for each native Zephyr osal::work_queue.
 
 endif # MICRO_OSAL

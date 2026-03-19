@@ -69,7 +69,7 @@ TEST_CASE("result: implicit conversion from error_code")
 {
     // Verifies that error_code converts implicitly (non-explicit ctor).
     auto fn = []() -> osal::result { return osal::error_code::would_block; };
-    auto r = fn();
+    auto r  = fn();
     CHECK_FALSE(r.ok());
     CHECK(r.code() == osal::error_code::would_block);
 }

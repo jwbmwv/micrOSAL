@@ -30,6 +30,7 @@
 ///          MISRA C++ 2023 notes
 ///          ─────────────────────────────────────────────────────────────────
 ///          • All operations noexcept.
+///          • Template capacity is constrained with a C++20 requires-clause.
 ///          • No dynamic allocation; storage is inline.
 ///
 /// @par Example
@@ -59,6 +60,7 @@
 #include "types.hpp"
 #include <cstddef>
 #include <cstdint>
+#include <span>
 
 // ---------------------------------------------------------------------------
 // Length-prefix type (matches FreeRTOS configMESSAGE_BUFFER_LENGTH_TYPE)
@@ -140,11 +142,9 @@ namespace osal
 ///             header overhead).  Maximum single-message payload is
 ///             N - sizeof(osal_mb_length_t).
 template<std::size_t N>
+    requires(N > kMsgHeaderBytes)
 class message_buffer
 {
-    static_assert(N > kMsgHeaderBytes, "message_buffer: N must be > sizeof(osal_mb_length_t) (at least one "
-                                       "byte of payload capacity required).");
-
 public:
     // ---- types -------------------------------------------------------------
     static constexpr std::size_t capacity = N;
@@ -156,10 +156,7 @@ public:
     /// @brief Constructs and initialises the message buffer.
     /// @complexity O(1)
     /// @blocking   Never.
-    message_buffer() noexcept : valid_(false), handle_{}
-    {
-        valid_ = osal_message_buffer_create(&handle_, storage_, N).ok();
-    }
+    message_buffer() noexcept { valid_ = osal_message_buffer_create(&handle_, storage_, N).ok(); }
 
     /// @brief Destructs the message buffer and releases OS resources.
     ~message_buffer() noexcept
@@ -198,10 +195,13 @@ public:
     /// @return result::ok() on success.
     /// @complexity O(len)
     /// @blocking   Until space is available.
-    result send(const void* msg, std::size_t len) noexcept
+    [[nodiscard]] result send(const void* msg, std::size_t len) noexcept
     {
         return osal_message_buffer_send(&handle_, msg, len, WAIT_FOREVER);
     }
+
+    /// @brief Span overload for byte-oriented message payloads.
+    result send(std::span<const std::byte> msg) noexcept { return send(msg.data(), msg.size()); }
 
     /// @brief Attempts to write without blocking.
     /// @return true if the message was enqueued.
@@ -211,6 +211,9 @@ public:
     {
         return osal_message_buffer_send(&handle_, msg, len, NO_WAIT).ok();
     }
+
+    /// @brief Span overload for non-blocking payload writes.
+    bool try_send(std::span<const std::byte> msg) noexcept { return try_send(msg.data(), msg.size()); }
 
     /// @brief Writes with a timeout.
     /// @return true if the message was enqueued within @p timeout.
@@ -229,15 +232,24 @@ public:
         }
     }
 
+    /// @brief Span overload for timed payload writes.
+    bool send_for(std::span<const std::byte> msg, milliseconds timeout) noexcept
+    {
+        return send_for(msg.data(), msg.size(), timeout);
+    }
+
     /// @brief Writes from ISR context (non-blocking).
     /// @warning ISR-safety depends on has_isr_stream_buffer / has_isr_semaphore.
     /// @return result::ok() on success; error_code::timeout if no space.
     /// @complexity O(len)
     /// @blocking   Never.
-    result send_isr(const void* msg, std::size_t len) noexcept
+    [[nodiscard]] result send_isr(const void* msg, std::size_t len) noexcept
     {
         return osal_message_buffer_send_isr(&handle_, msg, len);
     }
+
+    /// @brief Span overload for ISR-context payload writes.
+    result send_isr(std::span<const std::byte> msg) noexcept { return send_isr(msg.data(), msg.size()); }
 
     // ---- receive (consumer API) -------------------------------------------
 
@@ -253,6 +265,9 @@ public:
         return osal_message_buffer_receive(&handle_, buf, max_len, WAIT_FOREVER);
     }
 
+    /// @brief Span overload for message reads.
+    std::size_t receive(std::span<std::byte> buf) noexcept { return receive(buf.data(), buf.size()); }
+
     /// @brief Attempts to read without blocking.
     /// @return  Bytes read, or 0 if no complete message is available.
     /// @complexity O(len read)
@@ -261,6 +276,9 @@ public:
     {
         return osal_message_buffer_receive(&handle_, buf, max_len, NO_WAIT);
     }
+
+    /// @brief Span overload for non-blocking message reads.
+    std::size_t try_receive(std::span<std::byte> buf) noexcept { return try_receive(buf.data(), buf.size()); }
 
     /// @brief Reads with a timeout.
     /// @return  Bytes read within @p timeout, or 0 on timeout.
@@ -279,6 +297,12 @@ public:
         }
     }
 
+    /// @brief Span overload for timed message reads.
+    std::size_t receive_for(std::span<std::byte> buf, milliseconds timeout) noexcept
+    {
+        return receive_for(buf.data(), buf.size(), timeout);
+    }
+
     /// @brief Reads from ISR context (non-blocking).
     /// @warning ISR-safety depends on has_isr_stream_buffer / has_isr_semaphore.
     /// @return  Bytes read, or 0 if no complete message is available.
@@ -289,17 +313,20 @@ public:
         return osal_message_buffer_receive_isr(&handle_, buf, max_len);
     }
 
+    /// @brief Span overload for ISR-context message reads.
+    std::size_t receive_isr(std::span<std::byte> buf) noexcept { return receive_isr(buf.data(), buf.size()); }
+
     // ---- control -----------------------------------------------------------
 
     /// @brief Discards all queued messages.
     /// @warning Must be called only when no concurrent send/receive is in progress.
-    result reset() noexcept { return osal_message_buffer_reset(&handle_); }
+    [[nodiscard]] result reset() noexcept { return osal_message_buffer_reset(&handle_); }
 
 private:
-    bool                                           valid_;
-    mutable active_traits::message_buffer_handle_t handle_;
+    bool                                           valid_{false};
+    mutable active_traits::message_buffer_handle_t handle_{};
     /// @brief Ring storage: N usable bytes + 1 sentinel byte (SPSC ring marker).
-    std::uint8_t storage_[N + 1U];
+    std::uint8_t storage_[N + 1U]{};
 };
 
 /// @} // osal_message_buffer

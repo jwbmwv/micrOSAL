@@ -33,8 +33,8 @@ TEST_CASE("stream_buffer: send and receive single byte")
     REQUIRE(sb.try_send(&tx, 1U));
     CHECK(sb.available() == 1U);
 
-    std::uint8_t rx = 0U;
-    const std::size_t n = sb.try_receive(&rx, sizeof(rx));
+    std::uint8_t      rx = 0U;
+    const std::size_t n  = sb.try_receive(&rx, sizeof(rx));
     CHECK(n == 1U);
     CHECK(rx == 0xABU);
     CHECK(sb.empty());
@@ -45,13 +45,13 @@ TEST_CASE("stream_buffer: send and receive multi-byte block")
     osal::stream_buffer<64> sb;
     REQUIRE(sb.valid());
 
-    const char tx[] = "Hello, OSAL!";
+    const char        tx[]   = "Hello, OSAL!";
     const std::size_t tx_len = sizeof(tx) - 1U;  // exclude NUL
 
     REQUIRE(sb.try_send(tx, tx_len));
     CHECK(sb.available() == tx_len);
 
-    char rx[32]{};
+    char              rx[32]{};
     const std::size_t n = sb.try_receive(rx, sizeof(rx));
     CHECK(n == tx_len);
     CHECK(std::memcmp(tx, rx, tx_len) == 0);
@@ -87,7 +87,7 @@ TEST_CASE("stream_buffer: partial receive leaves remainder")
     REQUIRE(sb.try_send(tx, 8U));
 
     // Read only 4 bytes.
-    std::uint8_t rx[4]{};
+    std::uint8_t      rx[4]{};
     const std::size_t n = sb.try_receive(rx, 4U);
     CHECK(n == 4U);
     CHECK(rx[0] == 1U);
@@ -95,7 +95,7 @@ TEST_CASE("stream_buffer: partial receive leaves remainder")
     CHECK(sb.available() == 4U);
 
     // Read the rest.
-    std::uint8_t rx2[4]{};
+    std::uint8_t      rx2[4]{};
     const std::size_t n2 = sb.try_receive(rx2, 4U);
     CHECK(n2 == 4U);
     CHECK(rx2[0] == 5U);
@@ -146,8 +146,8 @@ TEST_CASE("stream_buffer: send and receive in multiple small chunks")
 
     for (std::uint8_t i = 0U; i < 16U; ++i)
     {
-        std::uint8_t rx = 0xFFU;
-        const std::size_t n = sb.try_receive(&rx, 1U);
+        std::uint8_t      rx = 0xFFU;
+        const std::size_t n  = sb.try_receive(&rx, 1U);
         CHECK(n == 1U);
         CHECK(rx == i);
     }
@@ -182,7 +182,7 @@ TEST_CASE("stream_buffer: cross-thread send/receive")
         }
     };
 
-    constexpr std::size_t kStackSize = 65536U;
+    constexpr std::size_t           kStackSize = 65536U;
     alignas(16) static std::uint8_t stack[kStackSize];
 
     osal::thread_config cfg{};
@@ -198,8 +198,8 @@ TEST_CASE("stream_buffer: cross-thread send/receive")
 
     for (std::uint8_t expected = 1U; expected <= 8U; ++expected)
     {
-        std::uint8_t rx = 0U;
-        const std::size_t n = sb.receive(&rx, 1U);
+        std::uint8_t      rx = 0U;
+        const std::size_t n  = sb.receive(&rx, 1U);
         CHECK(n == 1U);
         CHECK(rx == expected);
     }
@@ -224,7 +224,7 @@ TEST_CASE("stream_buffer: send_isr and receive_isr round-trip")
     REQUIRE(sb.send_isr(tx, sizeof(tx)).ok());
     CHECK(sb.available() == sizeof(tx));
 
-    std::uint8_t rx[4]{};
+    std::uint8_t      rx[4]{};
     const std::size_t n = sb.receive_isr(rx, sizeof(rx));
     CHECK(n == sizeof(tx));
     CHECK(std::memcmp(tx, rx, sizeof(tx)) == 0);
@@ -303,7 +303,7 @@ TEST_CASE("stream_buffer: trigger level 4 — try_receive at threshold returns d
     CHECK(sb.available() == 4U);
 
     // Now try_receive must return all 4 bytes.
-    std::uint8_t rx[8]{};
+    std::uint8_t      rx[8]{};
     const std::size_t n = sb.try_receive(rx, sizeof(rx));
     CHECK(n == 4U);
     CHECK(rx[0] == 0xAAU);
@@ -322,7 +322,7 @@ TEST_CASE("stream_buffer: trigger level 4 — try_receive above threshold return
     CHECK(sb.available() == 6U);
 
     // All available bytes are returned.
-    std::uint8_t rx[8]{};
+    std::uint8_t      rx[8]{};
     const std::size_t n = sb.try_receive(rx, sizeof(rx));
     CHECK(n == 6U);
     CHECK(rx[0] == 1U);

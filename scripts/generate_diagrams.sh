@@ -5,7 +5,7 @@ usage() {
   cat <<'EOF'
 Usage: ./generate_diagrams.sh [OPTIONS]
 
-Generate PNG and SVG files from all PlantUML (.puml) files.
+Generate PNG, SVG, and PDF files from all PlantUML (.puml) files.
 
 Options:
   -i, --input-dir DIR   Directory to scan for .puml files (default: docs/diagrams)
@@ -20,6 +20,7 @@ EOF
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 INPUT_DIR="$ROOT_DIR/docs/diagrams"
+SVG_TO_PDF="$ROOT_DIR/scripts/svg_to_pdf.py"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -67,12 +68,21 @@ if [[ ${#PUML_FILES[@]} -eq 0 ]]; then
 fi
 
 echo "Found ${#PUML_FILES[@]} .puml files under: $INPUT_DIR"
-echo "Generating PNG and SVG files..."
+echo "Generating PNG, SVG, and PDF files..."
 
 for file in "${PUML_FILES[@]}"; do
   echo "  - $(basename "$file")"
   plantuml -failfast2 -tpng "$file"
   plantuml -failfast2 -tsvg "$file"
+  if command -v python3 >/dev/null 2>&1; then
+    svg_file="${file%.puml}.svg"
+    pdf_file="${file%.puml}.pdf"
+    if ! python3 "$SVG_TO_PDF" "$svg_file" "$pdf_file" >/dev/null 2>&1; then
+      echo "    warning: PDF conversion unavailable for $(basename "$file")" >&2
+    fi
+  else
+    echo "    warning: python3 not found; PDF conversion skipped for $(basename "$file")" >&2
+  fi
 done
 
-echo "Done. Generated .png and .svg files next to each .puml source."
+echo "Done. Generated .png/.svg files next to each .puml source; .pdf files when conversion support is available."

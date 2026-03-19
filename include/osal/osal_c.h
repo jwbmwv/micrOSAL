@@ -23,6 +23,7 @@
  *
  * @copyright Copyright (c) 2026 James Baldwin. AI-assisted — see NOTICE.
  */
+#pragma once
 #ifndef OSAL_C_H
 #define OSAL_C_H
 
@@ -35,8 +36,11 @@
 #endif
 
 #ifdef __cplusplus
+#define OSAL_C_MUTABLE mutable
 extern "C"
 {
+#else
+#define OSAL_C_MUTABLE
 #endif
 
     /* ======================================================================== */
@@ -316,12 +320,12 @@ typedef uint32_t osal_tick_t;
      */
     typedef struct
     {
-        osal_mutex_handle   mutex;
-        osal_condvar_handle condvar;
-        uint32_t*           values;
-        uint8_t*            pending;
-        size_t              slot_count;
-        uint8_t             valid;
+        OSAL_C_MUTABLE osal_mutex_handle   mutex;
+        OSAL_C_MUTABLE osal_condvar_handle condvar;
+        uint32_t*                          values;
+        uint8_t*                           pending;
+        size_t                             slot_count;
+        uint8_t                            valid;
     } osal_notification_handle;
 
     /** @brief Delayable work creation config. */
@@ -812,5 +816,7 @@ typedef uint32_t osal_tick_t;
 #ifdef __cplusplus
 } /* extern "C" */
 #endif
+
+#undef OSAL_C_MUTABLE
 
 #endif /* OSAL_C_H */

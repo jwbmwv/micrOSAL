@@ -6,13 +6,13 @@
 #include <osal/osal.hpp>
 #include <atomic>
 
-// Use a plain volatile counter since atomics may not be lock-free on all
-// platforms, but for Linux/POSIX test targets this is fine.
-static volatile std::uint32_t g_timer_count = 0;
+static_assert(osal::timer::is_supported == osal::active_capabilities::has_timer);
+
+static std::atomic<std::uint32_t> g_timer_count{0U};
 
 static void timer_callback(void* /*arg*/)
 {
-    ++g_timer_count;
+    g_timer_count.fetch_add(1U);
 }
 
 TEST_CASE("timer: construction succeeds")
@@ -35,7 +35,7 @@ TEST_CASE("timer: one-shot fires once")
         return;
     }
 
-    g_timer_count = 0;
+    g_timer_count.store(0U);
     osal::timer t{timer_callback, nullptr, osal::milliseconds{30}, osal::timer_mode::one_shot};
     REQUIRE(t.valid());
 
@@ -43,7 +43,7 @@ TEST_CASE("timer: one-shot fires once")
     osal::thread::sleep_for(osal::milliseconds{200});
     REQUIRE(t.stop().ok());
 
-    CHECK(g_timer_count == 1);
+    CHECK(g_timer_count.load() == 1U);
 }
 
 TEST_CASE("timer: periodic fires multiple times")
@@ -54,7 +54,7 @@ TEST_CASE("timer: periodic fires multiple times")
         return;
     }
 
-    g_timer_count = 0;
+    g_timer_count.store(0U);
     osal::timer t{timer_callback, nullptr, osal::milliseconds{25}, osal::timer_mode::periodic};
     REQUIRE(t.valid());
 
@@ -63,7 +63,7 @@ TEST_CASE("timer: periodic fires multiple times")
     REQUIRE(t.stop().ok());
 
     // With 25 ms period over 200 ms, expect at least 4 fires (allow scheduling slack).
-    CHECK(g_timer_count >= 4);
+    CHECK(g_timer_count.load() >= 4U);
 }
 
 TEST_CASE("timer: is_active reflects state")
@@ -74,7 +74,7 @@ TEST_CASE("timer: is_active reflects state")
         return;
     }
 
-    g_timer_count = 0;
+    g_timer_count.store(0U);
     osal::timer t{timer_callback, nullptr, osal::milliseconds{500}, osal::timer_mode::one_shot};
     REQUIRE(t.valid());
 
@@ -93,7 +93,7 @@ TEST_CASE("timer: set_period changes interval")
         return;
     }
 
-    g_timer_count = 0;
+    g_timer_count.store(0U);
     osal::timer t{timer_callback, nullptr, osal::milliseconds{1000}, osal::timer_mode::periodic};
     REQUIRE(t.valid());
 
@@ -103,7 +103,7 @@ TEST_CASE("timer: set_period changes interval")
     osal::thread::sleep_for(osal::milliseconds{200});
     REQUIRE(t.stop().ok());
 
-    CHECK(g_timer_count >= 4);
+    CHECK(g_timer_count.load() >= 4U);
 }
 
 TEST_CASE("timer: callback receives arg")
@@ -114,28 +114,28 @@ TEST_CASE("timer: callback receives arg")
         return;
     }
 
-    volatile std::uint32_t value = 0;
+    std::atomic<std::uint32_t> value{0U};
 
-    auto cb = [](void* arg) { *static_cast<volatile std::uint32_t*>(arg) = 0xCAFE; };
+    auto cb = [](void* arg) { static_cast<std::atomic<std::uint32_t>*>(arg)->store(0xCAFEU); };
 
-    osal::timer t{cb, const_cast<std::uint32_t*>(&value), osal::milliseconds{20}, osal::timer_mode::one_shot};
+    osal::timer t{cb, &value, osal::milliseconds{20}, osal::timer_mode::one_shot};
     REQUIRE(t.valid());
 
     REQUIRE(t.start().ok());
     osal::thread::sleep_for(osal::milliseconds{200});
 
-    CHECK(value == 0xCAFE);
+    CHECK(value.load() == 0xCAFEU);
 }
 
 // ---------------------------------------------------------------------------
 // Config-based construction (FLASH placement)
 // ---------------------------------------------------------------------------
 
-static volatile std::uint32_t g_config_timer_count = 0;
+static std::atomic<std::uint32_t> g_config_timer_count{0U};
 
 static void config_timer_callback(void* /*arg*/)
 {
-    ++g_config_timer_count;
+    g_config_timer_count.fetch_add(1U);
 }
 
 TEST_CASE("timer: config construction — one-shot")
@@ -146,18 +146,17 @@ TEST_CASE("timer: config construction — one-shot")
         return;
     }
 
-    g_config_timer_count = 0;
-    const osal::timer_config cfg{
-        config_timer_callback, nullptr, osal::milliseconds{30},
-        osal::timer_mode::one_shot, "cfg_os"};
-    osal::timer t{cfg};
+    g_config_timer_count.store(0U);
+    const osal::timer_config cfg{config_timer_callback, nullptr, osal::milliseconds{30}, osal::timer_mode::one_shot,
+                                 "cfg_os"};
+    osal::timer              t{cfg};
     REQUIRE(t.valid());
 
     REQUIRE(t.start().ok());
     osal::thread::sleep_for(osal::milliseconds{200});
     REQUIRE(t.stop().ok());
 
-    CHECK(g_config_timer_count == 1);
+    CHECK(g_config_timer_count.load() == 1U);
 }
 
 TEST_CASE("timer: config construction — periodic")
@@ -168,16 +167,15 @@ TEST_CASE("timer: config construction — periodic")
         return;
     }
 
-    g_config_timer_count = 0;
-    const osal::timer_config cfg{
-        config_timer_callback, nullptr, osal::milliseconds{25},
-        osal::timer_mode::periodic, "cfg_per"};
-    osal::timer t{cfg};
+    g_config_timer_count.store(0U);
+    const osal::timer_config cfg{config_timer_callback, nullptr, osal::milliseconds{25}, osal::timer_mode::periodic,
+                                 "cfg_per"};
+    osal::timer              t{cfg};
     REQUIRE(t.valid());
 
     REQUIRE(t.start().ok());
     osal::thread::sleep_for(osal::milliseconds{200});
     REQUIRE(t.stop().ok());
 
-    CHECK(g_config_timer_count >= 4);
+    CHECK(g_config_timer_count.load() >= 4U);
 }

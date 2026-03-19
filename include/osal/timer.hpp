@@ -28,7 +28,7 @@ using osal_timer_callback_t = void (*)(void* arg);
 extern "C"
 {
     osal::result osal_timer_create(osal::active_traits::timer_handle_t* handle, const char* name,
-                                   osal_timer_callback_t callback, void* arg, osal::tick_t period_ticks,
+                                   osal_timer_callback_t cb, void* arg, osal::tick_t period_ticks,
                                    bool auto_reload) noexcept;
 
     osal::result osal_timer_destroy(osal::active_traits::timer_handle_t* handle) noexcept;
@@ -39,8 +39,7 @@ extern "C"
 
     osal::result osal_timer_reset(osal::active_traits::timer_handle_t* handle) noexcept;
 
-    osal::result osal_timer_set_period(osal::active_traits::timer_handle_t* handle,
-                                       osal::tick_t                         new_period_ticks) noexcept;
+    osal::result osal_timer_set_period(osal::active_traits::timer_handle_t* handle, osal::tick_t p) noexcept;
 
     bool osal_timer_is_active(const osal::active_traits::timer_handle_t* handle) noexcept;
 
@@ -88,6 +87,16 @@ struct timer_config
 class timer
 {
 public:
+    /// @brief True when the active backend provides timer support.
+    static constexpr bool is_supported = supports_requirement<support_requirement::timer>;
+
+    /// @brief Enforce timer support at compile time.
+    template<typename Backend = active_backend>
+    static consteval void require_support()
+    {
+        require_backend_support<support_requirement::timer, Backend>();
+    }
+
     // ---- construction / destruction ----------------------------------------
 
     /// @brief Constructs the timer (does not start it).
@@ -101,7 +110,7 @@ public:
           const char* name = nullptr) noexcept
         : valid_(false), handle_{}
     {
-        if constexpr (active_capabilities::has_timer)
+        if constexpr (timer_backend<active_backend>)
         {
             const tick_t ticks = clock_utils::ms_to_ticks(period);
             valid_ = osal_timer_create(&handle_, name, callback, arg, ticks, mode == timer_mode::periodic).ok();
@@ -113,7 +122,7 @@ public:
     /// @complexity O(1)
     explicit timer(const timer_config& cfg) noexcept : valid_(false), handle_{}
     {
-        if constexpr (active_capabilities::has_timer)
+        if constexpr (timer_backend<active_backend>)
         {
             const tick_t ticks = clock_utils::ms_to_ticks(cfg.period);
             valid_ =
@@ -143,9 +152,9 @@ public:
     /// @brief Starts the timer.
     /// @return result::ok() on success; error_code::not_supported if timers
     ///         are unavailable on this backend.
-    result start() noexcept
+    [[nodiscard]] result start() noexcept
     {
-        if constexpr (active_capabilities::has_timer)
+        if constexpr (timer_backend<active_backend>)
         {
             return osal_timer_start(&handle_);
         }
@@ -153,9 +162,9 @@ public:
     }
 
     /// @brief Stops the timer.
-    result stop() noexcept
+    [[nodiscard]] result stop() noexcept
     {
-        if constexpr (active_capabilities::has_timer)
+        if constexpr (timer_backend<active_backend>)
         {
             return osal_timer_stop(&handle_);
         }
@@ -163,9 +172,9 @@ public:
     }
 
     /// @brief Resets the timer (restarts its period from now).
-    result reset() noexcept
+    [[nodiscard]] result reset() noexcept
     {
-        if constexpr (active_capabilities::has_timer)
+        if constexpr (timer_backend<active_backend>)
         {
             return osal_timer_reset(&handle_);
         }
@@ -174,9 +183,9 @@ public:
 
     /// @brief Changes the timer period without restarting it.
     /// @param period New period.
-    result set_period(milliseconds period) noexcept
+    [[nodiscard]] result set_period(milliseconds period) noexcept
     {
-        if constexpr (active_capabilities::has_timer)
+        if constexpr (timer_backend<active_backend>)
         {
             const tick_t ticks = clock_utils::ms_to_ticks(period);
             return osal_timer_set_period(&handle_, ticks);
@@ -191,7 +200,7 @@ public:
     /// @brief Returns true if the timer is currently running.
     [[nodiscard]] bool is_active() const noexcept
     {
-        if constexpr (active_capabilities::has_timer)
+        if constexpr (timer_backend<active_backend>)
         {
             return osal_timer_is_active(&handle_);
         }

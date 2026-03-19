@@ -83,7 +83,7 @@ static inline void bm_maybe_self_tick() noexcept
     }
 
     bm_self_tick_active = true;
-    ++g_ticks;
+    g_ticks             = g_ticks + 1;
     bm_advance_timers();
     bm_self_tick_active = false;
 }
@@ -94,7 +94,7 @@ static inline void bm_maybe_self_tick() noexcept {}
 /// @brief Called by the SysTick handler (or equivalent) each tick.
 extern "C" void osal_baremetal_tick() noexcept
 {
-    g_ticks++;
+    g_ticks = g_ticks + 1;
 
     // Advance software timers.
     // See timer section below.
@@ -945,7 +945,7 @@ extern "C"
     ///          software timer support is needed.
     void osal_baremetal_tick_with_timers() noexcept
     {
-        g_ticks++;
+        g_ticks = g_ticks + 1;
         bm_advance_timers();
     }
 

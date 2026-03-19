@@ -40,7 +40,7 @@ map "FreeRTOS" as fr {
   isr_message_buffer => ✓
   native_rwlock => ✗
   spinlock => ✗
-  barrier => ✗
+  barrier => ✓
   monotonic_clock => ✓
 }
 
@@ -68,7 +68,7 @@ map "Zephyr" as zy {
   isr_message_buffer => ✗
   native_rwlock => ✗
   spinlock => ✓
-  barrier => ✗
+  barrier => ✓
   monotonic_clock => ✓
 }
 
@@ -208,7 +208,7 @@ map "ThreadX" as tx {
   isr_message_buffer => ✗
   native_rwlock => ✗
   spinlock => ✗
-  barrier => ✗
+  barrier => ✓
   monotonic_clock => ✓
 }
 
@@ -236,7 +236,7 @@ map "VxWorks" as vx {
   isr_message_buffer => ✗
   native_rwlock => ✗
   spinlock => ✗
-  barrier => ✗
+  barrier => ✓
   monotonic_clock => ✓
 }
 
@@ -320,7 +320,7 @@ map "ChibiOS" as ch {
   isr_message_buffer => ✗
   native_rwlock => ✗
   spinlock => ✗
-  barrier => ✗
+  barrier => ✓
   monotonic_clock => ✓
 }
 
@@ -348,7 +348,7 @@ map "Bare-metal" as bm {
   isr_message_buffer => ✗
   native_rwlock => ✗
   spinlock => ✗
-  barrier => ✗
+  barrier => ✓
   monotonic_clock => ✓
 }
 
@@ -376,7 +376,7 @@ map "PX5" as px {
   isr_message_buffer => ✗
   native_rwlock => ✗
   spinlock => ✗
-  barrier => ✗
+  barrier => ✓
   monotonic_clock => ✓
 }
 
@@ -404,7 +404,7 @@ map "Micrium" as mi {
   isr_message_buffer => ✗
   native_rwlock => ✗
   spinlock => ✗
-  barrier => ✗
+  barrier => ✓
   monotonic_clock => ✓
 }
 
@@ -432,7 +432,7 @@ map "embOS" as em {
   isr_message_buffer => ✗
   native_rwlock => ✗
   spinlock => ✗
-  barrier => ✗
+  barrier => ✓
   monotonic_clock => ✓
 }
 
@@ -460,7 +460,7 @@ map "CMSIS-RTOS" as c1 {
   isr_message_buffer => ✗
   native_rwlock => ✗
   spinlock => ✗
-  barrier => ✗
+  barrier => ✓
   monotonic_clock => ✓
 }
 
@@ -488,7 +488,7 @@ map "CMSIS-RTOS2" as c2 {
   isr_message_buffer => ✗
   native_rwlock => ✗
   spinlock => ✗
-  barrier => ✗
+  barrier => ✓
   monotonic_clock => ✓
 }
 

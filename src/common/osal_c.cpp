@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 /// @file osal_c.cpp
 /// @brief C interface bridge — translates pure-C calls to the C++ backend API.
-/// @details This file is compiled as C++17 and linked into the microsal library.
+/// @details This file is compiled as C++20 and linked into the microsal library.
 ///          It provides thin extern "C" wrappers that convert between the C-side
 ///          types (osal_mutex_handle, osal_result_t, etc.) and the C++ types
 ///          (osal::active_traits::mutex_handle_t, osal::result, etc.).
@@ -24,17 +24,21 @@
 // ---------------------------------------------------------------------------
 // Handle conversion helpers (layout-compatible: struct { void* native; })
 // ---------------------------------------------------------------------------
-#define OSAL_C_CAST(CppHandleType, c_ptr) reinterpret_cast<CppHandleType*>(c_ptr)
-
-#define OSAL_C_CAST_CONST(CppHandleType, c_ptr) reinterpret_cast<const CppHandleType*>(c_ptr)
-
-/// @brief Convert an `osal::result` to the C ABI result code.
-/// @param r C++ result value.
-/// @return Matching `osal_result_t` enum value.
-static inline osal_result_t to_c(osal::result r) noexcept
+template<typename CppHandleType, typename CHandleType>
+[[nodiscard]] inline CppHandleType* osal_c_cast(CHandleType* handle) noexcept
 {
-    return static_cast<osal_result_t>(r.code());
+    return reinterpret_cast<CppHandleType*>(handle);
 }
+
+template<typename CppHandleType, typename CHandleType>
+[[nodiscard]] inline const CppHandleType* osal_c_cast_const(const CHandleType* handle) noexcept
+{
+    return reinterpret_cast<const CppHandleType*>(handle);
+}
+
+#define OSAL_C_CAST(CppHandleType, c_ptr) (osal_c_cast<CppHandleType>((c_ptr)))
+
+#define OSAL_C_CAST_CONST(CppHandleType, c_ptr) (osal_c_cast_const<CppHandleType>((c_ptr)))
 
 // ---------------------------------------------------------------------------
 // Shorthand for the active-backend handle types
@@ -52,8 +56,38 @@ using rw_h  = osal::active_traits::rwlock_handle_t;
 using sb_h  = osal::active_traits::stream_buffer_handle_t;
 using mb_h  = osal::active_traits::message_buffer_handle_t;
 
+// ---------------------------------------------------------------------------
+// Layout compatibility contract — ensures reinterpret_cast is safe
+// ---------------------------------------------------------------------------
+#define OSAL_ASSERT_HANDLE_LAYOUT(CType, CppType)                                            \
+    static_assert(sizeof(CType) == sizeof(CppType), #CType " / " #CppType " size mismatch"); \
+    static_assert(alignof(CType) == alignof(CppType), #CType " / " #CppType " alignment mismatch")
+
+OSAL_ASSERT_HANDLE_LAYOUT(osal_mutex_handle, mtx_h);
+OSAL_ASSERT_HANDLE_LAYOUT(osal_semaphore_handle, sem_h);
+OSAL_ASSERT_HANDLE_LAYOUT(osal_queue_handle, que_h);
+OSAL_ASSERT_HANDLE_LAYOUT(osal_thread_handle, thr_h);
+OSAL_ASSERT_HANDLE_LAYOUT(osal_timer_handle, tmr_h);
+OSAL_ASSERT_HANDLE_LAYOUT(osal_event_flags_handle, ef_h);
+OSAL_ASSERT_HANDLE_LAYOUT(osal_condvar_handle, cv_h);
+OSAL_ASSERT_HANDLE_LAYOUT(osal_work_queue_handle, wq_h);
+OSAL_ASSERT_HANDLE_LAYOUT(osal_memory_pool_handle, mp_h);
+OSAL_ASSERT_HANDLE_LAYOUT(osal_rwlock_handle, rw_h);
+OSAL_ASSERT_HANDLE_LAYOUT(osal_stream_buffer_handle, sb_h);
+OSAL_ASSERT_HANDLE_LAYOUT(osal_message_buffer_handle, mb_h);
+
+#undef OSAL_ASSERT_HANDLE_LAYOUT
+
 namespace
 {
+
+/// @brief Convert an `osal::result` to the C ABI result code.
+/// @param r C++ result value.
+/// @return Matching `osal_result_t` enum value.
+inline osal_result_t to_c(osal::result r) noexcept
+{
+    return static_cast<osal_result_t>(r.code());
+}
 
 enum class c_delayable_state : std::uint8_t
 {
@@ -66,7 +100,7 @@ enum class c_delayable_state : std::uint8_t
 /// @brief Check whether a composite notification handle is initialized.
 /// @param handle Notification handle to validate.
 /// @return `true` when the handle exists and is marked valid.
-[[nodiscard]] static bool notification_valid(const osal_notification_handle* handle) noexcept
+[[nodiscard]] bool notification_valid(const osal_notification_handle* handle) noexcept
 {
     return (handle != nullptr) && (handle->valid != 0U);
 }
@@ -75,7 +109,7 @@ enum class c_delayable_state : std::uint8_t
 /// @param handle Notification handle to validate.
 /// @param index Slot index supplied by the caller.
 /// @return `true` when the handle is valid and @p index is in range.
-[[nodiscard]] static bool notification_index_valid(const osal_notification_handle* handle, std::size_t index) noexcept
+[[nodiscard]] bool notification_index_valid(const osal_notification_handle* handle, std::size_t index) noexcept
 {
     return notification_valid(handle) && (index < handle->slot_count);
 }
@@ -83,20 +117,20 @@ enum class c_delayable_state : std::uint8_t
 /// @brief Check whether a composite delayable-work handle is initialized.
 /// @param handle Delayable-work handle to validate.
 /// @return `true` when the handle exists and its valid flag is set.
-[[nodiscard]] static bool delayable_valid(const osal_delayable_work_handle* handle) noexcept
+[[nodiscard]] bool delayable_valid(const osal_delayable_work_handle* handle) noexcept
 {
     return (handle != nullptr) && (__atomic_load_n(&handle->valid, __ATOMIC_ACQUIRE) != 0U);
 }
 
 /// @brief Forward declaration for the work-queue callback trampoline.
 /// @param arg Delayable-work handle pointer supplied by the work queue.
-static void c_delayable_work_work_cb(void* arg) noexcept;
+void c_delayable_work_work_cb(void* arg) noexcept;
 
 /// @brief Compare the current delayable-work state with one expected state.
 /// @param handle Delayable-work handle.
 /// @param state State to compare against.
 /// @return `true` when the current state matches @p state.
-[[nodiscard]] static bool delayable_state_is(const osal_delayable_work_handle* handle, c_delayable_state state) noexcept
+[[nodiscard]] bool delayable_state_is(const osal_delayable_work_handle* handle, c_delayable_state state) noexcept
 {
     return delayable_valid(handle) &&
            (__atomic_load_n(&handle->state, __ATOMIC_ACQUIRE) == static_cast<std::uint8_t>(state));
@@ -104,7 +138,7 @@ static void c_delayable_work_work_cb(void* arg) noexcept;
 
 /// @brief Report whether the active backend supports the C delayable helper.
 /// @return `true` when timer expiry can always hand work into the queue safely.
-[[nodiscard]] static bool delayable_backend_supported() noexcept
+[[nodiscard]] bool delayable_backend_supported() noexcept
 {
     if constexpr (osal::active_capabilities::timer_callbacks_may_run_in_isr)
     {
@@ -116,7 +150,7 @@ static void c_delayable_work_work_cb(void* arg) noexcept;
 /// @brief Load the composite delayable-work state atomically.
 /// @param handle Delayable-work handle.
 /// @return Current helper state.
-[[nodiscard]] static c_delayable_state delayable_state_load(const osal_delayable_work_handle* handle) noexcept
+[[nodiscard]] c_delayable_state delayable_state_load(const osal_delayable_work_handle* handle) noexcept
 {
     return static_cast<c_delayable_state>(__atomic_load_n(&handle->state, __ATOMIC_ACQUIRE));
 }
@@ -124,7 +158,7 @@ static void c_delayable_work_work_cb(void* arg) noexcept;
 /// @brief Store a new composite delayable-work state atomically.
 /// @param handle Delayable-work handle.
 /// @param state State to publish.
-static void delayable_state_store(osal_delayable_work_handle* handle, c_delayable_state state) noexcept
+void delayable_state_store(osal_delayable_work_handle* handle, c_delayable_state state) noexcept
 {
     __atomic_store_n(&handle->state, static_cast<std::uint8_t>(state), __ATOMIC_RELEASE);
 }
@@ -135,8 +169,8 @@ static void delayable_state_store(osal_delayable_work_handle* handle, c_delayabl
 ///                 failure.
 /// @param desired State written on success.
 /// @return `true` when the exchange succeeds.
-static bool delayable_state_compare_exchange(osal_delayable_work_handle* handle, c_delayable_state* expected,
-                                             c_delayable_state desired) noexcept
+bool delayable_state_compare_exchange(osal_delayable_work_handle* handle, c_delayable_state* expected,
+                                      c_delayable_state desired) noexcept
 {
     auto       expected_raw = static_cast<std::uint8_t>(*expected);
     const bool exchanged    = __atomic_compare_exchange_n(
@@ -147,7 +181,7 @@ static bool delayable_state_compare_exchange(osal_delayable_work_handle* handle,
 
 /// @brief Clear any deferred queue-submission error state.
 /// @param handle Delayable-work handle.
-static void delayable_clear_dispatch_error(osal_delayable_work_handle* handle) noexcept
+void delayable_clear_dispatch_error(osal_delayable_work_handle* handle) noexcept
 {
     __atomic_store_n(&handle->dispatch_error, OSAL_OK, __ATOMIC_RELEASE);
     __atomic_store_n(&handle->dispatch_failed, 0U, __ATOMIC_RELEASE);
@@ -156,7 +190,7 @@ static void delayable_clear_dispatch_error(osal_delayable_work_handle* handle) n
 /// @brief Remember a deferred queue-submission failure for flush().
 /// @param handle Delayable-work handle.
 /// @param rc Result code captured from timer-to-queue handoff.
-static void delayable_set_dispatch_error(osal_delayable_work_handle* handle, osal_result_t rc) noexcept
+void delayable_set_dispatch_error(osal_delayable_work_handle* handle, osal_result_t rc) noexcept
 {
     __atomic_store_n(&handle->dispatch_error, rc, __ATOMIC_RELEASE);
     __atomic_store_n(&handle->dispatch_failed, 1U, __ATOMIC_RELEASE);
@@ -165,7 +199,7 @@ static void delayable_set_dispatch_error(osal_delayable_work_handle* handle, osa
 /// @brief Consume any deferred queue-submission failure once the helper is idle.
 /// @param handle Delayable-work handle.
 /// @return Stored deferred error, or `OSAL_OK` when none was recorded.
-[[nodiscard]] static osal_result_t delayable_consume_dispatch_error(osal_delayable_work_handle* handle) noexcept
+[[nodiscard]] osal_result_t delayable_consume_dispatch_error(osal_delayable_work_handle* handle) noexcept
 {
     if (__atomic_exchange_n(&handle->dispatch_failed, 0U, __ATOMIC_ACQ_REL) == 0U)
     {
@@ -177,7 +211,7 @@ static void delayable_set_dispatch_error(osal_delayable_work_handle* handle, osa
 
 /// @brief Convert one RTOS tick into a safe polling interval.
 /// @return At least one millisecond.
-[[nodiscard]] static osal::milliseconds delayable_poll_interval() noexcept
+[[nodiscard]] osal::milliseconds delayable_poll_interval() noexcept
 {
     const auto tick = osal::clock_utils::ticks_to_ms(static_cast<osal::tick_t>(1));
     return (tick.count() > 0) ? tick : osal::milliseconds{1};
@@ -186,7 +220,7 @@ static void delayable_set_dispatch_error(osal_delayable_work_handle* handle, osa
 /// @brief Submit the delayable callback to the work queue immediately.
 /// @param handle Delayable-work handle, with the mutex already held.
 /// @return Result of the work-queue submission.
-static osal_result_t delayable_enqueue_locked(osal_delayable_work_handle* handle) noexcept
+osal_result_t delayable_enqueue_locked(osal_delayable_work_handle* handle) noexcept
 {
     delayable_state_store(handle, c_delayable_state::queued);
     const osal_result_t rc = osal_c_work_queue_submit(handle->queue, c_delayable_work_work_cb, handle);
@@ -202,7 +236,7 @@ static osal_result_t delayable_enqueue_locked(osal_delayable_work_handle* handle
 /// @param handle Delayable-work handle, with the mutex already held.
 /// @param delay_ticks Delay to program into the timer.
 /// @return Result of the timer period/start operations.
-static osal_result_t delayable_arm_locked(osal_delayable_work_handle* handle, osal_tick_t delay_ticks) noexcept
+osal_result_t delayable_arm_locked(osal_delayable_work_handle* handle, osal_tick_t delay_ticks) noexcept
 {
     const osal_result_t set_rc = osal_c_timer_set_period(&handle->timer, delay_ticks);
     if (set_rc != OSAL_OK)
@@ -222,7 +256,7 @@ static osal_result_t delayable_arm_locked(osal_delayable_work_handle* handle, os
 /// @brief Convert C ABI ticks to an `osal::milliseconds` duration.
 /// @param ticks Timeout in C ABI form.
 /// @return Matching duration, with `OSAL_WAIT_FOREVER` mapped to `-1 ms`.
-[[nodiscard]] static osal::milliseconds ticks_to_duration(osal_tick_t ticks) noexcept
+[[nodiscard]] osal::milliseconds ticks_to_duration(osal_tick_t ticks) noexcept
 {
     if (ticks == OSAL_WAIT_FOREVER)
     {
@@ -234,7 +268,7 @@ static osal_result_t delayable_arm_locked(osal_delayable_work_handle* handle, os
 /// @brief Compute the remaining ticks until one monotonic deadline.
 /// @param deadline Absolute monotonic deadline.
 /// @return Remaining ticks, or `OSAL_NO_WAIT` once expired.
-[[nodiscard]] static osal_tick_t remaining_ticks_until(osal::monotonic_clock::time_point deadline) noexcept
+[[nodiscard]] osal_tick_t remaining_ticks_until(osal::monotonic_clock::time_point deadline) noexcept
 {
     const auto now = osal::monotonic_clock::now();
     if (deadline <= now)
@@ -248,14 +282,14 @@ static osal_result_t delayable_arm_locked(osal_delayable_work_handle* handle, os
 
 /// @brief Unlock a composite notification handle's mutex.
 /// @param handle Notification handle.
-static void notification_unlock(osal_notification_handle* handle) noexcept
+void notification_unlock(const osal_notification_handle* handle) noexcept
 {
     (void)osal_mutex_unlock(OSAL_C_CAST(mtx_h, &handle->mutex));
 }
 
 /// @brief Unlock a composite delayable-work handle's mutex.
 /// @param handle Delayable-work handle.
-static void delayable_unlock(osal_delayable_work_handle* handle) noexcept
+void delayable_unlock(osal_delayable_work_handle* handle) noexcept
 {
     (void)osal_mutex_unlock(OSAL_C_CAST(mtx_h, &handle->mutex));
 }
@@ -264,7 +298,7 @@ static void delayable_unlock(osal_delayable_work_handle* handle) noexcept
 /// @param arg Delayable-work handle supplied by the timer backend.
 /// @details This callback may execute in ISR context on some backends, so it
 ///          only performs atomic state changes and ISR-safe work submission.
-static void c_delayable_work_timer_cb(void* arg) noexcept
+void c_delayable_work_timer_cb(void* arg) noexcept
 {
     auto* handle = static_cast<osal_delayable_work_handle*>(arg);
     if (!delayable_valid(handle))
@@ -291,7 +325,7 @@ static void c_delayable_work_timer_cb(void* arg) noexcept
 
 /// @brief Work-queue callback trampoline for composite delayable work.
 /// @param arg Delayable-work handle supplied by the work queue.
-static void c_delayable_work_work_cb(void* arg) noexcept
+void c_delayable_work_work_cb(void* arg) noexcept
 {
     auto* handle = static_cast<osal_delayable_work_handle*>(arg);
     if (!delayable_valid(handle))
@@ -1175,14 +1209,13 @@ extern "C" int osal_c_notification_pending(const osal_notification_handle* handl
         return 0;
     }
 
-    auto* mutable_handle = const_cast<osal_notification_handle*>(handle);
-    if (!osal_mutex_lock(OSAL_C_CAST(mtx_h, &mutable_handle->mutex), osal::WAIT_FOREVER).ok())
+    if (!osal_mutex_lock(OSAL_C_CAST(mtx_h, &handle->mutex), osal::WAIT_FOREVER).ok())
     {
         return 0;
     }
 
-    const int pending = (mutable_handle->pending[index] != 0U) ? 1 : 0;
-    notification_unlock(mutable_handle);
+    const int pending = (handle->pending[index] != 0U) ? 1 : 0;
+    notification_unlock(handle);
     return pending;
 }
 
@@ -1193,14 +1226,13 @@ extern "C" std::uint32_t osal_c_notification_peek(const osal_notification_handle
         return 0U;
     }
 
-    auto* mutable_handle = const_cast<osal_notification_handle*>(handle);
-    if (!osal_mutex_lock(OSAL_C_CAST(mtx_h, &mutable_handle->mutex), osal::WAIT_FOREVER).ok())
+    if (!osal_mutex_lock(OSAL_C_CAST(mtx_h, &handle->mutex), osal::WAIT_FOREVER).ok())
     {
         return 0U;
     }
 
-    const std::uint32_t value = mutable_handle->values[index];
-    notification_unlock(mutable_handle);
+    const std::uint32_t value = handle->values[index];
+    notification_unlock(handle);
     return value;
 }
 
@@ -1377,7 +1409,15 @@ extern "C" osal_result_t osal_c_delayable_work_destroy(osal_delayable_work_handl
     handle->dispatch_error       = OSAL_OK;
     handle->state                = static_cast<std::uint8_t>(c_delayable_state::idle);
     handle->dispatch_failed      = 0U;
-    return (timer_rc != OSAL_OK) ? timer_rc : ((cv_rc != OSAL_OK) ? cv_rc : mtx_rc);
+    if (timer_rc != OSAL_OK)
+    {
+        return timer_rc;
+    }
+    if (cv_rc != OSAL_OK)
+    {
+        return cv_rc;
+    }
+    return mtx_rc;
 }
 
 extern "C" osal_result_t osal_c_delayable_work_schedule(osal_delayable_work_handle* handle, osal_tick_t delay_ticks)

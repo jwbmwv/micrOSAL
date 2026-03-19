@@ -17,7 +17,9 @@
 ///
 /// @copyright Copyright (c) 2026 James Baldwin. AI-assisted — see NOTICE.
 
-#include <atomic>
+#pragma once
+
+#include <osal/detail/atomic_compat.hpp>
 #include <cstring>
 
 // ---------------------------------------------------------------------------

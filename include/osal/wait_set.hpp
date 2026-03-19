@@ -6,7 +6,9 @@
 ///          backends (POSIX, RTEMS, INTEGRITY) it maps to poll().  On PX5 it
 ///          uses the native PX5 wait-set.  Unsupported backends expose a stub
 ///          object whose add/remove/wait operations return
-///          error_code::not_supported.
+///          error_code::not_supported. For a hard compile-time requirement,
+///          call osal::wait_set::require_support(). Prefer osal::object_wait_set
+///          when waiting on portable OSAL objects rather than native descriptors.
 ///
 ///          Limitations:
 ///          - Maximum number of monitored objects is OSAL_WAIT_SET_MAX_ENTRIES
@@ -25,6 +27,7 @@
 #include "types.hpp"
 #include <cstdint>
 #include <cstddef>
+#include <span>
 
 #ifndef OSAL_WAIT_SET_MAX_ENTRIES
 /// @brief Maximum number of objects that can be monitored in a single wait_set.
@@ -48,8 +51,8 @@ extern "C"
     /// @param  max_ready      Size of ready_ids array.
     /// @param[out] n_ready    Number of IDs written.
     /// @param  timeout_ticks  Timeout.
-    osal::result osal_wait_set_wait(osal::active_traits::wait_set_handle_t* handle, int* ready_ids,
-                                    std::size_t max_ready, std::size_t* n_ready, osal::tick_t timeout_ticks) noexcept;
+    osal::result osal_wait_set_wait(osal::active_traits::wait_set_handle_t* handle, int* fds_ready,
+                                    std::size_t max_ready, std::size_t* n_ready, osal::tick_t timeout) noexcept;
 
 }  // extern "C"
 
@@ -76,12 +79,22 @@ static constexpr std::uint32_t error    = 0x04U;  ///< Error condition.
 class wait_set
 {
 public:
+    /// @brief True when the active backend exposes a native wait-set primitive.
+    static constexpr bool is_supported = supports_requirement<support_requirement::wait_set>;
+
+    /// @brief Enforce native wait-set support at compile time.
+    template<typename Backend = active_backend>
+    static consteval void require_support()
+    {
+        require_backend_support<support_requirement::wait_set, Backend>();
+    }
+
     // ---- construction / destruction ----------------------------------------
 
     /// @brief Constructs and initialises the wait-set.
-    wait_set() noexcept : valid_(false), handle_{}
+    wait_set() noexcept
     {
-        if constexpr (active_capabilities::has_wait_set)
+        if constexpr (wait_set_backend<active_backend>)
         {
             valid_ = osal_wait_set_create(&handle_).ok();
         }
@@ -98,7 +111,7 @@ public:
     {
         if (valid_)
         {
-            if constexpr (active_capabilities::has_wait_set)
+            if constexpr (wait_set_backend<active_backend>)
             {
                 (void)osal_wait_set_destroy(&handle_);
             }
@@ -119,7 +132,7 @@ public:
     /// @return result::ok() on success; error_code::overflow if the set is full.
     result add(int fd_or_id, std::uint32_t events = wait_events::readable) noexcept
     {
-        if constexpr (active_capabilities::has_wait_set)
+        if constexpr (wait_set_backend<active_backend>)
         {
             return osal_wait_set_add(&handle_, fd_or_id, events);
         }
@@ -132,7 +145,7 @@ public:
     /// @param fd_or_id  Object to remove.
     result remove(int fd_or_id) noexcept
     {
-        if constexpr (active_capabilities::has_wait_set)
+        if constexpr (wait_set_backend<active_backend>)
         {
             return osal_wait_set_remove(&handle_, fd_or_id);
         }
@@ -155,7 +168,7 @@ public:
     result wait(int* ready_ids, std::size_t max_ready, std::size_t& n_ready,
                 milliseconds timeout = milliseconds{-1}) noexcept
     {
-        if constexpr (active_capabilities::has_wait_set)
+        if constexpr (wait_set_backend<active_backend>)
         {
             const tick_t ticks = (timeout.count() < 0) ? WAIT_FOREVER : clock_utils::ms_to_ticks(timeout);
             return osal_wait_set_wait(&handle_, ready_ids, max_ready, &n_ready, ticks);
@@ -167,14 +180,20 @@ public:
         return error_code::not_supported;
     }
 
+    /// @brief Span-based wait overload for fixed-capacity caller buffers.
+    result wait(std::span<int> ready_ids, std::size_t& n_ready, milliseconds timeout = milliseconds{-1}) noexcept
+    {
+        return wait(ready_ids.data(), ready_ids.size(), n_ready, timeout);
+    }
+
     // ---- query -------------------------------------------------------------
 
     /// @brief Returns true if the wait-set was successfully initialised.
     [[nodiscard]] bool valid() const noexcept { return valid_; }
 
 private:
-    bool                             valid_;
-    active_traits::wait_set_handle_t handle_;
+    bool                             valid_{false};
+    active_traits::wait_set_handle_t handle_{};
 };
 
 /// @} // osal_wait_set

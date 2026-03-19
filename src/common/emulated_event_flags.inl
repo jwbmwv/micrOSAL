@@ -31,7 +31,9 @@
 ///
 /// @copyright Copyright (c) 2026 James Baldwin. AI-assisted — see NOTICE.
 
-#include <atomic>
+#pragma once
+
+#include <osal/detail/atomic_compat.hpp>
 
 // ---------------------------------------------------------------------------
 // Event flags (emulated — OSAL mutex + per-waiter semaphores)

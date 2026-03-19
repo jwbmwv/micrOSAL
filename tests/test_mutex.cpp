@@ -37,17 +37,18 @@ TEST_CASE("mutex: try_lock fails when already locked (from another thread)")
     REQUIRE(m.valid());
 
     volatile bool locked_by_child = false;
-    volatile bool child_done = false;
+    volatile bool child_done      = false;
 
     struct ctx_t
     {
-        osal::mutex* mtx;
+        osal::mutex*   mtx;
         volatile bool* locked;
         volatile bool* done;
     } ctx{&m, &locked_by_child, &child_done};
 
     // Lock in a child thread, signal, then wait.
-    auto entry = [](void* arg) {
+    auto entry = [](void* arg)
+    {
         auto* c = static_cast<ctx_t*>(arg);
         c->mtx->lock();
         *c->locked = true;
@@ -58,13 +59,13 @@ TEST_CASE("mutex: try_lock fails when already locked (from another thread)")
     };
 
     alignas(16) static std::uint8_t stack[65536];
-    osal::thread t;
-    osal::thread_config cfg{};
-    cfg.entry = entry;
-    cfg.arg = &ctx;
-    cfg.stack = stack;
+    osal::thread                    t;
+    osal::thread_config             cfg{};
+    cfg.entry       = entry;
+    cfg.arg         = &ctx;
+    cfg.stack       = stack;
     cfg.stack_bytes = sizeof(stack);
-    cfg.name = "lock_test";
+    cfg.name        = "lock_test";
     REQUIRE(t.create(cfg).ok());
 
     // Wait for child to acquire.
@@ -140,7 +141,7 @@ TEST_CASE("recursive mutex: double lock from same thread")
 TEST_CASE("mutex: config construction — normal")
 {
     const osal::mutex_config cfg{osal::mutex_type::normal};
-    osal::mutex m{cfg};
+    osal::mutex              m{cfg};
     CHECK(m.valid());
     CHECK(m.try_lock());
     m.unlock();
@@ -155,7 +156,7 @@ TEST_CASE("mutex: config construction — recursive")
     }
 
     const osal::mutex_config cfg{osal::mutex_type::recursive};
-    osal::mutex m{cfg};
+    osal::mutex              m{cfg};
     REQUIRE(m.valid());
     m.lock();
     CHECK(m.try_lock());
@@ -167,6 +168,6 @@ TEST_CASE("mutex: constexpr config compiles")
 {
     // Verify the config struct is constexpr-constructible (FLASH-eligible).
     constexpr osal::mutex_config cfg{};
-    osal::mutex m{cfg};
+    osal::mutex                  m{cfg};
     CHECK(m.valid());
 }

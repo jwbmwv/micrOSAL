@@ -17,7 +17,7 @@
 #include "error.hpp"
 
 #include <array>
-#include <atomic>
+#include "detail/atomic_compat.hpp"
 #include <cstdint>
 
 #ifndef OSAL_THREAD_LOCAL_MAX_KEYS
@@ -112,7 +112,7 @@ public:
 
     static void release(std::uint8_t key) noexcept
     {
-        if (key >= k_max_keys || key >= 32U)
+        if (key >= k_max_keys)
         {
             return;
         }
@@ -124,7 +124,7 @@ public:
 
     [[nodiscard]] static std::uint32_t generation(std::uint8_t key) noexcept
     {
-        if (key >= k_max_keys || key >= 32U)
+        if (key >= k_max_keys)
         {
             return 0U;
         }
@@ -281,13 +281,17 @@ class thread_local_data
 {
 public:
     thread_local_data() noexcept
+#if OSAL_THREAD_LOCAL_USE_NATIVE_PTHREAD
+        : valid_(pthread_key_create(&native_key_, nullptr) == 0)
+#elif OSAL_THREAD_LOCAL_USE_NATIVE_FREERTOS
+        : valid_(detail::freertos_tls_slot_registry::acquire(&key_))
+#else
+        : valid_(detail::tls_registry::acquire(&key_))
+#endif
     {
 #if OSAL_THREAD_LOCAL_USE_NATIVE_PTHREAD
-        valid_ = (pthread_key_create(&native_key_, nullptr) == 0);
-#elif OSAL_THREAD_LOCAL_USE_NATIVE_FREERTOS
-        valid_ = detail::freertos_tls_slot_registry::acquire(&key_);
 #else
-        valid_ = detail::tls_registry::acquire(&key_);
+        // key_ is populated by the member initializer above.
 #endif
     }
 
@@ -322,7 +326,7 @@ public:
 
     [[nodiscard]] bool valid() const noexcept { return valid_; }
 
-    result set(void* value) noexcept
+    result set(void* value) const noexcept
     {
         if (!valid_)
         {

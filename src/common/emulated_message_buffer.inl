@@ -40,6 +40,8 @@
 ///
 /// @copyright Copyright (c) 2026 James Baldwin. AI-assisted — see NOTICE.
 
+#pragma once
+
 // These headers define C++ templates and must never be included inside an
 // extern "C" { } block.  If this .inl file is included from within such a
 // block (as all backends do), temporarily close it, pull in the headers,
@@ -47,7 +49,7 @@
 #ifdef __cplusplus
 }  // temporarily close extern "C" (opened by the including backend)
 #endif
-#include <atomic>
+#include <osal/detail/atomic_compat.hpp>
 #include <algorithm>
 #include <cstring>
 #ifdef __cplusplus

@@ -15,8 +15,8 @@
 /// @ingroup osal_core
 #pragma once
 
-#if !defined(__cplusplus) || (__cplusplus < 201703L)
-#error "micrOSAL requires at least C++17. Compile with -std=c++17 (or newer)."
+#if !defined(__cplusplus) || (__cplusplus < 202002L)
+#error "micrOSAL requires at least C++20. Compile with -std=c++20 (or newer)."
 #endif
 
 #include <cstdint>
@@ -61,8 +61,9 @@ enum class error_code : std::int32_t
 // ---------------------------------------------------------------------------
 
 /// @brief Lightweight result type returned by OSAL operations.
-/// @details Wraps osal::error_code.  Intentionally not std::expected — we
-///          support C++17 and cannot use dynamic allocation or exceptions.
+/// @details Wraps osal::error_code. Intentionally not std::expected — MicrOSAL
+///          keeps this type ABI-stable, allocation-free, and exception-free
+///          under the library's C++20 baseline.
 ///
 /// @note  The implicit conversion from error_code makes it easy to write:
 ///        @code
@@ -103,7 +104,7 @@ private:
 };
 
 /// @brief Convenience constant for a successful result.
-inline constexpr result ok() noexcept
+constexpr result ok() noexcept
 {
     return {};
 }

@@ -96,20 +96,21 @@ TEST_CASE("semaphore: thread signalling")
         osal::semaphore* sem;
     } ctx{&s};
 
-    auto entry = [](void* arg) {
+    auto entry = [](void* arg)
+    {
         auto* c = static_cast<ctx_t*>(arg);
         osal::thread::sleep_for(osal::milliseconds{20});
         c->sem->give();
     };
 
     alignas(16) static std::uint8_t stack[65536];
-    osal::thread t;
-    osal::thread_config cfg{};
-    cfg.entry = entry;
-    cfg.arg = &ctx;
-    cfg.stack = stack;
+    osal::thread                    t;
+    osal::thread_config             cfg{};
+    cfg.entry       = entry;
+    cfg.arg         = &ctx;
+    cfg.stack       = stack;
     cfg.stack_bytes = sizeof(stack);
-    cfg.name = "sem_signal";
+    cfg.name        = "sem_signal";
     REQUIRE(t.create(cfg).ok());
 
     // Should block until the child gives (timed to avoid hanging on failure).
@@ -124,7 +125,7 @@ TEST_CASE("semaphore: thread signalling")
 TEST_CASE("semaphore: config construction — binary")
 {
     const osal::semaphore_config cfg{osal::semaphore_type::binary, 1U, 1U};
-    osal::semaphore s{cfg};
+    osal::semaphore              s{cfg};
     REQUIRE(s.valid());
     CHECK(s.try_take());
     CHECK_FALSE(s.try_take());
@@ -133,7 +134,7 @@ TEST_CASE("semaphore: config construction — binary")
 TEST_CASE("semaphore: config construction — counting")
 {
     const osal::semaphore_config cfg{osal::semaphore_type::counting, 3U, 10U};
-    osal::semaphore s{cfg};
+    osal::semaphore              s{cfg};
     REQUIRE(s.valid());
 
     CHECK(s.try_take());
@@ -145,6 +146,6 @@ TEST_CASE("semaphore: config construction — counting")
 TEST_CASE("semaphore: constexpr config compiles")
 {
     constexpr osal::semaphore_config cfg{};
-    osal::semaphore s{cfg};
+    osal::semaphore                  s{cfg};
     CHECK(s.valid());
 }

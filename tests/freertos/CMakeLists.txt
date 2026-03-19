@@ -13,7 +13,7 @@
 cmake_minimum_required(VERSION 3.20)
 project(microsal_freertos_tests CXX C)
 
-set(CMAKE_CXX_STANDARD          17)
+set(CMAKE_CXX_STANDARD          20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS        OFF)
 set(CMAKE_C_STANDARD            11)
@@ -101,7 +101,7 @@ target_compile_definitions(test_freertos PRIVATE
     DOCTEST_CONFIG_NO_EXCEPTIONS_BUT_WITH_ALL_ASSERTS
 )
 
-target_compile_features(test_freertos PRIVATE cxx_std_17)
+target_compile_features(test_freertos PRIVATE cxx_std_20)
 
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     target_compile_options(test_freertos PRIVATE

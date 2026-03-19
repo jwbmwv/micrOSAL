@@ -6,6 +6,10 @@
 ///          - A static init/deinit pair.
 ///          - Backend name string for diagnostics.
 ///
+///          The C++20 concept @c osal::backend_traits_spec validates that each
+///          backend provides the required handle wrappers and metadata while
+///          leaving the underlying handle ABI unchanged.
+///
 ///          Implementation (.cpp) files fill in the function bodies; this header
 ///          only declares the interface contract.
 /// @copyright Copyright (c) 2026 James Baldwin. AI-assisted — see NOTICE.

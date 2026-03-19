@@ -19,6 +19,15 @@
 cmake_minimum_required(VERSION 3.16)
 
 # ---------------------------------------------------------------------------
+# Language standard
+# ---------------------------------------------------------------------------
+# Set before project()/target creation so Zephyr and standalone builds both
+# inherit the same C++20 baseline.
+set(CMAKE_CXX_STANDARD          20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS        OFF)
+
+# ---------------------------------------------------------------------------
 # Zephyr module path — must appear before project() when building with west
 # ---------------------------------------------------------------------------
 if(DEFINED CONFIG_MICRO_OSAL)
@@ -84,13 +93,6 @@ option(OSAL_ZEPHYR_TIMEOUT_64BIT
 option(OSAL_STRICT_TICK_INFERENCE
     "Treat ambiguous AUTO native tick inference as a CMake error instead of warning"
     OFF)
-
-# ---------------------------------------------------------------------------
-# Language standard
-# ---------------------------------------------------------------------------
-set(CMAKE_CXX_STANDARD          17)
-set(CMAKE_CXX_STANDARD_REQUIRED ON)
-set(CMAKE_CXX_EXTENSIONS        OFF)
 
 # ---------------------------------------------------------------------------
 # Backend source mapping
@@ -231,7 +233,7 @@ endif()
 target_compile_definitions(microsal PUBLIC OSAL_CFG_NATIVE_TICK_BITS=${_OSAL_NATIVE_TICK_BITS})
 message(STATUS "OSAL native tick bits: ${_OSAL_NATIVE_TICK_BITS}")
 
-target_compile_features(microsal PUBLIC cxx_std_17)
+target_compile_features(microsal PUBLIC cxx_std_20)
 
 if(_OSAL_BACKEND_UPPER STREQUAL "BAREMETAL" AND OSAL_BUILD_TESTS)
     target_compile_definitions(microsal PUBLIC

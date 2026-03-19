@@ -23,6 +23,7 @@
 /// @ingroup osal_notification
 #pragma once
 
+#include "concepts.hpp"
 #include "condvar.hpp"
 #include "error.hpp"
 #include "mutex.hpp"
@@ -48,10 +49,9 @@ enum class notification_action : std::uint8_t
 };
 
 template<std::size_t Slots = 1U>
+    requires valid_notification_slot_count<Slots>
 class notification
 {
-    static_assert(Slots > 0U, "osal::notification: Slots must be > 0.");
-
 public:
     /// @brief Number of notification slots stored in this instance.
     static constexpr std::size_t slot_count = Slots;
@@ -229,11 +229,8 @@ public:
             return false;
         }
 
-        auto* self = const_cast<notification*>(this);
-        self->mtx_.lock();
-        const bool is_pending = self->slots_[index].pending;
-        self->mtx_.unlock();
-        return is_pending;
+        mutex::lock_guard lock{mtx_};
+        return slots_[index].pending;
     }
 
     /// @brief Read the current slot value without consuming pending state.
@@ -246,11 +243,8 @@ public:
             return 0U;
         }
 
-        auto* self = const_cast<notification*>(this);
-        self->mtx_.lock();
-        const std::uint32_t value = self->slots_[index].value;
-        self->mtx_.unlock();
-        return value;
+        mutex::lock_guard lock{mtx_};
+        return slots_[index].value;
     }
 
 private:

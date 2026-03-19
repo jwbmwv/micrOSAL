@@ -2,7 +2,8 @@
 /// @file ring_buffer.hpp
 /// @brief Lock-free single-producer / single-consumer ring buffer
 /// @details A fixed-capacity, cache-friendly SPSC queue that requires NO OS
-///          primitives — only C++17 std::atomic with acquire/release semantics.
+///          primitives — only standard @c std::atomic with acquire/release
+///          semantics under MicrOSAL's required feature-set baseline.
 ///          Ideal for ISR-to-task or task-to-task data transfer at high
 ///          throughput without any mutex or semaphore overhead.
 ///
@@ -36,10 +37,11 @@
 /// @ingroup osal_ring_buffer
 #pragma once
 
-#include <atomic>
+#include "concepts.hpp"
+
+#include "detail/atomic_compat.hpp"
 #include <cstddef>
 #include <cstdint>
-#include <type_traits>
 
 namespace osal
 {
@@ -49,19 +51,19 @@ namespace osal
 /// @{
 
 /// @brief Lock-free single-producer / single-consumer ring buffer.
-/// @tparam T  Element type (must be trivially copyable).
+/// @tparam T  Element type satisfying @c osal::ring_buffer_element.
 /// @tparam N  Number of usable slots (actual internal array is N+1).
-template<typename T, std::size_t N>
+template<ring_buffer_element T, std::size_t N>
+    requires positive_extent<N>
 class ring_buffer
 {
-    static_assert(N > 0, "ring_buffer capacity must be > 0");
-    static_assert(std::is_trivially_copyable_v<T>, "T must be trivially copyable");
-
 public:
     // ---- construction ------------------------------------------------------
 
     /// @brief Constructs an empty ring buffer.
-    ring_buffer() noexcept : head_(0), tail_(0) {}
+    ring_buffer() noexcept = default;
+
+    ~ring_buffer() noexcept = default;
 
     ring_buffer(const ring_buffer&)            = delete;
     ring_buffer& operator=(const ring_buffer&) = delete;
@@ -127,7 +129,9 @@ public:
         const std::size_t h = head_.load(std::memory_order_acquire);
         const std::size_t t = tail_.load(std::memory_order_acquire);
         if (h >= t)
+        {
             return h - t;
+        }
         return kCapacity - t + h;
     }
 
@@ -160,8 +164,8 @@ private:
     static constexpr std::size_t increment(std::size_t idx) noexcept { return (idx + 1 == kCapacity) ? 0 : idx + 1; }
 
     T                        buf_[kCapacity]{};
-    std::atomic<std::size_t> head_;
-    std::atomic<std::size_t> tail_;
+    std::atomic<std::size_t> head_{0U};
+    std::atomic<std::size_t> tail_{0U};
 };
 
 /// @} // osal_ring_buffer

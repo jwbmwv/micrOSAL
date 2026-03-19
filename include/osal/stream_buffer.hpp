@@ -32,7 +32,8 @@
 ///
 ///          MISRA C++ 2023 notes
 ///          ─────────────────────────────────────────────────────────────────
-///          • Template parameters N and TriggerLevel checked by static_assert.
+///          • Template parameters N and TriggerLevel are constrained with
+///            C++20 requires-clauses.
 ///          • All operations noexcept.
 ///          • No dynamic allocation; storage is inline in the object.
 ///
@@ -60,6 +61,7 @@
 #include "types.hpp"
 #include <cstddef>
 #include <cstdint>
+#include <span>
 #include <type_traits>
 
 // ---------------------------------------------------------------------------
@@ -121,12 +123,9 @@ namespace osal
 /// @tparam N             Byte capacity.  Actual internal storage is N+1 bytes.
 /// @tparam TriggerLevel  Minimum bytes available before receive() unblocks.
 template<std::size_t N, std::size_t TriggerLevel = 1U>
+    requires valid_trigger_level<N, TriggerLevel>
 class stream_buffer
 {
-    static_assert(N > 0U, "stream_buffer: N must be > 0.");
-    static_assert(TriggerLevel >= 1U, "stream_buffer: TriggerLevel must be >= 1.");
-    static_assert(TriggerLevel <= N, "stream_buffer: TriggerLevel must be <= N.");
-
 public:
     // ---- types -------------------------------------------------------------
     static constexpr std::size_t capacity      = N;
@@ -137,10 +136,7 @@ public:
     /// @brief Constructs and initialises the stream buffer.
     /// @complexity O(1)
     /// @blocking   Never.
-    stream_buffer() noexcept : valid_(false), handle_{}
-    {
-        valid_ = osal_stream_buffer_create(&handle_, storage_, N, TriggerLevel).ok();
-    }
+    stream_buffer() noexcept { valid_ = osal_stream_buffer_create(&handle_, storage_, N, TriggerLevel).ok(); }
 
     /// @brief Destructs the stream buffer and releases OS resources.
     ~stream_buffer() noexcept
@@ -183,10 +179,13 @@ public:
     ///         from this overload (blocks indefinitely).
     /// @complexity O(len)
     /// @blocking   Until @p len bytes of space are available.
-    result send(const void* data, std::size_t len) noexcept
+    [[nodiscard]] result send(const void* data, std::size_t len) noexcept
     {
         return osal_stream_buffer_send(&handle_, data, len, WAIT_FOREVER);
     }
+
+    /// @brief Span overload for byte-oriented writes.
+    result send(std::span<const std::byte> data) noexcept { return send(data.data(), data.size()); }
 
     /// @brief Attempts to write without blocking.
     /// @return true if all @p len bytes were written.
@@ -196,6 +195,9 @@ public:
     {
         return osal_stream_buffer_send(&handle_, data, len, NO_WAIT).ok();
     }
+
+    /// @brief Span overload for non-blocking byte-oriented writes.
+    bool try_send(std::span<const std::byte> data) noexcept { return try_send(data.data(), data.size()); }
 
     /// @brief Writes with a timeout.
     /// @param data Source byte sequence.
@@ -217,14 +219,23 @@ public:
         }
     }
 
+    /// @brief Span overload for timed byte-oriented writes.
+    bool send_for(std::span<const std::byte> data, milliseconds timeout) noexcept
+    {
+        return send_for(data.data(), data.size(), timeout);
+    }
+
     /// @brief Writes from ISR context (non-blocking).
     /// @warning ISR-safety depends on has_isr_stream_buffer / has_isr_semaphore.
     /// @complexity O(len)
     /// @blocking   Never.
-    result send_isr(const void* data, std::size_t len) noexcept
+    [[nodiscard]] result send_isr(const void* data, std::size_t len) noexcept
     {
         return osal_stream_buffer_send_isr(&handle_, data, len);
     }
+
+    /// @brief Span overload for ISR-context byte-oriented writes.
+    result send_isr(std::span<const std::byte> data) noexcept { return send_isr(data.data(), data.size()); }
 
     // ---- receive (consumer API) --------------------------------------------
 
@@ -241,6 +252,9 @@ public:
         return osal_stream_buffer_receive(&handle_, buf, max_len, WAIT_FOREVER);
     }
 
+    /// @brief Span overload for byte-oriented reads.
+    std::size_t receive(std::span<std::byte> buf) noexcept { return receive(buf.data(), buf.size()); }
+
     /// @brief Attempts to read without blocking.
     /// @return  Bytes read, or 0 if fewer than TriggerLevel bytes are available.
     /// @complexity O(n read)
@@ -249,6 +263,9 @@ public:
     {
         return osal_stream_buffer_receive(&handle_, buf, max_len, NO_WAIT);
     }
+
+    /// @brief Span overload for non-blocking byte-oriented reads.
+    std::size_t try_receive(std::span<std::byte> buf) noexcept { return try_receive(buf.data(), buf.size()); }
 
     /// @brief Reads with a timeout.
     /// @return  Bytes read within @p timeout, or 0 on timeout.
@@ -267,6 +284,12 @@ public:
         }
     }
 
+    /// @brief Span overload for timed byte-oriented reads.
+    std::size_t receive_for(std::span<std::byte> buf, milliseconds timeout) noexcept
+    {
+        return receive_for(buf.data(), buf.size(), timeout);
+    }
+
     /// @brief Reads from ISR context (non-blocking).
     /// @warning ISR-safety depends on has_isr_stream_buffer / has_isr_semaphore.
     /// @return  Bytes read, or 0 if fewer than TriggerLevel bytes are available.
@@ -277,6 +300,9 @@ public:
         return osal_stream_buffer_receive_isr(&handle_, buf, max_len);
     }
 
+    /// @brief Span overload for ISR-context byte-oriented reads.
+    std::size_t receive_isr(std::span<std::byte> buf) noexcept { return receive_isr(buf.data(), buf.size()); }
+
     // ---- control -----------------------------------------------------------
 
     /// @brief Discards all buffered data.
@@ -284,10 +310,10 @@ public:
     result reset() noexcept { return osal_stream_buffer_reset(&handle_); }
 
 private:
-    bool                                          valid_;
-    mutable active_traits::stream_buffer_handle_t handle_;
+    bool                                          valid_{false};
+    mutable active_traits::stream_buffer_handle_t handle_{};
     /// @brief Ring storage: N usable bytes + 1 sentinel byte (SPSC ring marker).
-    std::uint8_t storage_[N + 1U];
+    std::uint8_t storage_[N + 1U]{};
 };
 
 /// @} // osal_stream_buffer
