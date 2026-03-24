@@ -3,7 +3,7 @@
 This document catalogues what is and is not tested.  It is updated manually
 whenever new tests are added.  Four independent test suites exist:
 
-- **Hosted/doctest suite** — 22 test binaries built with CMake, run via CTest; used in CI for Linux,
+- **Hosted/doctest suite** — 25 test binaries built with CMake, run via CTest; used in CI for Linux,
   POSIX, Bare-metal, RTEMS, and INTEGRITY backend validation.
 - **FreeRTOS/doctest suite** — single `tests/freertos/src/main.cpp`, built with CMake, run via
   CTest; uses the FreeRTOS-Kernel v11 POSIX simulation port (runs as a Linux process, no emulator
@@ -22,24 +22,21 @@ Nine build targets are covered by automated builds or runtime suites:
 
 | Backend | Test suite | Emulator / runner | Coverage |
 | --- | --- | --- | --- |
-| Linux | CMake / CTest (doctest) | None (native process) | ✅ 22 binaries, 22/22 pass |
-| POSIX | CMake / CTest (doctest) | None (native process) | ✅ in CI (`OSAL_BACKEND=POSIX`); same 22 binaries |
-| Bare-metal | CMake / CTest (doctest) | Native process with hosted self-tick/context helper | ✅ in CI (`OSAL_BACKEND=BAREMETAL`); 22/22 pass |
-| RTEMS | CMake / CTest (doctest) | None (native process) | ✅ in CI (`OSAL_BACKEND=RTEMS`); 22/22 pass |
-| INTEGRITY | CMake / CTest (doctest) | None (native process) | ✅ in CI (`OSAL_BACKEND=INTEGRITY`); 22/22 pass |
-| FreeRTOS v11 | CMake / CTest (doctest) | POSIX sim port (no emulator) | ✅ in CI (`freertos-test` job); **36/36 pass** |
-| NuttX (latest main) | NuttX builtin app (printf framework) | NuttX sim/nsh on x86-64 | ✅ in CI; **26/26 pass** |
-| Zephyr (`native_sim`) | west twister (ztest) | Native Linux process | ✅ 75 cases × 2 configs = 150/150 pass |
+| Linux | CMake / CTest (doctest) | None (native process) | ✅ 25 binaries, 25/25 locally rerun |
+| POSIX | CMake / CTest (doctest) | None (native process) | ✅ in CI (`OSAL_BACKEND=POSIX`); same 25 binaries |
+| Bare-metal | CMake / CTest (doctest) | Native process with hosted self-tick/context helper | ✅ in CI (`OSAL_BACKEND=BAREMETAL`); same 25 binaries |
+| RTEMS | CMake / CTest (doctest) | None (native process) | ✅ in CI (`OSAL_BACKEND=RTEMS`); same 25 binaries |
+| INTEGRITY | CMake / CTest (doctest) | None (native process) | ✅ in CI (`OSAL_BACKEND=INTEGRITY`); same 25 binaries |
+| FreeRTOS v11 | CMake / CTest (doctest) | POSIX sim port (no emulator) | ✅ in CI (`freertos-test` job); **42/42 pass** locally rerun |
+| NuttX (main / sim:nsh) | NuttX builtin app (printf framework) | NuttX sim/nsh on x86-64 | ✅ in CI; **30/30 pass** last recorded rerun |
+| Zephyr (`native_sim`) | west twister (ztest) | Native Linux process | ✅ 94 cases × 2 configs = **188/188 pass** locally rerun |
 | Zephyr (`nrf52840dk`) | west twister (ztest + Renode) | **Renode** v1.15.3 SoC simulation | ✅ **79/79 pass** on nrf52840dk/nrf52840 (Zephyr v4.3.0) |
-| ThreadX / PX5 | — | — | ❌ Not in CI |
-| QNX | — | — | ❌ Not in CI |
-| VxWorks | — | — | ❌ Not in CI |
-| All others | — | — | ❌ Not in CI |
+| ThreadX / PX5 / VxWorks / Micrium / ChibiOS / embOS / CMSIS-RTOS{,2} / QNX | External SDK integration | Proprietary or non-hosted toolchain required | ❌ Not on GitHub-hosted CI |
 
-The FreeRTOS suite was rerun after the mailbox additions in this workspace.
-The NuttX and Zephyr suite source files now contain mailbox cases too, but the
-published pass totals above still reflect the last recorded reruns before that
-expansion.
+GitHub-hosted CI does not attempt to build the vendor-SDK backends because the
+required headers and toolchains are not available on Ubuntu runners.  Their
+integration contracts are still documented, but validating them requires the
+corresponding SDKs or licensed host environments.
 
 Hosted bare-metal validation uses a test-only single-process helper that drives
 the bare-metal tick source and cooperative contexts for the doctest binaries.
@@ -87,6 +84,10 @@ ctest --test-dir build-freertos --output-on-failure
 The NuttX test app lives in `tests/nuttx/`.  It is designed to be placed
 (or symlinked) into `nuttx-apps/testing/microsal_test/` of a NuttX workspace:
 
+The `sim/nsh` test build also needs NuttX's toolchain C++ runtime enabled.
+Without those config options, the final link fails on standard C++ runtime
+symbols such as `__cxa_guard_*`, `std::nothrow`, and `operator new/delete`.
+
 ```bash
 git clone https://github.com/apache/nuttx.git
 git clone https://github.com/apache/nuttx-apps.git
@@ -100,8 +101,15 @@ wget https://github.com/doctest/doctest/releases/download/v2.4.11/doctest.h \
 # Configure and build
 cd nuttx
 cmake -B build -DBOARD_CONFIG=sim/nsh -DNUTTX_APPS_DIR=../nuttx-apps
-echo 'CONFIG_TESTING_MICROSAL_TEST=y' >> build/.config
-cmake build && cmake --build build -j$(nproc)
+cat >> build/.config <<'EOF'
+CONFIG_TESTING_MICROSAL_TEST=y
+CONFIG_HAVE_CXX=y
+CONFIG_LIBCXXTOOLCHAIN=y
+CONFIG_LIBSUPCXX_TOOLCHAIN=y
+CONFIG_CXX_STANDARD="gnu++20"
+EOF
+cmake -S . -B build -DBOARD_CONFIG=sim/nsh -DNUTTX_APPS_DIR=../nuttx-apps
+cmake --build build -j$(nproc)
 
 # Run — feed the test command to NSH
 printf 'microsal_test\nexit\n' | ./build/nuttx
@@ -122,12 +130,12 @@ Legend:
 | `osal::clock` | `test_clock.cpp` | ✅ | `osal_clock_tick_period_us` not asserted |
 | `osal::mutex` | `test_mutex.cpp` | ✅ | `try_lock_for` timeout path not tested |
 | `osal::semaphore` | `test_semaphore.cpp` | ⚠️ | `give_isr` / `take_isr` not called |
-| `osal::thread` | `test_thread.cpp` | ✅ | Affinity not tested; task-notification native path (FreeRTOS/embOS) not in CI — stub (`not_supported`) path covered |
+| `osal::thread` | `test_thread.cpp` | ✅ | Affinity not tested; FreeRTOS native task-notification round-trip is covered in the backend suite, but embOS task events still lack CI coverage |
 | `osal::queue` | `test_queue.cpp` | ⚠️ | `send_isr` / `receive_isr` not tested; overflow behaviour not asserted |
 | `osal::mailbox` | `test_mailbox.cpp` | ✅ | Hosted suite plus FreeRTOS, NuttX, and Zephyr backend suites cover single-slot send/receive, full detection, aliases, and cross-thread handoff |
 | `osal::timer` | `test_timer.cpp` | ✅ | One-shot and periodic both covered |
 | `osal::event_flags` | `test_event_flags.cpp` | ⚠️ | `set_isr` not tested; WAIT_ALL timeout not tested |
-| `osal::wait_set` | `test_wait_set.cpp` | ✅ | Linux epoll path (Linux suite); `not_supported` path asserted on Zephyr |
+| `osal::wait_set` | `test_wait_set.cpp` | ✅ | Linux epoll path covered; unsupported native-only path asserted on Zephyr; PX5 native wait-set still lacks CI coverage |
 | `osal::condvar` | `test_condvar.cpp` | ✅ | `wait_for` timeout, predicate-wait + cross-thread notify covered |
 | `osal::work_queue` | `test_work_queue.cpp` | ✅ | `submit_from_isr` not tested (returns `not_supported` on Linux) |
 | `osal::delayable_work` | `test_delayable_work.cpp` | ✅ | Hosted path covers schedule/reschedule/cancel/flush; FreeRTOS suite covers schedule+flush; Zephyr `native_sim` rerun now passes the delayable-work case too |
@@ -136,27 +144,26 @@ Legend:
 | `osal::stream_buffer` | `test_stream_buffer.cpp` | ✅ | `send_isr`/`receive_isr` called from task context; trigger-level 1 and 4 tested; cross-thread blocking send/receive covered |
 | `osal::message_buffer` | `test_message_buffer.cpp` | ⚠️ | ISR send/receive not tested; oversized-message truncation not tested |
 | `osal::rwlock` | `test_rwlock.cpp` | ✅ | RAII guards, concurrent readers, timed-lock success+timeout covered on both Linux and Zephyr |
-| `osal::spinlock` | `test_spinlock.cpp` | ✅ | construction, lock/unlock, try_lock, lock_guard RAII, sequential cycles; native path only on Zephyr — stub (`not_supported`) path fully exercised on Linux |
-| `osal::barrier` | `test_barrier.cpp` | ✅ | construction, stub path, count-1 immediate release, two-thread rendezvous, serial-thread identification; native `pthread_barrier_t` path exercised on Linux/POSIX |
+| `osal::spinlock` | `test_spinlock.cpp` | ✅ | Hosted suite covers support-flag plumbing and unsupported-path semantics on Linux; Zephyr backend suite covers native construction, lock/unlock, and try_lock |
+| `osal::barrier` | `test_barrier.cpp` | ✅ | Hosted suite covers invalid count, count-1 immediate release, two-thread rendezvous, and serial-thread identification; FreeRTOS and Zephyr backend suites cover the shared emulated barrier path |
 | `osal::memory_pool` | `test_memory_pool.cpp` | ✅ | Exhaustion, `allocate_for` timeout, cross-thread unblock covered |
 | `osal::ring_buffer` | `test_ring_buffer.cpp` | ✅ | Wrap-around, SPSC producer/consumer stress, capacity-1 covered |
 | `osal::thread_local_data` | `test_thread_local_data.cpp` | ✅ | Per-thread isolation, key reuse, key exhaustion covered |
 | `result` / `error_code` | `test_result.cpp` | ✅ | All error codes and comparison operators covered |
 | C API (`osal_c.h`) | `test_c_api.cpp` | ⚠️ | C11 compilation verified; hosted tests cover notification and delayable_work; Zephyr `native_sim` rerun also passes the C notification and C delayable-work round-trips; ISR variants still not called from C |
 | Integration (multi-primitive) | `test_integration.cpp` | ⚠️ | Producer/consumer with queue+semaphore; no rwlock or memory_pool integration |
-| Thread task notification | `test_thread.cpp` | ⚠️ | Stub path (`not_supported`) verified on Linux; native `xTaskNotify` (FreeRTOS) and `OS_TASKEVENT` (embOS) round-trip covered in concept but not yet wired into the hosted CI suites; richer portable semantics now live in `osal::notification<Slots>` |
+| Thread task notification | `test_thread.cpp` | ⚠️ | Unsupported path verified on Linux; native `xTaskNotify` round-trip now covered in the FreeRTOS suite; embOS task-event coverage still needs a licensed SDK environment |
 
 ---
 
 ## Zephyr test suite (`tests/zephyr/src/main.cpp`)
 
-86–90 test cases across 22 ztest suites (count varies by platform — some stream_buffer
-ISR and trigger-level tests only compile on real targets, not on `native_sim`).
-The suite now includes mailbox, notification, delayable-work, object-wait-set,
-and expanded C API coverage.
+94 test cases across 24 ztest suites.  The current suite includes mailbox,
+notification, delayable-work, object-wait-set, native Zephyr spinlocks,
+shared-emulated barriers, and the expanded C API coverage.
 
-- **`native_sim`** (Zephyr v4.3.0) — rerun in this workspace after the portable-helper expansion: **86/86 pass**.
-- **`nrf52840dk/nrf52840`** (Zephyr v4.3.0, **Renode** v1.15.3) — last published rerun before the mailbox expansion: **79/79 pass**.
+- **`native_sim`** (Zephyr v4.3.0) — rerun in this workspace after the barrier/support-helper update: **188/188 pass** across 2 test configurations.
+- **`nrf52840dk/nrf52840`** (Zephyr v4.3.0, **Renode** v1.15.3) — last published rerun: **79/79 pass**.
 
 | ztest suite | Cases | What is covered |
 | --- | --- | --- |
@@ -171,9 +178,11 @@ and expanded C API coverage.
 | `osal_condvar` | 4 | Construction, notify-only, cross-thread wait+notify, `wait_for` timeout |
 | `osal_work_queue` | 3 | Construction, submit+flush, config |
 | `osal_delayable_work` | 1 | schedule+flush delayed dispatch |
+| `osal_barrier` | 2 | Count-1 immediate release and two-thread rendezvous through the shared emulation layer |
 | `osal_memory_pool` | 2 | Alloc/free round-trip + count, config construction |
 | `osal_rwlock` | 5 | Basic lock/unlock, concurrent readers, `write_lock_for`, RAII guards |
-| `osal_stream_buffer` | 4 (`native_sim`) / 8 (`nrf52840dk`) | Construction, send/receive, empty receive = 0, reset; + `send_isr`/`receive_isr` round-trip, `receive_isr` empty = 0, trigger-level below/at threshold (nrf52840dk only) |
+| `osal_spinlock` | 2 | Native construction plus lock/unlock/try_lock on Zephyr |
+| `osal_stream_buffer` | 8 | Construction, send/receive, empty receive = 0, reset, `send_isr`/`receive_isr` round-trip, `receive_isr` empty = 0, trigger-level below/at threshold |
 | `osal_message_buffer` | 4 | Construction, send/receive, FIFO ordering, reset |
 | `osal_notification` | 2 | notify/wait round-trip, action semantics |
 | `osal_object_wait_set` | 2 | queue readiness, notification clear-on-exit |
@@ -193,7 +202,9 @@ timed-lock timeout paths for mutex and queue, ISR variants (FreeRTOS-specific
 
 Built with CMake + FreeRTOS-Kernel v11 (GCC/POSIX simulation port).
 Runs as a standard Linux process via CTest — no emulator required.
-FreeRTOS-Kernel and doctest are fetched automatically by FetchContent.
+FreeRTOS-Kernel and doctest are fetched automatically by FetchContent.  The
+current suite registers 42 doctest cases and was rerun in this workspace after
+the barrier and task-notification additions.
 
 | Primitive | Cases | What is covered |
 | --- | --- | --- |
@@ -206,8 +217,11 @@ FreeRTOS-Kernel and doctest are fetched automatically by FetchContent.
 | `osal::stream_buffer` | 4 | construction, send/receive round-trip, full rejection, reset, `send_isr`/`receive_isr` |
 | `osal::message_buffer` | 2 | send/receive, FIFO order |
 | `osal::ring_buffer` | 1 | push/pop FIFO (header-only, backend-independent) |
-| `osal::thread` | 2 | create+join, sleep_for elapsed |
+| `osal::thread` | 3 | create+join, sleep_for elapsed, native task-notification round-trip |
 | `osal::condvar` | 1 | cross-thread wait+notify |
+| `osal::barrier` | 1 | two-thread rendezvous through the shared emulated barrier |
+| `osal::notification<Slots>` | 2 | portable notification round-trip and action semantics |
+| `osal::object_wait_set` | 1 | queue readiness through the portable polling multiplexer |
 | `osal::thread_local_data` | 1 | per-thread isolation |
 | `osal::memory_pool` | 2 | alloc/free, exhaustion → nullptr |
 | `result`/`error_code` | 1 | ok vs error, code() accessor |
@@ -236,9 +250,8 @@ Built as a NuttX builtin application and run inside the NuttX `sim/nsh`
 simulator (x86-64 Linux process).  The NuttX RTOS and its apps are cloned from
 the latest `apache/nuttx` and `apache/nuttx-apps` main branches.
 
-The suite source now contains 30 test cases including four mailbox checks. The
-last published runtime result in this repo was **26/26 pass** before that
-mailbox expansion.
+The suite source contains 30 test cases including four mailbox checks.  The
+last recorded runtime rerun in this repo passed **30/30** on `sim/nsh`.
 
 | Primitive | Cases | What is covered |
 | --- | --- | --- |

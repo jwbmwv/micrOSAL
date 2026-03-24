@@ -2,8 +2,11 @@
 /// @file capabilities.hpp
 /// @brief Compile-time capability detection for OSAL backends
 /// @details Each backend specialises osal::capabilities<Backend> to advertise
-///          what primitives and operations it natively supports.  Client code can
-///          conditionally enable features with @c if constexpr.
+///          what primitives and operations it exposes through MicrOSAL. Flags
+///          without the @c native_ prefix may be satisfied by shared emulations.
+///          Client code can conditionally enable features with @c if constexpr, while the
+///          C++20 concept @c osal::backend_capabilities_spec validates that each
+///          backend exposes the full flag set with short diagnostics.
 ///
 ///          Example:
 ///          @code
@@ -263,7 +266,7 @@ struct capabilities
     static constexpr bool has_spinlock = false;
 
     // ----- barrier ---------------------------------------------------------
-    /// @brief Backend provides a native thread barrier / rendezvous point.
+    /// @brief Backend provides a thread barrier / rendezvous point.
     static constexpr bool has_barrier = false;
 
     // ----- clock -----------------------------------------------------------
@@ -327,7 +330,7 @@ struct capabilities<backend_freertos>
     static constexpr bool has_isr_message_buffer         = true;  // xMessageBufferSendFromISR
     static constexpr bool has_native_rwlock              = false;
     static constexpr bool has_spinlock                   = false;
-    static constexpr bool has_barrier                    = false;
+    static constexpr bool has_barrier                    = true;  // shared emulated barrier
     static constexpr bool has_monotonic_clock            = true;
     static constexpr bool has_system_clock               = false;
     static constexpr bool has_high_resolution            = false;
@@ -369,7 +372,7 @@ struct capabilities<backend_zephyr>
     static constexpr bool has_isr_message_buffer         = false;
     static constexpr bool has_native_rwlock              = false;
     static constexpr bool has_spinlock                   = true;  // k_spinlock
-    static constexpr bool has_barrier                    = false;
+    static constexpr bool has_barrier                    = true;  // shared emulated barrier
     static constexpr bool has_monotonic_clock            = true;
     static constexpr bool has_system_clock               = true;
     static constexpr bool has_high_resolution            = true;
@@ -411,7 +414,7 @@ struct capabilities<backend_threadx>
     static constexpr bool has_isr_message_buffer         = false;
     static constexpr bool has_native_rwlock              = false;
     static constexpr bool has_spinlock                   = false;
-    static constexpr bool has_barrier                    = false;
+    static constexpr bool has_barrier                    = true;  // shared emulated barrier
     static constexpr bool has_monotonic_clock            = true;
     static constexpr bool has_system_clock               = false;
     static constexpr bool has_high_resolution            = false;
@@ -453,7 +456,7 @@ struct capabilities<backend_px5>
     static constexpr bool has_isr_message_buffer         = false;
     static constexpr bool has_native_rwlock              = false;
     static constexpr bool has_spinlock                   = false;
-    static constexpr bool has_barrier                    = false;
+    static constexpr bool has_barrier                    = true;  // shared emulated barrier
     static constexpr bool has_monotonic_clock            = true;
     static constexpr bool has_system_clock               = false;
     static constexpr bool has_high_resolution            = false;
@@ -595,7 +598,7 @@ struct capabilities<backend_baremetal>
     static constexpr bool has_isr_message_buffer    = false;
     static constexpr bool has_native_rwlock         = false;
     static constexpr bool has_spinlock              = false;
-    static constexpr bool has_barrier               = false;
+    static constexpr bool has_barrier               = true;  // shared emulated barrier
     static constexpr bool has_monotonic_clock       = true;
     static constexpr bool has_system_clock          = false;
     static constexpr bool has_high_resolution       = false;
@@ -637,7 +640,7 @@ struct capabilities<backend_vxworks>
     static constexpr bool has_isr_message_buffer         = false;
     static constexpr bool has_native_rwlock              = false;
     static constexpr bool has_spinlock                   = false;
-    static constexpr bool has_barrier                    = false;
+    static constexpr bool has_barrier                    = true;  // shared emulated barrier
     static constexpr bool has_monotonic_clock            = true;
     static constexpr bool has_system_clock               = false;
     static constexpr bool has_high_resolution            = false;
@@ -721,7 +724,7 @@ struct capabilities<backend_micrium>
     static constexpr bool has_isr_message_buffer         = false;
     static constexpr bool has_native_rwlock              = false;
     static constexpr bool has_spinlock                   = false;
-    static constexpr bool has_barrier                    = false;
+    static constexpr bool has_barrier                    = true;  // shared emulated barrier
     static constexpr bool has_monotonic_clock            = true;
     static constexpr bool has_system_clock               = false;
     static constexpr bool has_high_resolution            = false;
@@ -763,7 +766,7 @@ struct capabilities<backend_chibios>
     static constexpr bool has_isr_message_buffer         = false;
     static constexpr bool has_native_rwlock              = false;
     static constexpr bool has_spinlock                   = false;
-    static constexpr bool has_barrier                    = false;
+    static constexpr bool has_barrier                    = true;  // shared emulated barrier
     static constexpr bool has_monotonic_clock            = true;
     static constexpr bool has_system_clock               = false;
     static constexpr bool has_high_resolution            = true;
@@ -805,7 +808,7 @@ struct capabilities<backend_embos>
     static constexpr bool has_isr_message_buffer         = false;
     static constexpr bool has_native_rwlock              = false;
     static constexpr bool has_spinlock                   = false;
-    static constexpr bool has_barrier                    = false;
+    static constexpr bool has_barrier                    = true;  // shared emulated barrier
     static constexpr bool has_monotonic_clock            = true;
     static constexpr bool has_system_clock               = false;
     static constexpr bool has_high_resolution            = true;
@@ -889,7 +892,7 @@ struct capabilities<backend_cmsis_rtos>
     static constexpr bool has_isr_message_buffer         = false;
     static constexpr bool has_native_rwlock              = false;
     static constexpr bool has_spinlock                   = false;
-    static constexpr bool has_barrier                    = false;
+    static constexpr bool has_barrier                    = true;  // shared emulated barrier
     static constexpr bool has_monotonic_clock            = true;  // osKernelSysTick
     static constexpr bool has_system_clock               = false;
     static constexpr bool has_high_resolution            = false;
@@ -931,7 +934,7 @@ struct capabilities<backend_cmsis_rtos2>
     static constexpr bool has_isr_message_buffer         = false;
     static constexpr bool has_native_rwlock              = false;
     static constexpr bool has_spinlock                   = false;
-    static constexpr bool has_barrier                    = false;
+    static constexpr bool has_barrier                    = true;  // shared emulated barrier
     static constexpr bool has_monotonic_clock            = true;  // osKernelGetTickCount
     static constexpr bool has_system_clock               = false;
     static constexpr bool has_high_resolution            = false;

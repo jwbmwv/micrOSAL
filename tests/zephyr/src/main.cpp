@@ -33,6 +33,9 @@ K_THREAD_STACK_DEFINE(z_tld_stack, 2048);
 K_THREAD_STACK_DEFINE(z_rwlock_ra_stack, 2048);
 K_THREAD_STACK_DEFINE(z_rwlock_rb_stack, 2048);
 K_THREAD_STACK_DEFINE(z_note_stack, 2048);
+K_THREAD_STACK_DEFINE(z_barrier_a_stack, 2048);
+K_THREAD_STACK_DEFINE(z_barrier_b_stack, 2048);
+K_THREAD_STACK_DEFINE(z_barrier_c_stack, 2048);
 alignas(std::uint32_t) static std::uint8_t z_pool_buf[sizeof(std::uint32_t) * 16U];
 
 // =========================================================================
@@ -500,9 +503,9 @@ ZTEST_SUITE(osal_condvar, NULL, NULL, NULL, NULL, NULL);
 // Notification
 // =========================================================================
 
-static osal::notification<2>* g_z_note = nullptr;
-static volatile std::uint32_t g_z_note_value = 0U;
-static int g_z_c_delayable_count = 0;
+static osal::notification<2>* g_z_note              = nullptr;
+static volatile std::uint32_t g_z_note_value        = 0U;
+static int                    g_z_c_delayable_count = 0;
 
 static void zephyr_notification_waiter(void*)
 {
@@ -526,7 +529,7 @@ ZTEST(osal_notification, test_notify_and_wait_round_trip)
 {
     osal::notification<2> note;
     zassert_true(note.valid(), NULL);
-    g_z_note = &note;
+    g_z_note       = &note;
     g_z_note_value = 0U;
 
     osal::thread        t;
@@ -554,8 +557,8 @@ ZTEST(osal_notification, test_set_bits_increment_and_no_overwrite)
     zassert_true(note.notify(0x04U, osal::notification_action::set_bits, 0U).ok(), NULL);
     zassert_true(note.notify(0U, osal::notification_action::increment, 0U).ok(), NULL);
     zassert_equal(note.peek(0U), 0x06U, NULL);
-    zassert_equal(note.notify(0x08U, osal::notification_action::no_overwrite, 0U).code(),
-                  osal::error_code::would_block, NULL);
+    zassert_equal(note.notify(0x08U, osal::notification_action::no_overwrite, 0U).code(), osal::error_code::would_block,
+                  NULL);
 }
 
 ZTEST_SUITE(osal_notification, NULL, NULL, NULL, NULL, NULL);
@@ -632,7 +635,7 @@ ZTEST_SUITE(osal_delayable_work, NULL, NULL, NULL, NULL, NULL);
 
 ZTEST(osal_object_wait_set, test_queue_readiness_returns_registered_id)
 {
-    osal::object_wait_set      ws;
+    osal::object_wait_set         ws;
     osal::queue<std::uint32_t, 4> q;
     zassert_true(q.valid(), NULL);
     zassert_true(ws.add(q, 17).ok(), NULL);
@@ -647,7 +650,7 @@ ZTEST(osal_object_wait_set, test_queue_readiness_returns_registered_id)
 
 ZTEST(osal_object_wait_set, test_notification_clear_on_exit)
 {
-    osal::object_wait_set  ws;
+    osal::object_wait_set ws;
     osal::notification<2> note;
     zassert_true(note.valid(), NULL);
     zassert_true(ws.add(note, 1U, 29, true).ok(), NULL);
@@ -951,8 +954,8 @@ ZTEST(osal_c_api, test_message_buffer_round_trip)
 
 ZTEST(osal_c_api, test_notification_round_trip)
 {
-    std::uint32_t             values[2]{};
-    std::uint8_t              pending[2]{};
+    std::uint32_t            values[2]{};
+    std::uint8_t             pending[2]{};
     osal_notification_handle note;
     zassert_equal(osal_c_notification_create(&note, values, pending, 2U), OSAL_OK, NULL);
     zassert_equal(osal_c_notification_notify(&note, 0xBEEFU, OSAL_NOTIFICATION_OVERWRITE, 1U), OSAL_OK, NULL);
@@ -1376,11 +1379,91 @@ ZTEST(osal_thread_local_data, test_per_thread_isolation)
 ZTEST_SUITE(osal_thread_local_data, NULL, NULL, NULL, NULL, NULL);
 
 // =========================================================================
-// Wait set (has_wait_set == false on Zephyr — emulated mode)
+// Spinlock (native on Zephyr)
+// =========================================================================
+
+ZTEST(osal_spinlock, test_construction)
+{
+    zassert_true(osal::spinlock::is_supported, "spinlock should advertise native support on Zephyr");
+    osal::spinlock sl;
+    zassert_true(sl.valid(), "spinlock construction should succeed");
+}
+
+ZTEST(osal_spinlock, test_lock_unlock_and_try_lock)
+{
+    osal::spinlock sl;
+    zassert_true(sl.valid(), NULL);
+    zassert_true(sl.lock().ok(), "lock should succeed");
+    sl.unlock();
+    zassert_true(sl.try_lock(), "try_lock should succeed after unlock");
+    sl.unlock();
+}
+
+ZTEST_SUITE(osal_spinlock, NULL, NULL, NULL, NULL, NULL);
+
+// =========================================================================
+// Barrier (shared emulation on Zephyr)
+// =========================================================================
+
+ZTEST(osal_barrier, test_count_one_returns_immediately)
+{
+    osal::barrier barr{1U};
+    zassert_true(barr.valid(), "barrier construction should succeed");
+    const osal::result r = barr.wait();
+    zassert_true(r.ok() || (r == osal::error_code::barrier_serial), "count-1 barrier should release immediately");
+}
+
+ZTEST(osal_barrier, test_two_thread_rendezvous)
+{
+    osal::barrier    barr{2U};
+    std::atomic<int> passed{0};
+    struct ctx_t
+    {
+        osal::barrier*    barrier;
+        std::atomic<int>* passed;
+    } ctx{&barr, &passed};
+
+    zassert_true(barr.valid(), NULL);
+
+    auto worker = [](void* arg)
+    {
+        auto*              ctx = static_cast<ctx_t*>(arg);
+        const osal::result r   = ctx->barrier->wait();
+        if (r.ok() || (r == osal::error_code::barrier_serial))
+        {
+            ctx->passed->fetch_add(1);
+        }
+    };
+
+    osal::thread        ta;
+    osal::thread        tb;
+    osal::thread_config cfg{};
+    cfg.entry       = worker;
+    cfg.arg         = &ctx;
+    cfg.stack       = z_barrier_a_stack;
+    cfg.stack_bytes = K_THREAD_STACK_SIZEOF(z_barrier_a_stack);
+    cfg.name        = "zbarr_a";
+    zassert_true(ta.create(cfg).ok(), NULL);
+
+    cfg.stack       = z_barrier_b_stack;
+    cfg.stack_bytes = K_THREAD_STACK_SIZEOF(z_barrier_b_stack);
+    cfg.name        = "zbarr_b";
+    zassert_true(tb.create(cfg).ok(), NULL);
+
+    zassert_true(ta.join().ok(), NULL);
+    zassert_true(tb.join().ok(), NULL);
+    zassert_equal(passed.load(), 2, "both threads should pass the barrier");
+}
+
+ZTEST_SUITE(osal_barrier, NULL, NULL, NULL, NULL, NULL);
+
+// =========================================================================
+// Wait set (native-only API unsupported on Zephyr)
 // =========================================================================
 
 ZTEST(osal_wait_set, test_construction_valid)
 {
+    zassert_false(osal::wait_set::is_supported, "wait_set should report unsupported on Zephyr");
     osal::wait_set ws;
     // has_wait_set == false → emulated mode → valid_ = true
     zassert_true(ws.valid(), "wait_set should be valid in emulated mode");

@@ -46,7 +46,7 @@ TEST_CASE("event_flags: wait_any immediate")
     REQUIRE(ef.set(0x02).ok());
 
     osal::event_bits_t actual = 0;
-    auto r = ef.wait_any(0x02, &actual, false, osal::milliseconds{0});
+    auto               r      = ef.wait_any(0x02, &actual, false, osal::milliseconds{0});
     CHECK(r.ok());
     CHECK((actual & 0x02) != 0U);
 }
@@ -68,7 +68,7 @@ TEST_CASE("event_flags: wait_all immediate")
     REQUIRE(ef.set(0x03).ok());
 
     osal::event_bits_t actual = 0;
-    auto r = ef.wait_all(0x03, &actual, false, osal::milliseconds{0});
+    auto               r      = ef.wait_all(0x03, &actual, false, osal::milliseconds{0});
     CHECK(r.ok());
     CHECK((actual & 0x03) == 0x03);
 }
@@ -91,7 +91,7 @@ TEST_CASE("event_flags: clear_on_exit")
     REQUIRE(ef.set(0x04).ok());
 
     osal::event_bits_t actual = 0;
-    auto r = ef.wait_any(0x04, &actual, /*clear_on_exit=*/true, osal::milliseconds{100});
+    auto               r      = ef.wait_any(0x04, &actual, /*clear_on_exit=*/true, osal::milliseconds{100});
     CHECK(r.ok());
 
     // Bit should have been auto-cleared.
@@ -106,23 +106,24 @@ TEST_CASE("event_flags: cross-thread signalling")
     // Clear any leftover bits.
     (void)ef.clear(0xFFFFFFFFU);
 
-    auto setter = [](void*) {
+    auto setter = [](void*)
+    {
         osal::thread::sleep_for(osal::milliseconds{20});
         (void)ef.set(0x10);
     };
 
     alignas(16) static std::uint8_t stack[65536];
-    osal::thread t;
-    osal::thread_config cfg{};
-    cfg.entry = setter;
-    cfg.arg = nullptr;
-    cfg.stack = stack;
+    osal::thread                    t;
+    osal::thread_config             cfg{};
+    cfg.entry       = setter;
+    cfg.arg         = nullptr;
+    cfg.stack       = stack;
     cfg.stack_bytes = sizeof(stack);
-    cfg.name = "ef_set";
+    cfg.name        = "ef_set";
     REQUIRE(t.create(cfg).ok());
 
     osal::event_bits_t actual = 0;
-    auto r = ef.wait_any(0x10, &actual, true, osal::milliseconds{2000});
+    auto               r      = ef.wait_any(0x10, &actual, true, osal::milliseconds{2000});
     CHECK(r.ok());
     CHECK((actual & 0x10) != 0U);
 

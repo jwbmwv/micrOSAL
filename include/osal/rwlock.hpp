@@ -81,7 +81,7 @@ public:
     // ---- construction / destruction ----------------------------------------
 
     /// @brief Constructs a read-write lock.
-    rwlock() noexcept : valid_(false), handle_{} { valid_ = osal_rwlock_create(&handle_).ok(); }
+    rwlock() noexcept { valid_ = osal_rwlock_create(&handle_).ok(); }
 
     /// @brief Destroys the read-write lock.
     ~rwlock() noexcept
@@ -101,7 +101,7 @@ public:
     // ---- read (shared) lock ------------------------------------------------
 
     /// @brief Acquire the lock for reading (blocking).
-    result read_lock() noexcept { return osal_rwlock_read_lock(&handle_, WAIT_FOREVER); }
+    [[nodiscard]] result read_lock() noexcept { return osal_rwlock_read_lock(&handle_, WAIT_FOREVER); }
 
     /// @brief Try to acquire the read lock with a timeout.
     result read_lock_for(milliseconds timeout) noexcept
@@ -111,12 +111,12 @@ public:
     }
 
     /// @brief Release the read lock.
-    result read_unlock() noexcept { return osal_rwlock_read_unlock(&handle_); }
+    [[nodiscard]] result read_unlock() noexcept { return osal_rwlock_read_unlock(&handle_); }
 
     // ---- write (exclusive) lock --------------------------------------------
 
     /// @brief Acquire the lock for writing (blocking).
-    result write_lock() noexcept { return osal_rwlock_write_lock(&handle_, WAIT_FOREVER); }
+    [[nodiscard]] result write_lock() noexcept { return osal_rwlock_write_lock(&handle_, WAIT_FOREVER); }
 
     /// @brief Try to acquire the write lock with a timeout.
     result write_lock_for(milliseconds timeout) noexcept
@@ -126,7 +126,7 @@ public:
     }
 
     /// @brief Release the write lock.
-    result write_unlock() noexcept { return osal_rwlock_write_unlock(&handle_); }
+    [[nodiscard]] result write_unlock() noexcept { return osal_rwlock_write_unlock(&handle_); }
 
     // ---- RAII guards -------------------------------------------------------
 
@@ -134,10 +134,12 @@ public:
     class read_guard
     {
     public:
-        explicit read_guard(rwlock& rw) noexcept : rw_(rw) { rw_.read_lock(); }
-        ~read_guard() noexcept { rw_.read_unlock(); }
+        explicit read_guard(rwlock& rw) noexcept : rw_(rw) { (void)rw_.read_lock(); }
+        ~read_guard() noexcept { (void)rw_.read_unlock(); }
         read_guard(const read_guard&)            = delete;
         read_guard& operator=(const read_guard&) = delete;
+        read_guard(read_guard&&)                 = delete;
+        read_guard& operator=(read_guard&&)      = delete;
 
     private:
         rwlock& rw_;
@@ -147,10 +149,12 @@ public:
     class write_guard
     {
     public:
-        explicit write_guard(rwlock& rw) noexcept : rw_(rw) { rw_.write_lock(); }
-        ~write_guard() noexcept { rw_.write_unlock(); }
+        explicit write_guard(rwlock& rw) noexcept : rw_(rw) { (void)rw_.write_lock(); }
+        ~write_guard() noexcept { (void)rw_.write_unlock(); }
         write_guard(const write_guard&)            = delete;
         write_guard& operator=(const write_guard&) = delete;
+        write_guard(write_guard&&)                 = delete;
+        write_guard& operator=(write_guard&&)      = delete;
 
     private:
         rwlock& rw_;
@@ -162,8 +166,8 @@ public:
     [[nodiscard]] bool valid() const noexcept { return valid_; }
 
 private:
-    bool                           valid_;
-    active_traits::rwlock_handle_t handle_;
+    bool                           valid_{false};
+    active_traits::rwlock_handle_t handle_{};
 };
 
 /// @} // osal_rwlock

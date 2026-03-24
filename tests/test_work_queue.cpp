@@ -28,14 +28,14 @@ TEST_CASE("work_queue: submit and flush single item")
     osal::work_queue wq{wq_stack, sizeof(wq_stack), 8, "test_wq"};
     REQUIRE(wq.valid());
 
-    static volatile bool executed = false;
-    executed = false;
+    static std::atomic<bool> executed{false};
+    executed.store(false);
 
-    auto cb = [](void*) { executed = true; };
+    auto cb = [](void*) { executed.store(true); };
     REQUIRE(wq.submit(cb).ok());
     REQUIRE(wq.flush(osal::milliseconds{2000}).ok());
 
-    CHECK(executed);
+    CHECK(executed.load());
 }
 
 TEST_CASE("work_queue: submit multiple items in order")
@@ -43,12 +43,17 @@ TEST_CASE("work_queue: submit multiple items in order")
     osal::work_queue wq{wq_stack, sizeof(wq_stack), 16, "test_wq"};
     REQUIRE(wq.valid());
 
-    static volatile int counter = 0;
-    static volatile int order[4] = {};
-    counter = 0;
+    static std::atomic<int> counter{0};
+    static int              order[4] = {};
+    counter.store(0);
+    for (int& value : order)
+    {
+        value = 0;
+    }
 
-    auto cb = [](void*) {
-        int idx = counter++;
+    auto cb = [](void*)
+    {
+        const int idx = counter.fetch_add(1);
         if (idx < 4)
         {
             order[idx] = idx + 1;
@@ -61,7 +66,7 @@ TEST_CASE("work_queue: submit multiple items in order")
     }
     REQUIRE(wq.flush(osal::milliseconds{2000}).ok());
 
-    CHECK(counter == 4);
+    CHECK(counter.load() == 4);
     CHECK(order[0] == 1);
     CHECK(order[1] == 2);
     CHECK(order[2] == 3);
@@ -77,15 +82,15 @@ TEST_CASE("work_queue: callback receives arg")
     osal::work_queue wq{wq_stack, sizeof(wq_stack), 8, "test_wq"};
     REQUIRE(wq.valid());
 
-    static volatile std::uint32_t value = 0;
-    value = 0;
+    static std::atomic<std::uint32_t> value{0U};
+    value.store(0U);
 
-    auto cb = [](void* arg) { *static_cast<volatile std::uint32_t*>(arg) = 0xBEEF; };
+    auto cb = [](void* arg) { static_cast<std::atomic<std::uint32_t>*>(arg)->store(0xBEEFU); };
 
-    REQUIRE(wq.submit(cb, const_cast<std::uint32_t*>(&value)).ok());
+    REQUIRE(wq.submit(cb, &value).ok());
     REQUIRE(wq.flush(osal::milliseconds{2000}).ok());
 
-    CHECK(value == 0xBEEF);
+    CHECK(value.load() == 0xBEEFU);
 }
 
 // ---------------------------------------------------------------------------
@@ -102,7 +107,7 @@ TEST_CASE("work_queue: pending count decreases after flush")
 
     // Submit a blocker that holds the worker thread, then submit more.
     auto blocker = [](void*) { gate.take_for(osal::milliseconds{2000}); };
-    auto noop = [](void*) {};
+    auto noop    = [](void*) {};
 
     REQUIRE(wq.submit(blocker).ok());
     osal::thread::sleep_for(osal::milliseconds{20});  // Let worker pick up blocker.
@@ -129,11 +134,11 @@ TEST_CASE("work_queue: cancel_all discards pending items")
     static osal::semaphore gate{osal::semaphore_type::binary, 0U};
     REQUIRE(gate.valid());
 
-    static volatile int exec_count = 0;
-    exec_count = 0;
+    static std::atomic<int> exec_count{0};
+    exec_count.store(0);
 
     auto blocker = [](void*) { gate.take_for(osal::milliseconds{2000}); };
-    auto counter = [](void*) { ++exec_count; };
+    auto counter = [](void*) { exec_count.fetch_add(1); };
 
     // Worker picks up blocker, then we enqueue items and cancel them.
     REQUIRE(wq.submit(blocker).ok());
@@ -149,7 +154,7 @@ TEST_CASE("work_queue: cancel_all discards pending items")
     REQUIRE(wq.flush(osal::milliseconds{2000}).ok());
 
     // The 5 counter items should NOT have executed (they were cancelled).
-    CHECK(exec_count == 0);
+    CHECK(exec_count.load() == 0);
 }
 
 // ---------------------------------------------------------------------------
@@ -165,7 +170,7 @@ TEST_CASE("work_queue: submit returns overflow when full")
     REQUIRE(gate.valid());
 
     auto blocker = [](void*) { gate.take_for(osal::milliseconds{2000}); };
-    auto noop = [](void*) {};
+    auto noop    = [](void*) {};
 
     // Fill the queue: 1 in the worker (blocker) + depth items in the ring.
     REQUIRE(wq.submit(blocker).ok());
@@ -181,7 +186,7 @@ TEST_CASE("work_queue: submit returns overflow when full")
     CHECK(r.code() == osal::error_code::overflow);
 
     // Clean up: cancel pending items so flush sentinel has room, then drain.
-    wq.cancel_all();
+    (void)wq.cancel_all();
     gate.give();
     REQUIRE(wq.flush(osal::milliseconds{2000}).ok());
 }
@@ -215,12 +220,12 @@ alignas(16) static std::uint8_t wq_cfg_stack[65536];
 TEST_CASE("work_queue: config construction")
 {
     const osal::work_queue_config cfg{wq_cfg_stack, sizeof(wq_cfg_stack), 8, "cfg_wq"};
-    osal::work_queue wq{cfg};
+    osal::work_queue              wq{cfg};
     CHECK(wq.valid());
 
     static volatile bool exec = false;
-    exec = false;
-    auto cb = [](void*) { exec = true; };
+    exec                      = false;
+    auto cb                   = [](void*) { exec = true; };
     REQUIRE(wq.submit(cb).ok());
     REQUIRE(wq.flush(osal::milliseconds{2000}).ok());
     CHECK(exec);

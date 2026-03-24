@@ -7,7 +7,7 @@
 
 TEST_CASE("monotonic_clock::now returns positive time")
 {
-    const auto t = osal::monotonic_clock::now();
+    const auto t  = osal::monotonic_clock::now();
     const auto ms = t.time_since_epoch().count();
     CHECK(ms >= 0);
 }
@@ -24,7 +24,7 @@ TEST_CASE("monotonic_clock elapsed time is reasonable")
 {
     const auto t1 = osal::monotonic_clock::now();
     osal::thread::sleep_for(osal::milliseconds{50});
-    const auto t2 = osal::monotonic_clock::now();
+    const auto t2      = osal::monotonic_clock::now();
     const auto elapsed = std::chrono::duration_cast<osal::milliseconds>(t2 - t1);
     // Allow generous tolerance for CI scheduling jitter.
     CHECK(elapsed.count() >= 40);

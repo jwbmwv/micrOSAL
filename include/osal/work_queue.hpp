@@ -157,14 +157,14 @@ public:
     /// @param func  Function to call on the worker thread.
     /// @param arg   Argument passed to @p func.
     /// @return result::ok() on success; error_code::overflow if the queue is full.
-    result submit(work_func_t func, void* arg = nullptr) noexcept
+    [[nodiscard]] result submit(work_func_t func, void* arg = nullptr) noexcept
     {
         return osal_work_queue_submit(&handle_, func, arg);
     }
 
     /// @brief Submits a work item from ISR context.
     /// @return error_code::not_supported on backends without ISR-safe queues.
-    result submit_from_isr(work_func_t func, void* arg = nullptr) noexcept
+    [[nodiscard]] result submit_from_isr(work_func_t func, void* arg = nullptr) noexcept
     {
         return osal_work_queue_submit_from_isr(&handle_, func, arg);
     }
@@ -174,14 +174,14 @@ public:
     /// @brief Blocks until all currently-queued items have been executed.
     /// @param timeout  Maximum time to wait.
     /// @return result::ok() if flushed; error_code::timeout on expiry.
-    result flush(milliseconds timeout = milliseconds{5000}) noexcept
+    [[nodiscard]] result flush(milliseconds timeout = milliseconds{5000}) noexcept
     {
         const tick_t ticks = (timeout.count() < 0) ? WAIT_FOREVER : clock_utils::ms_to_ticks(timeout);
         return osal_work_queue_flush(&handle_, ticks);
     }
 
     /// @brief Cancels all pending (not yet started) items.
-    result cancel_all() noexcept { return osal_work_queue_cancel_all(&handle_); }
+    [[nodiscard]] result cancel_all() noexcept { return osal_work_queue_cancel_all(&handle_); }
 
     // ---- query -------------------------------------------------------------
 

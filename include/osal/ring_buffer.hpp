@@ -2,7 +2,8 @@
 /// @file ring_buffer.hpp
 /// @brief Lock-free single-producer / single-consumer ring buffer
 /// @details A fixed-capacity, cache-friendly SPSC queue that requires NO OS
-///          primitives — only C++17 std::atomic with acquire/release semantics.
+///          primitives — only standard @c std::atomic with acquire/release
+///          semantics under MicrOSAL's required feature-set baseline.
 ///          Ideal for ISR-to-task or task-to-task data transfer at high
 ///          throughput without any mutex or semaphore overhead.
 ///
@@ -36,10 +37,13 @@
 /// @ingroup osal_ring_buffer
 #pragma once
 
-#include <atomic>
+#include "concepts.hpp"
+
+#include "detail/atomic_compat.hpp"
 #include <cstddef>
 #include <cstdint>
-#include <type_traits>
+#include <cstring>
+#include <span>
 
 namespace osal
 {
@@ -49,19 +53,19 @@ namespace osal
 /// @{
 
 /// @brief Lock-free single-producer / single-consumer ring buffer.
-/// @tparam T  Element type (must be trivially copyable).
+/// @tparam T  Element type satisfying @c osal::ring_buffer_element.
 /// @tparam N  Number of usable slots (actual internal array is N+1).
-template<typename T, std::size_t N>
+template<ring_buffer_element T, std::size_t N>
+    requires positive_extent<N>
 class ring_buffer
 {
-    static_assert(N > 0, "ring_buffer capacity must be > 0");
-    static_assert(std::is_trivially_copyable_v<T>, "T must be trivially copyable");
-
 public:
     // ---- construction ------------------------------------------------------
 
     /// @brief Constructs an empty ring buffer.
-    ring_buffer() noexcept : head_(0), tail_(0) {}
+    ring_buffer() noexcept = default;
+
+    ~ring_buffer() noexcept = default;
 
     ring_buffer(const ring_buffer&)            = delete;
     ring_buffer& operator=(const ring_buffer&) = delete;
@@ -86,6 +90,36 @@ public:
         return true;
     }
 
+    /// @brief Push up to @p count items into the buffer.
+    /// @param items  Source array of items to enqueue.
+    /// @param count  Number of items to attempt to enqueue.
+    /// @return Number of items actually enqueued (may be less than @p count).
+    std::size_t try_push_n(const T* items, std::size_t count) noexcept
+    {
+        const std::size_t h     = head_.load(std::memory_order_relaxed);
+        const std::size_t t     = tail_.load(std::memory_order_acquire);
+        const std::size_t avail = (t > h) ? (t - h - 1U) : (kCapacity - h + t - 1U);
+        const std::size_t n     = min_of(count, avail);
+        if (n == 0U)
+        {
+            return 0U;
+        }
+        const std::size_t first = min_of(n, kCapacity - h);
+        std::memcpy(&buf_[h], items, first * sizeof(T));
+        if (first < n)
+        {
+            std::memcpy(&buf_[0], items + first, (n - first) * sizeof(T));
+        }
+        const std::size_t new_h = (h + n < kCapacity) ? (h + n) : (h + n - kCapacity);
+        head_.store(new_h, std::memory_order_release);
+        return n;
+    }
+
+    /// @brief Push up to @p items.size() items into the buffer.
+    /// @param items  Span of items to enqueue.
+    /// @return Number of items actually enqueued.
+    std::size_t try_push_n(std::span<const T> items) noexcept { return try_push_n(items.data(), items.size()); }
+
     // ---- consumer API (single thread only) ---------------------------------
 
     /// @brief Pop the oldest item from the buffer.
@@ -102,6 +136,36 @@ public:
         tail_.store(increment(t), std::memory_order_release);
         return true;
     }
+
+    /// @brief Pop up to @p count items from the buffer.
+    /// @param[out] items  Destination array for dequeued items.
+    /// @param      count  Maximum number of items to dequeue.
+    /// @return Number of items actually dequeued (may be less than @p count).
+    std::size_t try_pop_n(T* items, std::size_t count) noexcept
+    {
+        const std::size_t t     = tail_.load(std::memory_order_relaxed);
+        const std::size_t h     = head_.load(std::memory_order_acquire);
+        const std::size_t avail = (h >= t) ? (h - t) : (kCapacity - t + h);
+        const std::size_t n     = min_of(count, avail);
+        if (n == 0U)
+        {
+            return 0U;
+        }
+        const std::size_t first = min_of(n, kCapacity - t);
+        std::memcpy(items, &buf_[t], first * sizeof(T));
+        if (first < n)
+        {
+            std::memcpy(items + first, &buf_[0], (n - first) * sizeof(T));
+        }
+        const std::size_t new_t = (t + n < kCapacity) ? (t + n) : (t + n - kCapacity);
+        tail_.store(new_t, std::memory_order_release);
+        return n;
+    }
+
+    /// @brief Pop up to @p items.size() items from the buffer.
+    /// @param[out] items  Span to receive dequeued items.
+    /// @return Number of items actually dequeued.
+    std::size_t try_pop_n(std::span<T> items) noexcept { return try_pop_n(items.data(), items.size()); }
 
     /// @brief Peek at the oldest item without removing it.
     /// @param[out] item  Receives a copy of the head item.
@@ -127,7 +191,9 @@ public:
         const std::size_t h = head_.load(std::memory_order_acquire);
         const std::size_t t = tail_.load(std::memory_order_acquire);
         if (h >= t)
+        {
             return h - t;
+        }
         return kCapacity - t + h;
     }
 
@@ -159,9 +225,12 @@ private:
     /// @brief Advance an index, wrapping around.
     static constexpr std::size_t increment(std::size_t idx) noexcept { return (idx + 1 == kCapacity) ? 0 : idx + 1; }
 
+    /// @brief Branchless min without pulling in <algorithm>.
+    static constexpr std::size_t min_of(std::size_t a, std::size_t b) noexcept { return (a < b) ? a : b; }
+
     T                        buf_[kCapacity]{};
-    std::atomic<std::size_t> head_;
-    std::atomic<std::size_t> tail_;
+    std::atomic<std::size_t> head_{0U};
+    std::atomic<std::size_t> tail_{0U};
 };
 
 /// @} // osal_ring_buffer

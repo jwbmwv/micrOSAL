@@ -65,15 +65,100 @@ static k_timeout_t to_zephyr_timeout(osal::tick_t t) noexcept
 #define ZK_TIMER(h) static_cast<struct k_timer*>((h)->native)
 #define ZK_THREAD(h) static_cast<struct k_thread*>((h)->native)
 
+#if defined(CONFIG_MICRO_OSAL) && (!defined(CONFIG_MULTITHREADING) || (CONFIG_MULTITHREADING != 1))
+#error "MicrOSAL Zephyr backend requires CONFIG_MULTITHREADING=y."
+#endif
+
+#if defined(CONFIG_MICRO_OSAL) && (!defined(CONFIG_EVENTS) || (CONFIG_EVENTS != 1))
+#error "MicrOSAL Zephyr backend requires CONFIG_EVENTS=y for native event flags."
+#endif
+
 // ---------------------------------------------------------------------------
 // Static kernel object pools — one entry per concurrent object.
-// For production use, adjust pool sizes or use a proper allocator.
+// For production use, adjust the Zephyr Kconfig symbols or override the
+// OSAL_ZEPHYR_* macros before compiling this translation unit.
 // ---------------------------------------------------------------------------
+#ifndef OSAL_ZEPHYR_MAX_MUTEXES
+#if defined(CONFIG_MICRO_OSAL_MUTEX_MAX)
+#define OSAL_ZEPHYR_MAX_MUTEXES CONFIG_MICRO_OSAL_MUTEX_MAX
+#else
 #define OSAL_ZEPHYR_MAX_MUTEXES 16
+#endif
+#endif
+
+#ifndef OSAL_ZEPHYR_MAX_SEMS
+#if defined(CONFIG_MICRO_OSAL_SEMAPHORE_MAX)
+#define OSAL_ZEPHYR_MAX_SEMS CONFIG_MICRO_OSAL_SEMAPHORE_MAX
+#else
 #define OSAL_ZEPHYR_MAX_SEMS 16
+#endif
+#endif
+
+#ifndef OSAL_ZEPHYR_MAX_QUEUES
+#if defined(CONFIG_MICRO_OSAL_QUEUE_MAX)
+#define OSAL_ZEPHYR_MAX_QUEUES CONFIG_MICRO_OSAL_QUEUE_MAX
+#else
 #define OSAL_ZEPHYR_MAX_QUEUES 8
+#endif
+#endif
+
+#ifndef OSAL_ZEPHYR_MAX_TIMERS
+#if defined(CONFIG_MICRO_OSAL_TIMER_MAX)
+#define OSAL_ZEPHYR_MAX_TIMERS CONFIG_MICRO_OSAL_TIMER_MAX
+#else
 #define OSAL_ZEPHYR_MAX_TIMERS 8
+#endif
+#endif
+
+#ifndef OSAL_ZEPHYR_MAX_THREADS
+#if defined(CONFIG_MICRO_OSAL_THREAD_MAX)
+#define OSAL_ZEPHYR_MAX_THREADS CONFIG_MICRO_OSAL_THREAD_MAX
+#else
 #define OSAL_ZEPHYR_MAX_THREADS 8
+#endif
+#endif
+
+#ifndef OSAL_ZEPHYR_MAX_EVENTS
+#if defined(CONFIG_MICRO_OSAL_EVENT_FLAGS_MAX)
+#define OSAL_ZEPHYR_MAX_EVENTS CONFIG_MICRO_OSAL_EVENT_FLAGS_MAX
+#else
+#define OSAL_ZEPHYR_MAX_EVENTS 8
+#endif
+#endif
+
+#ifndef OSAL_ZEPHYR_MAX_CONDVARS
+#if defined(CONFIG_MICRO_OSAL_CONDVAR_MAX)
+#define OSAL_ZEPHYR_MAX_CONDVARS CONFIG_MICRO_OSAL_CONDVAR_MAX
+#else
+#define OSAL_ZEPHYR_MAX_CONDVARS 16
+#endif
+#endif
+
+#ifndef OSAL_ZEPHYR_MAX_WORK_QUEUES
+#if defined(CONFIG_MICRO_OSAL_WORK_QUEUE_MAX)
+#define OSAL_ZEPHYR_MAX_WORK_QUEUES CONFIG_MICRO_OSAL_WORK_QUEUE_MAX
+#else
+#define OSAL_ZEPHYR_MAX_WORK_QUEUES 4
+#endif
+#endif
+
+#ifndef OSAL_ZEPHYR_WQ_MAX_DEPTH
+#if defined(CONFIG_MICRO_OSAL_WORK_QUEUE_DEPTH)
+#define OSAL_ZEPHYR_WQ_MAX_DEPTH CONFIG_MICRO_OSAL_WORK_QUEUE_DEPTH
+#else
+#define OSAL_ZEPHYR_WQ_MAX_DEPTH 32
+#endif
+#endif
+
+static_assert(OSAL_ZEPHYR_MAX_MUTEXES > 0, "OSAL_ZEPHYR_MAX_MUTEXES must be > 0.");
+static_assert(OSAL_ZEPHYR_MAX_SEMS > 0, "OSAL_ZEPHYR_MAX_SEMS must be > 0.");
+static_assert(OSAL_ZEPHYR_MAX_QUEUES > 0, "OSAL_ZEPHYR_MAX_QUEUES must be > 0.");
+static_assert(OSAL_ZEPHYR_MAX_TIMERS > 0, "OSAL_ZEPHYR_MAX_TIMERS must be > 0.");
+static_assert(OSAL_ZEPHYR_MAX_THREADS > 0, "OSAL_ZEPHYR_MAX_THREADS must be > 0.");
+static_assert(OSAL_ZEPHYR_MAX_EVENTS > 0, "OSAL_ZEPHYR_MAX_EVENTS must be > 0.");
+static_assert(OSAL_ZEPHYR_MAX_CONDVARS > 0, "OSAL_ZEPHYR_MAX_CONDVARS must be > 0.");
+static_assert(OSAL_ZEPHYR_MAX_WORK_QUEUES > 0, "OSAL_ZEPHYR_MAX_WORK_QUEUES must be > 0.");
+static_assert(OSAL_ZEPHYR_WQ_MAX_DEPTH > 0, "OSAL_ZEPHYR_WQ_MAX_DEPTH must be > 0.");
 
 static struct k_mutex  zephyr_mutexes[OSAL_ZEPHYR_MAX_MUTEXES];
 static bool            zephyr_mutex_used[OSAL_ZEPHYR_MAX_MUTEXES];
@@ -840,7 +925,6 @@ extern "C"
     // Event flags (native — Zephyr k_event, requires CONFIG_EVENTS=y)
     // ---------------------------------------------------------------------------
 
-#define OSAL_ZEPHYR_MAX_EVENTS 8
     static struct k_event zephyr_events[OSAL_ZEPHYR_MAX_EVENTS];
     static bool           zephyr_event_used[OSAL_ZEPHYR_MAX_EVENTS];
 
@@ -1097,8 +1181,7 @@ extern "C"
         bool             valid;
     };
 
-    static constexpr std::size_t OSAL_ZEPHYR_MAX_CONDVARS = 16U;
-    static zephyr_condvar_obj    condvar_pool[OSAL_ZEPHYR_MAX_CONDVARS];
+    static zephyr_condvar_obj condvar_pool[OSAL_ZEPHYR_MAX_CONDVARS];
 
     static zephyr_condvar_obj* condvar_alloc() noexcept
     {
@@ -1196,13 +1279,6 @@ extern "C"
     // ---------------------------------------------------------------------------
     // Work queue (native — Zephyr k_work_queue)
     // ---------------------------------------------------------------------------
-
-#ifndef OSAL_ZEPHYR_MAX_WORK_QUEUES
-#define OSAL_ZEPHYR_MAX_WORK_QUEUES 4
-#endif
-#ifndef OSAL_ZEPHYR_WQ_MAX_DEPTH
-#define OSAL_ZEPHYR_WQ_MAX_DEPTH 32
-#endif
 
     struct zephyr_wq_entry
     {

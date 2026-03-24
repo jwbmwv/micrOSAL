@@ -31,6 +31,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <span>
 
 #ifndef OSAL_OBJECT_WAIT_SET_MAX_ENTRIES
 #define OSAL_OBJECT_WAIT_SET_MAX_ENTRIES 16U
@@ -52,6 +53,13 @@ namespace osal
 ///          with one OSAL object and a readiness predicate. The wait set does
 ///          not consume data or events unless the specific registration opts
 ///          into clear-on-exit behavior for event flags or notifications.
+///
+/// @warning **Polling cost:** This implementation polls registered objects at
+///          a fixed interval (default `OSAL_OBJECT_WAIT_SET_POLL_INTERVAL_MS`
+///          = 1 ms).  This is portable but trades CPU cycles for simplicity.
+///          On battery-powered or latency-sensitive systems, consider tuning
+///          the poll interval or using the native `wait_set` primitive when
+///          the backend provides one (`capabilities<B>::has_wait_set`).
 class object_wait_set
 {
 public:
@@ -66,13 +74,13 @@ public:
 
     /// @brief Report whether the wait set can be used.
     /// @return Always `true`; this type has no backend resources of its own.
-    [[nodiscard]] bool valid() const noexcept { return true; }
+    [[nodiscard]] static constexpr bool valid() noexcept { return true; }
 
     /// @brief Register a queue and mark it ready when non-empty.
     /// @param q Queue to observe.
     /// @param id Caller-defined identifier returned by wait().
     /// @return `error_code::ok` on success or an initialization/capacity error.
-    template<typename T, queue_depth_t N>
+    template<queue_element T, queue_depth_t N>
     result add(queue<T, N>& q, int id) noexcept
     {
         if (!q.valid())
@@ -86,7 +94,7 @@ public:
     /// @param mb Mailbox to observe.
     /// @param id Caller-defined identifier returned by wait().
     /// @return `error_code::ok` on success or an initialization/capacity error.
-    template<typename T>
+    template<queue_element T>
     result add(mailbox<T>& mb, int id) noexcept
     {
         if (!mb.valid())
@@ -294,6 +302,12 @@ public:
         }
     }
 
+    /// @brief Span-based wait overload for fixed-capacity caller buffers.
+    result wait(std::span<int> ready_ids, std::size_t& n_ready, milliseconds timeout = milliseconds{-1}) noexcept
+    {
+        return wait(ready_ids.data(), ready_ids.size(), n_ready, timeout);
+    }
+
 private:
     enum class wait_kind : std::uint8_t
     {
@@ -350,13 +364,13 @@ private:
         return error_code::overflow;
     }
 
-    template<typename T, queue_depth_t N>
+    template<queue_element T, queue_depth_t N>
     static bool queue_probe(entry_state& entry) noexcept
     {
         return !static_cast<queue<T, N>*>(entry.object)->empty();
     }
 
-    template<typename T>
+    template<queue_element T>
     static bool mailbox_probe(entry_state& entry) noexcept
     {
         return !static_cast<mailbox<T>*>(entry.object)->empty();

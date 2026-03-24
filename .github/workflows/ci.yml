@@ -1,13 +1,11 @@
 # SPDX-License-Identifier: Apache-2.0
 # CI workflow for MicrOSAL
-# Runs on every push/PR to main.
+# Runs on every push and PR.
 name: CI
 
 on:
   push:
-    branches: [main]
   pull_request:
-    branches: [main]
   workflow_dispatch:
     # Optional: Add inputs here if needed
 
@@ -61,6 +59,7 @@ jobs:
         run: |
           cmake -B build \
             -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_COMPILE_WARNING_AS_ERROR=ON \
             -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
             -DOSAL_BACKEND=${{ matrix.backend }} \
             -DOSAL_BUILD_TESTS=ON
@@ -103,32 +102,39 @@ jobs:
         # Remove || true once the codebase is tidy-clean.
 
   # -------------------------------------------------------------------
-  # Compile-check only: backends without a full simulation port
+  # Sanitiser run (ASan + UBSan on LINUX backend)
   # -------------------------------------------------------------------
-  compile-check:
-    name: "Compile check (${{ matrix.backend }})"
+  sanitizers:
+    name: "ASan + UBSan"
     runs-on: ubuntu-24.04
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          # ThreadX, PX5, VxWorks etc. need proprietary headers — verify only
-          # that the CMake plumbing and our public header structure compile.
-          - backend: LINUX
-            extra_args: ""
+    needs: build-test
     steps:
       - uses: actions/checkout@v4
+
       - name: Configure
         run: |
           cmake -B build \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DOSAL_BACKEND=${{ matrix.backend }} \
-            ${{ matrix.extra_args }}
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer" \
+            -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined" \
+            -DOSAL_BACKEND=LINUX \
+            -DOSAL_BUILD_TESTS=ON
+
       - name: Build
         run: cmake --build build -j $(nproc)
 
+      - name: Test under sanitizers
+        env:
+          ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+        run: ctest --test-dir build --output-on-failure --timeout 120
+
   # -------------------------------------------------------------------
-  # FreeRTOS v11 — POSIX simulation port (runs as a Linux process)
+  # Backends that require proprietary SDK headers or non-Ubuntu host
+  # toolchains are intentionally documented rather than built here.
+  # ThreadX, PX5, VxWorks, Micrium, ChibiOS, embOS, CMSIS-RTOS v1/v2,
+  # and QNX need external SDKs or licensed environments not available on
+  # GitHub-hosted runners.
   # -------------------------------------------------------------------
   freertos-test:
     name: "FreeRTOS v11 test (POSIX sim)"
@@ -210,7 +216,9 @@ jobs:
           CONFIG_TESTING_MICROSAL_TEST_PRIORITY=100
           CONFIG_CPP=y
           CONFIG_HAVE_CXX=y
-          CONFIG_STD_CXX17=y
+          CONFIG_LIBCXXTOOLCHAIN=y
+          CONFIG_LIBSUPCXX_TOOLCHAIN=y
+          CONFIG_CXX_STANDARD="gnu++20"
           EOF
           cmake build   # re-run to apply updated .config
 

@@ -10,4 +10,5 @@
 #endif
 
 #define OSAL_POSIXLIKE_BACKEND_SELECTED 1
+// NOLINTNEXTLINE(bugprone-suspicious-include)
 #include "../posix/posix_backend.cpp"

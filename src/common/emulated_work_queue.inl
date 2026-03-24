@@ -13,7 +13,9 @@
 ///
 /// @copyright Copyright (c) 2026 James Baldwin. AI-assisted — see NOTICE.
 
-#include <atomic>
+#pragma once
+
+#include <osal/detail/atomic_compat.hpp>
 
 // ---------------------------------------------------------------------------
 // Work queue (emulated — OSAL thread + mutex + semaphore + ring buffer)
@@ -46,7 +48,7 @@ struct emulated_wq_obj
     osal::active_traits::semaphore_handle_t not_empty;  ///< Counting sem — items available.
     osal::active_traits::semaphore_handle_t flush_sem;  ///< Binary sem — flush complete.
 
-    volatile bool stop;
+    std::atomic<bool> stop;
 };
 
 static emulated_wq_obj  emu_wq_pool[OSAL_EMULATED_WQ_POOL_SIZE];

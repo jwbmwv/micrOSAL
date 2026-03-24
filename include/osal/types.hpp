@@ -2,8 +2,10 @@
 /// @file types.hpp
 /// @brief Common OSAL type definitions
 /// @details Provides tick counts, durations, time-points, and priority types used
-///          throughout the OSAL.  All types are plain value types with no dynamic
-///          allocation.
+///          throughout the OSAL. Compile-time tick-width selections are
+///          validated with @c consteval helpers so misconfiguration fails during
+///          translation, not at runtime. All types remain plain value types with
+///          no dynamic allocation.
 /// @copyright Copyright (c) 2026 James Baldwin. AI-assisted — see NOTICE.
 /// @author James Baldwin
 /// @ingroup osal_core
@@ -12,7 +14,14 @@
 #include <cstdint>
 #include <cstddef>
 #include <limits>
+#include <array>
+#include <span>
+
+#if defined(OSAL_BACKEND_NUTTX) && defined(__GNUC__)
+#include <bits/chrono.h>
+#else
 #include <chrono>
+#endif
 
 namespace osal
 {
@@ -25,10 +34,53 @@ namespace osal
 // Tick / duration types
 // ---------------------------------------------------------------------------
 
-#if ((defined(OSAL_CFG_TICK_TYPE_U16) ? 1 : 0) + (defined(OSAL_CFG_TICK_TYPE_U32) ? 1 : 0) + \
-     (defined(OSAL_CFG_TICK_TYPE_U64) ? 1 : 0)) > 1
-#error "OSAL: only one of OSAL_CFG_TICK_TYPE_U16/U32/U64 may be defined"
+namespace detail
+{
+
+template<std::size_t N>
+consteval std::size_t count_selected_tick_types(std::span<const bool, N> flags) noexcept
+{
+    std::size_t count = 0U;
+    for (const bool flag : flags)
+    {
+        count += flag ? 1U : 0U;
+    }
+    return count;
+}
+
+inline constexpr std::array<bool, 3U> tick_type_selection_flags{
+#if defined(OSAL_CFG_TICK_TYPE_U16)
+    true,
+#else
+    false,
 #endif
+#if defined(OSAL_CFG_TICK_TYPE_U32)
+    true,
+#else
+    false,
+#endif
+#if defined(OSAL_CFG_TICK_TYPE_U64)
+    true,
+#else
+    false,
+#endif
+};
+
+consteval bool valid_native_tick_bits(std::size_t bits) noexcept
+{
+    return (bits == 16U) || (bits == 32U) || (bits == 64U);
+}
+
+template<typename Tick>
+consteval std::size_t tick_storage_bits() noexcept
+{
+    return sizeof(Tick) * 8U;
+}
+
+}  // namespace detail
+
+static_assert(detail::count_selected_tick_types(std::span{detail::tick_type_selection_flags}) <= 1U,
+              "OSAL: only one of OSAL_CFG_TICK_TYPE_U16/U32/U64 may be defined");
 
 /// @brief Portable timeout unit used at the OSAL C-ABI boundary.
 /// @details This is the OSAL's internal timeout representation, **not** the
@@ -55,9 +107,9 @@ using tick_t = std::uint32_t;
 #endif
 
 #if defined(OSAL_CFG_NATIVE_TICK_BITS)
-static_assert(OSAL_CFG_NATIVE_TICK_BITS == 16 || OSAL_CFG_NATIVE_TICK_BITS == 32 || OSAL_CFG_NATIVE_TICK_BITS == 64,
+static_assert(detail::valid_native_tick_bits(OSAL_CFG_NATIVE_TICK_BITS),
               "OSAL_CFG_NATIVE_TICK_BITS must be 16, 32, or 64");
-static_assert((sizeof(tick_t) * 8U) <= static_cast<std::size_t>(OSAL_CFG_NATIVE_TICK_BITS),
+static_assert(detail::tick_storage_bits<tick_t>() <= static_cast<std::size_t>(OSAL_CFG_NATIVE_TICK_BITS),
               "OSAL tick_t is wider than backend native tick type; choose a narrower OSAL tick type or set correct "
               "OSAL_CFG_NATIVE_TICK_BITS for this backend");
 #endif

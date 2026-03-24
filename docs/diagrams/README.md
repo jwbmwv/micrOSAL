@@ -29,9 +29,9 @@ or the [online server](https://www.plantuml.com/plantuml/uml)).
 ## Quick render (CLI)
 
 ```bash
-# Render all diagrams to PNG
-plantuml -tpng docs/diagrams/*.puml
+# Render PNG, SVG, and PDF (when an SVG->PDF backend is available)
+./scripts/generate_diagrams.sh
 
-# Render to SVG
-plantuml -tsvg docs/diagrams/*.puml
+# Render print-oriented PNG, SVG, and PDF into docs/diagrams/print
+./scripts/generate_diagrams_print.sh
 ```

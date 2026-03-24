@@ -55,7 +55,7 @@ struct version_info
 ///   constexpr auto v = osal::version();
 ///   static_assert(v.major == 0 && v.minor == 0 && v.patch == 1);
 /// @endcode
-[[nodiscard]] inline constexpr version_info version() noexcept
+[[nodiscard]] constexpr version_info version() noexcept
 {
     return {MICRO_OSAL_VERSION_MAJOR, MICRO_OSAL_VERSION_MINOR, MICRO_OSAL_VERSION_PATCH};
 }

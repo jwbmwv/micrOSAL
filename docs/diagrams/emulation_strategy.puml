@@ -258,6 +258,65 @@ package "Read-Write Lock (osal::rwlock)" as rw_pkg #E8EAF6 {
 }
 
 ' ============================================================================
+' Barrier
+' ============================================================================
+package "Barrier (osal::barrier)" as br_pkg #E8F5E9 {
+
+        package "Native (6 backends)" as br_native #C8E6C9 {
+                [POSIX\npthread_barrier_t] as br_po
+                [Linux\npthread_barrier_t] as br_li
+                [NuttX\npthread_barrier_t] as br_nx
+                [QNX\npthread_barrier_t] as br_qx
+                [RTEMS\npthread_barrier_t] as br_rt
+                [INTEGRITY\npthread_barrier_t] as br_in
+        }
+
+        package "Emulated (11 backends)" as br_emu #FFECB3 {
+                component "emulated_barrier.inl" as br_inl #FFE082
+                note bottom of br_inl
+                    **Mutex + condvar + generation counter**
+                    ───────────────────────────────────────
+                    • Fixed-size barrier object pool
+                    • count/current/generation state
+                    • Last arriver releases all waiters
+                    • No heap allocation at runtime
+                    • Gives every backend portable rendezvous semantics
+                end note
+
+                [FreeRTOS] as br_fr
+                [Zephyr] as br_zy
+                [ThreadX] as br_tx
+                [PX5] as br_px
+                [VxWorks] as br_vx
+                [Micrium] as br_mi
+                [ChibiOS] as br_ch
+                [embOS] as br_em
+                [Bare-metal] as br_bm
+                [CMSIS-RTOS] as br_c1
+                [CMSIS-RTOS2] as br_c2
+        }
+
+        br_fr ..> br_inl : #include
+        br_zy ..> br_inl : #include
+        br_tx ..> br_inl : #include
+        br_px ..> br_inl : #include
+        br_vx ..> br_inl : #include
+        br_mi ..> br_inl : #include
+        br_ch ..> br_inl : #include
+        br_em ..> br_inl : #include
+        br_bm ..> br_inl : #include
+        br_c1 ..> br_inl : #include
+        br_c2 ..> br_inl : #include
+}
+
+note bottom of br_pkg
+    `osal::spinlock` and native `osal::wait_set`
+    remain intentionally non-emulated.
+    Use `is_supported` / `require_support()`
+    when those APIs are mandatory.
+end note
+
+' ============================================================================
 ' Event Flags
 ' ============================================================================
 package "Event Flags (osal::event_flags)" as ef_pkg #FFF3E0 {
@@ -323,6 +382,7 @@ package "Stream Buffer (osal::stream_buffer)" as sb_pkg #EDE7F6 {
           **SPSC ring + 2 binary semaphores**
           ─────────────────────────────────
           • Byte-oriented bulk read/write
+          • Two-chunk memcpy across wrap
           • data_sem: signals bytes available
           • space_sem: signals space available
           • TriggerLevel: min bytes before wake
@@ -423,6 +483,54 @@ package "Message Buffer (osal::message_buffer)" as mb_pkg #FCE4EC {
     mb_bm ..> mb_inl : #include
     mb_c1 ..> mb_inl : #include
     mb_c2 ..> mb_inl : #include
+}
+
+' ============================================================================
+' Notification
+' ============================================================================
+package "Notification (osal::notification<Slots>)" as notif_pkg #F3E5F5 {
+
+    package "Header-only composition (all 17 backends)" as notif_all #E1BEE7 {
+        component "notification.hpp" as notif_hdr #CE93D8
+        note bottom of notif_hdr
+            **Portable composition**
+            ───────────────────────
+            • osal::mutex + osal::condvar
+            • N indexed 32-bit slots
+            • set_bits / increment /
+              overwrite / no_overwrite actions
+            • No new backend ABI required
+        end note
+
+        [All 17 backends\nvia mutex + condvar] as notif_backends
+    }
+
+    notif_backends ..> notif_hdr : uses
+}
+
+' ============================================================================
+' Object Wait Set
+' ============================================================================
+package "Object Wait Set (osal::object_wait_set)" as owset_pkg #E8EAF6 {
+
+    package "Header-only polling (all 17 backends)" as owset_all #C5CAE9 {
+        component "object_wait_set.hpp" as owset_hdr #9FA8DA
+        note bottom of owset_hdr
+            **Polling multiplexer**
+            ──────────────────────
+            • Polls non-destructive readiness
+              queries on OSAL objects
+            • Supports queue, mailbox, event_flags,
+              stream_buffer, message_buffer,
+              work_queue, delayable_work,
+              notification
+            • No backend ABI; pure C++
+        end note
+
+        [All 17 backends\nvia readiness polling] as owset_backends
+    }
+
+    owset_backends ..> owset_hdr : uses
 }
 
 @enduml

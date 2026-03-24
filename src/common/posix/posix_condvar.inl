@@ -26,6 +26,8 @@
 ///          Prerequisites: <pthread.h> included, extern "C" scope active,
 ///                         cond_init_monotonic and OSAL_POSIX_COND_ABS defined.
 
+#pragma once
+
 // -------------------------------------------------------------------------
 // Condition variable (native — pthread_cond_t)
 // -------------------------------------------------------------------------

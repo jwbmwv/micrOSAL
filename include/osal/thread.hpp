@@ -113,10 +113,57 @@ struct thread_config
 class thread
 {
 public:
+    /// @brief True when the active backend supports timed thread join.
+    static constexpr bool supports_timed_join = supports_requirement<support_requirement::timed_join>;
+    /// @brief True when the active backend supports CPU affinity changes.
+    static constexpr bool supports_affinity = supports_requirement<support_requirement::thread_affinity>;
+    /// @brief True when the active backend supports runtime priority changes.
+    static constexpr bool supports_dynamic_priority =
+        supports_requirement<support_requirement::dynamic_thread_priority>;
+    /// @brief True when the active backend supports direct task notifications.
+    static constexpr bool supports_task_notification = supports_requirement<support_requirement::task_notification>;
+    /// @brief True when the active backend supports suspend/resume.
+    static constexpr bool supports_suspend_resume = supports_requirement<support_requirement::thread_suspend_resume>;
+
+    /// @brief Enforce timed-join support at compile time.
+    template<typename Backend = active_backend>
+    static consteval void require_timed_join_support()
+    {
+        require_backend_support<support_requirement::timed_join, Backend>();
+    }
+
+    /// @brief Enforce CPU-affinity support at compile time.
+    template<typename Backend = active_backend>
+    static consteval void require_affinity_support()
+    {
+        require_backend_support<support_requirement::thread_affinity, Backend>();
+    }
+
+    /// @brief Enforce runtime-priority support at compile time.
+    template<typename Backend = active_backend>
+    static consteval void require_dynamic_priority_support()
+    {
+        require_backend_support<support_requirement::dynamic_thread_priority, Backend>();
+    }
+
+    /// @brief Enforce task-notification support at compile time.
+    template<typename Backend = active_backend>
+    static consteval void require_task_notification_support()
+    {
+        require_backend_support<support_requirement::task_notification, Backend>();
+    }
+
+    /// @brief Enforce suspend/resume support at compile time.
+    template<typename Backend = active_backend>
+    static consteval void require_suspend_resume_support()
+    {
+        require_backend_support<support_requirement::thread_suspend_resume, Backend>();
+    }
+
     // ---- construction / destruction ----------------------------------------
 
     /// @brief Default constructor.  Thread is not running.
-    thread() noexcept : valid_(false), handle_{} {}
+    thread() noexcept = default;
 
     /// @brief Destructor.
     /// @warning Destroying a running thread that has not been joined or detached
@@ -166,7 +213,7 @@ public:
     /// @blocking   Up to timeout.
     result join_for(milliseconds timeout) noexcept
     {
-        if constexpr (active_capabilities::has_timed_join)
+        if constexpr (timed_join_backend<active_backend>)
         {
             const tick_t ticks = clock_utils::ms_to_ticks(timeout);
             const result r     = osal_thread_join(&handle_, ticks);
@@ -230,7 +277,7 @@ public:
     ///         does not support dynamic priority changes.
     result set_priority(priority_t priority) noexcept
     {
-        if constexpr (active_capabilities::has_dynamic_thread_priority)
+        if constexpr (dynamic_thread_priority_backend<active_backend>)
         {
             return osal_thread_set_priority(&handle_, priority);
         }
@@ -247,7 +294,7 @@ public:
     ///         does not support affinity.
     result set_affinity(affinity_t affinity) noexcept
     {
-        if constexpr (active_capabilities::has_thread_affinity)
+        if constexpr (thread_affinity_backend<active_backend>)
         {
             return osal_thread_set_affinity(&handle_, affinity);
         }
@@ -263,7 +310,7 @@ public:
     /// @return result::ok() on success; error_code::not_supported if unavailable.
     result notify(std::uint32_t value = 0U) noexcept
     {
-        if constexpr (active_capabilities::has_task_notification)
+        if constexpr (task_notification_backend<active_backend>)
         {
             return osal_task_notify(&handle_, value);
         }
@@ -279,7 +326,7 @@ public:
     /// @return result::ok() on success; error_code::not_supported if unavailable.
     result notify_isr(std::uint32_t value = 0U) noexcept
     {
-        if constexpr (active_capabilities::has_task_notification)
+        if constexpr (task_notification_backend<active_backend>)
         {
             return osal_task_notify_isr(&handle_, value);
         }
@@ -297,7 +344,7 @@ public:
     ///         error_code::not_supported if the backend lacks task notifications.
     static result wait_for_notification(milliseconds timeout, std::uint32_t* value_out = nullptr) noexcept
     {
-        if constexpr (active_capabilities::has_task_notification)
+        if constexpr (task_notification_backend<active_backend>)
         {
             const tick_t ticks = clock_utils::ms_to_ticks(timeout);
             return osal_task_notify_wait(0U, 0xFFFFFFFFU, value_out, ticks);
@@ -313,12 +360,12 @@ public:
     /// @brief Suspends the target thread until resumed.
     /// @return result::ok() on success; error_code::not_supported if unsupported
     ///         by the active backend.
-    result suspend() noexcept { return osal_thread_suspend(&handle_); }
+    [[nodiscard]] result suspend() noexcept { return osal_thread_suspend(&handle_); }
 
     /// @brief Resumes a previously suspended thread.
     /// @return result::ok() on success; error_code::not_supported if unsupported
     ///         by the active backend.
-    result resume() noexcept { return osal_thread_resume(&handle_); }
+    [[nodiscard]] result resume() noexcept { return osal_thread_resume(&handle_); }
 
     // ---- query -------------------------------------------------------------
 
@@ -345,8 +392,8 @@ public:
             return;
         }
         // osal_thread_sleep_ms takes uint32_t — saturate to prevent silent wrap.
-        constexpr milliseconds::rep kMax = static_cast<milliseconds::rep>(std::numeric_limits<std::uint32_t>::max());
-        const auto                  ms   = (duration.count() > kMax) ? kMax : duration.count();
+        constexpr auto kMax = static_cast<milliseconds::rep>(std::numeric_limits<std::uint32_t>::max());
+        const auto     ms   = (duration.count() > kMax) ? kMax : duration.count();
         osal_thread_sleep_ms(static_cast<std::uint32_t>(ms));
     }
 
@@ -375,8 +422,8 @@ public:
     }
 
 private:
-    bool                           valid_;
-    active_traits::thread_handle_t handle_;
+    bool                           valid_{false};
+    active_traits::thread_handle_t handle_{};
 };
 
 /// @} // osal_thread

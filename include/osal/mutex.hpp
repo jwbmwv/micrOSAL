@@ -205,6 +205,8 @@ public:
 
         lock_guard(const lock_guard&)            = delete;
         lock_guard& operator=(const lock_guard&) = delete;
+        lock_guard(lock_guard&&)                 = delete;
+        lock_guard& operator=(lock_guard&&)      = delete;
 
     private:
         mutex& m_;

@@ -18,6 +18,8 @@
 ///                         scope active, cond_init_monotonic and
 ///                         OSAL_POSIX_COND_ABS defined.
 
+#pragma once
+
 // -------------------------------------------------------------------------
 // Work queue (emulated — dedicated pthread + ring buffer)
 // -------------------------------------------------------------------------

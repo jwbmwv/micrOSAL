@@ -23,7 +23,6 @@
 
 #include "types.hpp"
 #include <cstdint>
-#include <chrono>
 
 extern "C"
 {

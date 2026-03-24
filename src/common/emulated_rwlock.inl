@@ -17,6 +17,8 @@
 ///
 /// @copyright Copyright (c) 2026 James Baldwin. AI-assisted — see NOTICE.
 
+#pragma once
+
 #include <atomic>
 
 // ---------------------------------------------------------------------------

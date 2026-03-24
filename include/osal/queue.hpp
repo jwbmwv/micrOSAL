@@ -15,8 +15,8 @@
 ///            capabilities<active_backend>::has_isr_queue == true.
 ///
 ///          MISRA C++ 2023 notes:
-///          - Template queue<T,N>: T must be a trivially copyable, standard-layout
-///            type (checked by static_assert).
+///          - Template queue<T,N>: T must satisfy the C++20
+///            @c osal::queue_element concept.
 ///          - All operations noexcept.
 /// @copyright Copyright (c) 2026 James Baldwin. AI-assisted — see NOTICE.
 /// @author James Baldwin
@@ -34,8 +34,8 @@
 
 extern "C"
 {
-    osal::result osal_queue_create(osal::active_traits::queue_handle_t* handle, void* buffer, std::size_t item_size,
-                                   std::size_t capacity) noexcept;
+    osal::result osal_queue_create(osal::active_traits::queue_handle_t* handle, void* buf, std::size_t item_sz,
+                                   std::size_t cap) noexcept;
 
     osal::result osal_queue_destroy(osal::active_traits::queue_handle_t* handle) noexcept;
 
@@ -66,15 +66,12 @@ namespace osal
 /// @{
 
 /// @brief Fixed-capacity, type-safe OSAL message queue with static storage.
-/// @tparam T  Message type.  Must be trivially copyable and standard-layout.
+/// @tparam T  Message type. Must satisfy @c osal::queue_element.
 /// @tparam N  Maximum number of items (queue depth).
-template<typename T, queue_depth_t N>
+template<queue_element T, queue_depth_t N>
+    requires valid_queue_depth<N>
 class queue
 {
-    static_assert(std::is_trivially_copyable<T>::value, "osal::queue: T must be trivially copyable.");
-    static_assert(std::is_standard_layout<T>::value, "osal::queue: T must be standard-layout.");
-    static_assert(N > 0U, "osal::queue: N must be > 0.");
-
 public:
     // ---- types -------------------------------------------------------------
     using value_type                        = T;
@@ -85,7 +82,7 @@ public:
     /// @brief Constructs and initialises the queue.
     /// @complexity O(1)
     /// @blocking   Never.
-    queue() noexcept : valid_(false), handle_{} { valid_ = osal_queue_create(&handle_, storage_, sizeof(T), N).ok(); }
+    queue() noexcept { valid_ = osal_queue_create(&handle_, storage_, sizeof(T), N).ok(); }
 
     /// @brief Destructs the queue.
     ~queue() noexcept
@@ -122,7 +119,7 @@ public:
     /// @return result::ok() on success.
     /// @complexity O(1)
     /// @blocking   Potentially blocking.
-    result send(const T& item) noexcept { return osal_queue_send(&handle_, &item, WAIT_FOREVER); }
+    [[nodiscard]] result send(const T& item) noexcept { return osal_queue_send(&handle_, &item, WAIT_FOREVER); }
 
     /// @brief Attempts to send without blocking.
     /// @param item  Item to enqueue.
@@ -139,7 +136,7 @@ public:
     /// @blocking   Up to timeout.
     bool send_for(const T& item, milliseconds timeout) noexcept
     {
-        if constexpr (active_capabilities::has_timed_queue)
+        if constexpr (timed_queue_backend<active_backend>)
         {
             const tick_t ticks = clock_utils::ms_to_ticks(timeout);
             return osal_queue_send(&handle_, &item, ticks).ok();
@@ -165,7 +162,7 @@ public:
     /// @return result::ok() on success.
     /// @complexity O(1)
     /// @blocking   Potentially blocking.
-    result receive(T& item) noexcept { return osal_queue_receive(&handle_, &item, WAIT_FOREVER); }
+    [[nodiscard]] result receive(T& item) noexcept { return osal_queue_receive(&handle_, &item, WAIT_FOREVER); }
 
     /// @brief Attempts to receive without blocking.
     /// @param[out] item  Destination.
@@ -177,7 +174,7 @@ public:
     /// @param      timeout Maximum wait time.
     bool receive_for(T& item, milliseconds timeout) noexcept
     {
-        if constexpr (active_capabilities::has_timed_queue)
+        if constexpr (timed_queue_backend<active_backend>)
         {
             const tick_t ticks = clock_utils::ms_to_ticks(timeout);
             return osal_queue_receive(&handle_, &item, ticks).ok();
@@ -199,10 +196,10 @@ public:
     bool peek(T& item) noexcept { return osal_queue_peek(&handle_, &item, NO_WAIT).ok(); }
 
 private:
-    bool                          valid_;
-    active_traits::queue_handle_t handle_;
+    bool                          valid_{false};
+    active_traits::queue_handle_t handle_{};
     /// @brief Static backing storage — N items of size sizeof(T).
-    alignas(T) std::uint8_t storage_[N * sizeof(T)];
+    alignas(T) std::uint8_t storage_[N * sizeof(T)]{};
 };
 
 /// @} // osal_queue

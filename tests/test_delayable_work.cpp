@@ -7,6 +7,8 @@
 
 #include <atomic>
 
+static_assert(osal::delayable_work::is_supported == osal::delayable_work_backend<osal::active_backend>);
+
 alignas(16) static std::uint8_t dw_stack[65536];
 
 TEST_CASE("delayable_work: construction succeeds")
@@ -17,13 +19,12 @@ TEST_CASE("delayable_work: construction succeeds")
         return;
     }
 
-    osal::work_queue    wq{dw_stack, sizeof(dw_stack), 8, "dw_wq"};
+    osal::work_queue     wq{dw_stack, sizeof(dw_stack), 8, "dw_wq"};
     osal::delayable_work work{wq, +[](void*) {}, nullptr, "dw"};
     REQUIRE(wq.valid());
     CHECK(work.valid());
     CHECK_FALSE(work.pending());
 }
-
 
 TEST_CASE("delayable_work: schedule and flush executes callback")
 {

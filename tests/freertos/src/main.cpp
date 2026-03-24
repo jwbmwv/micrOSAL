@@ -611,6 +611,56 @@ TEST_CASE("freertos/thread: sleep_for is non-trivial")
     CHECK(elapsed.count() >= 40);  // allow ± 20 % jitter
 }
 
+TEST_CASE("freertos/thread: task notification round-trip")
+{
+    if constexpr (!osal::thread::supports_task_notification)
+    {
+        MESSAGE("Skipped — backend lacks task notifications");
+        return;
+    }
+
+    osal::semaphore            ready{osal::semaphore_type::binary, 0U};
+    osal::semaphore            done{osal::semaphore_type::binary, 0U};
+    std::atomic<std::uint32_t> received{0U};
+    REQUIRE(ready.valid());
+    REQUIRE(done.valid());
+
+    struct ctx_t
+    {
+        osal::semaphore*            ready;
+        osal::semaphore*            done;
+        std::atomic<std::uint32_t>* received;
+    } ctx{&ready, &done, &received};
+
+    constexpr std::size_t           kStack = 65536U;
+    alignas(16) static std::uint8_t stack[kStack];
+    osal::thread_config             cfg{};
+    cfg.entry = [](void* arg)
+    {
+        auto* ctx = static_cast<ctx_t*>(arg);
+        ctx->ready->give();
+        std::uint32_t value = 0U;
+        if (osal::thread::wait_for_notification(osal::milliseconds{2000}, &value).ok())
+        {
+            ctx->received->store(value);
+        }
+        ctx->done->give();
+    };
+    cfg.arg         = &ctx;
+    cfg.priority    = osal::PRIORITY_NORMAL;
+    cfg.stack       = stack;
+    cfg.stack_bytes = kStack;
+    cfg.name        = "fr_notify";
+
+    osal::thread t;
+    REQUIRE(t.create(cfg).ok());
+    REQUIRE(ready.take_for(osal::milliseconds{2000}));
+    REQUIRE(t.notify(0xA5A5U).ok());
+    REQUIRE(done.take_for(osal::milliseconds{2000}));
+    CHECK(received.load() == 0xA5A5U);
+    REQUIRE(t.join().ok());
+}
+
 // --------------------------------------------------------------------------
 // osal::condvar
 // --------------------------------------------------------------------------
@@ -655,6 +705,55 @@ TEST_CASE("freertos/condvar: cross-thread notify")
 }
 
 // --------------------------------------------------------------------------
+// osal::barrier
+// --------------------------------------------------------------------------
+
+TEST_CASE("freertos/barrier: two-thread rendezvous")
+{
+    osal::barrier    barr{2U};
+    std::atomic<int> passed{0};
+    REQUIRE(barr.valid());
+
+    struct ctx_t
+    {
+        osal::barrier*    barrier;
+        std::atomic<int>* passed;
+    } ctx{&barr, &passed};
+
+    auto worker = [](void* arg)
+    {
+        auto*              ctx = static_cast<ctx_t*>(arg);
+        const osal::result r   = ctx->barrier->wait();
+        if (r.ok() || (r == osal::error_code::barrier_serial))
+        {
+            ctx->passed->fetch_add(1);
+        }
+    };
+
+    constexpr std::size_t           kStack = 65536U;
+    alignas(16) static std::uint8_t stack_a[kStack];
+    alignas(16) static std::uint8_t stack_b[kStack];
+    osal::thread_config             cfg{};
+    cfg.entry       = worker;
+    cfg.arg         = &ctx;
+    cfg.priority    = osal::PRIORITY_NORMAL;
+    cfg.stack       = stack_a;
+    cfg.stack_bytes = kStack;
+    cfg.name        = "fr_barr_a";
+
+    osal::thread ta;
+    osal::thread tb;
+    REQUIRE(ta.create(cfg).ok());
+    cfg.stack = stack_b;
+    cfg.name  = "fr_barr_b";
+    REQUIRE(tb.create(cfg).ok());
+
+    REQUIRE(ta.join().ok());
+    REQUIRE(tb.join().ok());
+    CHECK(passed.load() == 2);
+}
+
+// --------------------------------------------------------------------------
 // osal::notification
 // --------------------------------------------------------------------------
 
@@ -663,8 +762,8 @@ TEST_CASE("freertos/notification: notify and wait round-trip")
     static osal::notification<2> note;
     REQUIRE(note.valid());
 
-    static osal::semaphore ready{osal::semaphore_type::binary, 0U};
-    static osal::semaphore done{osal::semaphore_type::binary, 0U};
+    static osal::semaphore            ready{osal::semaphore_type::binary, 0U};
+    static osal::semaphore            done{osal::semaphore_type::binary, 0U};
     static std::atomic<std::uint32_t> received{0U};
     static std::atomic<bool>          wait_ok{false};
     REQUIRE(ready.valid());

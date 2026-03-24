@@ -43,6 +43,43 @@
 #include <cstring>
 #include <new>
 
+#if defined(OSAL_FREERTOS_DYNAMIC_ALLOC)
+#if !defined(configSUPPORT_DYNAMIC_ALLOCATION) || (configSUPPORT_DYNAMIC_ALLOCATION != 1)
+#error "MicrOSAL FreeRTOS backend with OSAL_FREERTOS_DYNAMIC_ALLOC requires configSUPPORT_DYNAMIC_ALLOCATION == 1."
+#endif
+#else
+#if !defined(configSUPPORT_STATIC_ALLOCATION) || (configSUPPORT_STATIC_ALLOCATION != 1)
+#error "MicrOSAL FreeRTOS backend requires configSUPPORT_STATIC_ALLOCATION == 1 for its static object pools."
+#endif
+#endif
+
+#if !defined(configUSE_MUTEXES) || (configUSE_MUTEXES != 1)
+#error "MicrOSAL FreeRTOS backend requires configUSE_MUTEXES == 1."
+#endif
+
+#if !defined(configUSE_RECURSIVE_MUTEXES) || (configUSE_RECURSIVE_MUTEXES != 1)
+#error "MicrOSAL FreeRTOS backend requires configUSE_RECURSIVE_MUTEXES == 1."
+#endif
+
+#if !defined(configUSE_COUNTING_SEMAPHORES) || (configUSE_COUNTING_SEMAPHORES != 1)
+#error "MicrOSAL FreeRTOS backend requires configUSE_COUNTING_SEMAPHORES == 1."
+#endif
+
+#if !defined(configUSE_TIMERS) || (configUSE_TIMERS != 1)
+#error "MicrOSAL FreeRTOS backend requires configUSE_TIMERS == 1."
+#endif
+
+#if !defined(configUSE_EVENT_GROUPS) || (configUSE_EVENT_GROUPS != 1)
+#error "MicrOSAL FreeRTOS backend requires configUSE_EVENT_GROUPS == 1."
+#endif
+
+#if !defined(configUSE_TASK_NOTIFICATIONS) || (configUSE_TASK_NOTIFICATIONS != 1)
+#error "MicrOSAL FreeRTOS backend requires configUSE_TASK_NOTIFICATIONS == 1."
+#endif
+
+static_assert(configMAX_PRIORITIES >= 2, "MicrOSAL FreeRTOS backend requires configMAX_PRIORITIES >= 2.");
+static_assert(configTICK_RATE_HZ > 0, "MicrOSAL FreeRTOS backend requires configTICK_RATE_HZ > 0.");
+
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
@@ -76,6 +113,8 @@ static constexpr TickType_t to_freertos_ticks(osal::tick_t t) noexcept
 #ifndef OSAL_FREERTOS_MAX_TIMERS
 #define OSAL_FREERTOS_MAX_TIMERS 8
 #endif
+
+static_assert(OSAL_FREERTOS_MAX_TIMERS > 0, "OSAL_FREERTOS_MAX_TIMERS must be > 0.");
 
 namespace
 {
@@ -116,6 +155,14 @@ static fr_cb_pair fr_cb_pairs[OSAL_FREERTOS_MAX_TIMERS];
 #ifndef OSAL_FREERTOS_MAX_THREADS
 #define OSAL_FREERTOS_MAX_THREADS 8
 #endif
+
+static_assert(OSAL_FREERTOS_MAX_MUTEXES > 0, "OSAL_FREERTOS_MAX_MUTEXES must be > 0.");
+static_assert(OSAL_FREERTOS_MAX_SEMAPHORES > 0, "OSAL_FREERTOS_MAX_SEMAPHORES must be > 0.");
+static_assert(OSAL_FREERTOS_MAX_TIMERS > 0, "OSAL_FREERTOS_MAX_TIMERS must be > 0.");
+static_assert(OSAL_FREERTOS_MAX_EVENT_GROUPS > 0, "OSAL_FREERTOS_MAX_EVENT_GROUPS must be > 0.");
+static_assert(OSAL_FREERTOS_MAX_STREAM_BUFFERS > 0, "OSAL_FREERTOS_MAX_STREAM_BUFFERS must be > 0.");
+static_assert(OSAL_FREERTOS_MAX_MESSAGE_BUFFERS > 0, "OSAL_FREERTOS_MAX_MESSAGE_BUFFERS must be > 0.");
+static_assert(OSAL_FREERTOS_MAX_THREADS > 0, "OSAL_FREERTOS_MAX_THREADS must be > 0.");
 
 static StaticSemaphore_t fr_mutex_pool[OSAL_FREERTOS_MAX_MUTEXES];
 static bool              fr_mutex_used[OSAL_FREERTOS_MAX_MUTEXES];

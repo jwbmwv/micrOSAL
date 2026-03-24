@@ -53,8 +53,8 @@
 /// @ingroup osal_core
 #pragma once
 
-#if !defined(__cplusplus) || (__cplusplus < 201703L)
-#error "micrOSAL requires at least C++17. Compile with -std=c++17 (or newer)."
+#if !defined(__cplusplus) || (__cplusplus < 202002L)
+#error "micrOSAL requires at least C++20. Compile with -std=c++20 (or newer)."
 #endif
 
 // Version.
@@ -63,6 +63,7 @@
 // Core types and error codes (no backend dependency).
 #include "error.hpp"
 #include "types.hpp"
+#include "concepts.hpp"
 #include "capabilities.hpp"
 #include "backend_traits.hpp"
 #include "backends.hpp"
@@ -92,10 +93,12 @@
 #include "object_wait_set.hpp"
 
 /// @defgroup osal OSAL
-/// @brief Operating System Abstraction Layer for portable embedded C++17 code.
+/// @brief Operating System Abstraction Layer for portable embedded C++20 code.
 /// @details
 /// The OSAL provides a uniform API over multiple RTOS and OS backends with
 /// no virtual functions, no RTTI, and noexcept operations throughout.
+/// C++20 concepts and @c consteval checks keep backend selection, fixed-storage
+/// constraints, and capability validation fully compile-time.
 ///
 /// Feature availability at compile-time:
 /// @code

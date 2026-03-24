@@ -82,7 +82,7 @@ public:
     // ---- construction / destruction ----------------------------------------
 
     /// @brief Constructs a condition variable.
-    condvar() noexcept : valid_(false), handle_{} { valid_ = osal_condvar_create(&handle_).ok(); }
+    condvar() noexcept { valid_ = osal_condvar_create(&handle_).ok(); }
 
     /// @brief Destroys the condition variable.
     ~condvar() noexcept
@@ -110,7 +110,7 @@ public:
     ///          Equivalent to: @code while (!pred()) cv.wait(m); @endcode
     /// @param m     The mutex the caller holds.
     /// @param pred  Callable with signature @c bool().  Evaluated under @p m.
-    template<typename Predicate>
+    template<wait_predicate Predicate>
     void wait(mutex& m, Predicate pred) noexcept(noexcept(pred()))
     {
         while (!pred())
@@ -136,7 +136,7 @@ public:
     /// @param timeout  Maximum total wait time.
     /// @param pred     Callable with signature @c bool().  Evaluated under @p m.
     /// @return true if @p pred was satisfied; false if the timeout expired first.
-    template<typename Predicate>
+    template<wait_predicate Predicate>
     bool wait_for(mutex& m, milliseconds timeout, Predicate pred) noexcept(noexcept(pred()))
     {
         const auto deadline = monotonic_clock::now() + timeout;
@@ -187,7 +187,7 @@ public:
     /// @param deadline  Absolute monotonic time point.
     /// @param pred      Callable with signature @c bool().  Evaluated under @p m.
     /// @return true if @p pred was satisfied before the deadline; false otherwise.
-    template<typename Predicate>
+    template<wait_predicate Predicate>
     bool wait_until(mutex& m, monotonic_clock::time_point deadline, Predicate pred) noexcept(noexcept(pred()))
     {
         // Delegate to the timed predicate wait_for, which already loops.
@@ -211,8 +211,8 @@ public:
     [[nodiscard]] bool valid() const noexcept { return valid_; }
 
 private:
-    bool                            valid_;
-    active_traits::condvar_handle_t handle_;
+    bool                            valid_{false};
+    active_traits::condvar_handle_t handle_{};
 };
 
 /// @} // osal_condvar

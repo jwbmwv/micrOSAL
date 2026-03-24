@@ -77,7 +77,7 @@ if(CONFIG_TESTING_MICROSAL_TEST)
             OSAL_BACKEND_NUTTX
             OSAL_THREAD_LOCAL_USE_NATIVE=1
         COMPILE_FLAGS
-            -std=c++17
+            -std=c++20
             -fno-exceptions
             -fno-rtti
             -Wall

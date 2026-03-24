@@ -167,7 +167,7 @@ public:
 
     /// @brief Return a previously allocated block to the pool.
     /// @param block  Pointer previously returned by allocate().
-    result deallocate(void* block) noexcept { return osal_memory_pool_deallocate(&handle_, block); }
+    [[nodiscard]] result deallocate(void* block) noexcept { return osal_memory_pool_deallocate(&handle_, block); }
 
     // ---- query -------------------------------------------------------------
 

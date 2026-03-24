@@ -32,7 +32,7 @@
 
 #include <stdint.h>
 #include <string.h>
-#include <atomic>
+#include <osal/detail/atomic_compat.hpp>
 #include <stdio.h> /* printf — NuttX provides this without locale deps */
 
 // ==========================================================================

@@ -1,14 +1,18 @@
 # MicrOSAL
 
-**Micro Operating System Abstraction Layer** — a thin, zero-overhead C++17
+**Micro Operating System Abstraction Layer** — a thin, zero-overhead C++20
 interface to common RTOS primitives, portable across seventeen embedded and
 hosted operating systems.
 
+- Requires a C++20 compiler; backend selection, capability checks, and fixed-storage constraints are validated at compile time with concepts and consteval helpers.
 - No virtual functions — all backend dispatch is resolved at compile time.
 - No RTTI — compiles cleanly with `-fno-rtti`.
 - Allocation-free on static-pool backends; POSIX-family backends use small heap-backed control objects.
 - `noexcept` everywhere — errors returned via `osal::result`, never thrown.
 - Single backend selected at compile time; zero dead code for the others.
+
+Backend-by-backend storage and allocation profiles are summarized in
+[`docs/threading_model.md`](docs/threading_model.md).
 
 ```cpp
 #include <osal/osal.hpp>      // or include individual headers
@@ -67,10 +71,12 @@ if (rc != osal::error_code::ok) { /* timed out */ }
 | `condvar.hpp` | `osal::condvar` | Condition variable (native or emulated) |
 | `event_flags.hpp` | `osal::event_flags` | 32-bit event flag group (native or emulated) |
 | `rwlock.hpp` | `osal::rwlock` | Reader/writer lock with RAII guards |
+| `spinlock.hpp` | `osal::spinlock` | Native low-latency spinlock with compile-time support helpers |
+| `barrier.hpp` | `osal::barrier` | Rendezvous barrier; native on pthread-family backends, shared emulation elsewhere |
 | `stream_buffer.hpp` | `osal::stream_buffer` | Byte-stream ring buffer; ISR-safe on FreeRTOS/Zephyr |
 | `message_buffer.hpp` | `osal::message_buffer` | Framed message buffer built on stream_buffer |
 | `memory_pool.hpp` | `osal::memory_pool` | Fixed-block memory pool (native or emulated) |
-| `ring_buffer.hpp` | `osal::ring_buffer<T, N>` | Header-only SPSC ring buffer, backend-independent |
+| `ring_buffer.hpp` | `osal::ring_buffer<T, N>` | Header-only SPSC ring buffer with bulk `try_push_n`/`try_pop_n`, backend-independent |
 | `work_queue.hpp` | `osal::work_queue` | Task-context deferred work queue |
 | `delayable_work.hpp` | `osal::delayable_work` | One-shot delayed work item built on `timer + work_queue` |
 | `notification.hpp` | `osal::notification<Slots>` | Indexed 32-bit notification words with FreeRTOS-like update actions |
@@ -91,6 +97,13 @@ existing OSAL primitives and do not require new per-backend ABI hooks.
 `osal::wait_set` remains the native descriptor/object wait API where the host
 OS provides one; `osal::object_wait_set` is the RTOS-object complement for
 queue-like and event-like OSAL objects.
+
+Optional or native-only APIs also expose explicit support helpers. Use
+`osal::spinlock::is_supported`, `osal::wait_set::is_supported`,
+`osal::timer::is_supported`, `osal::delayable_work::is_supported`, and the
+`osal::thread::supports_*` booleans for compile-time branching. When a code
+path must refuse unsupported backends at build time, call
+`require_support()` or the matching `thread::require_*_support()` helper.
 
 The C bridge now covers `notification` and `delayable_work` as well.  Their C
 handles are composite helper structs built from existing C OSAL primitives, so
@@ -145,7 +158,10 @@ Kconfig options are exposed under `CONFIG_MICRO_OSAL*`.
 ### Apache NuttX
 
 Symlink (or clone) the test app into the NuttX apps tree and enable it via
-`CONFIG_TESTING_MICROSAL_TEST=y`.  See [`docs/TestCoverage.md`](docs/TestCoverage.md)
+`CONFIG_TESTING_MICROSAL_TEST=y`. For the C++20 test app, the NuttX build
+config must also enable the toolchain C++ runtime via `CONFIG_HAVE_CXX=y`,
+`CONFIG_LIBCXXTOOLCHAIN=y`, `CONFIG_LIBSUPCXX_TOOLCHAIN=y`, and
+`CONFIG_CXX_STANDARD="gnu++20"`. See [`docs/TestCoverage.md`](docs/TestCoverage.md)
 for the full build recipe.
 
 ---
@@ -205,19 +221,22 @@ printf 'microsal_test\nexit\n' | timeout 120 ./nuttx/build/nuttx
 
 | Backend | Test suite | Runner | Status |
 | --- | --- | --- | --- |
-| Linux | CTest / doctest | Native process | ✅ 22/22 |
-| POSIX | CTest / doctest | Native process | ✅ 22/22 |
-| Bare-metal | CTest / doctest | Native process with hosted self-tick/context helper | ✅ 22/22 in CI |
-| RTEMS | CTest / doctest | Native process | ✅ 22/22 in CI |
-| INTEGRITY | CTest / doctest | Native process | ✅ 22/22 in CI |
-| FreeRTOS v11 | CTest / doctest | POSIX sim | ✅ 36/36 |
-| NuttX (latest main) | printf framework | sim/nsh on x86-64 | ✅ 26/26 |
-| Zephyr (`native_sim`) | west twister / ztest | Native process | ✅ 150/150 |
-| Zephyr (`nrf52840dk`) | west twister / ztest | Renode v1.15.3 | ✅ 79/79 |
+| Linux | CTest / doctest | Native process | ✅ 25/25 locally rerun |
+| POSIX | CTest / doctest | Native process | ✅ same 25 hosted binaries configured in CI |
+| Bare-metal | CTest / doctest | Native process with hosted self-tick/context helper | ✅ same 25 hosted binaries configured in CI |
+| RTEMS | CTest / doctest | Native process | ✅ same 25 hosted binaries configured in CI |
+| INTEGRITY | CTest / doctest | Native process | ✅ same 25 hosted binaries configured in CI |
+| FreeRTOS v11 | CTest / doctest | POSIX sim | ✅ 42/42 locally rerun |
+| NuttX (`sim/nsh`) | printf framework | NuttX sim on x86-64 Linux | ✅ 30/30 last recorded rerun |
+| Zephyr (`native_sim`) | west twister / ztest | Native process | ✅ 188/188 locally rerun across 2 configs |
+| Zephyr (`nrf52840dk`) | west twister / ztest | Renode v1.15.3 | ✅ 79/79 last recorded rerun |
+| ThreadX / PX5 / VxWorks / Micrium / ChibiOS / embOS / CMSIS-RTOS{,2} / QNX | Vendor or non-hosted SDK integration | External toolchain / licensed SDK required | Documented, not GitHub-hosted CI-built |
 
-The FreeRTOS suite was rerun locally after the mailbox additions. The NuttX and
-Zephyr suite source files now include mailbox coverage too, but the published
-pass counts above still reflect the last recorded reruns before that expansion.
+Several backends intentionally remain out of GitHub-hosted CI because their
+source files include vendor SDK headers or require non-Ubuntu host toolchains.
+That includes ThreadX, PX5, VxWorks, Micrium, ChibiOS, embOS,
+CMSIS-RTOS v1/v2, and QNX. Their integration points and feature expectations
+are still documented, but validating them requires the corresponding SDKs.
 
 See [`docs/TestCoverage.md`](docs/TestCoverage.md) for the full primitive
 coverage matrix and gap analysis.
