@@ -382,6 +382,7 @@ package "Stream Buffer (osal::stream_buffer)" as sb_pkg #EDE7F6 {
           **SPSC ring + 2 binary semaphores**
           ─────────────────────────────────
           • Byte-oriented bulk read/write
+          • Two-chunk memcpy across wrap
           • data_sem: signals bytes available
           • space_sem: signals space available
           • TriggerLevel: min bytes before wake

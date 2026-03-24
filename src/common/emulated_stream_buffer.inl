@@ -8,7 +8,7 @@
 ///          Design overview
 ///          ──────────────────────────────────────────────────────────────────
 ///          Internal ring (same SPSC pattern as ring_buffer.hpp, extended to
-///          multi-byte operations):
+///          multi-byte operations with two-chunk std::memcpy across wrap):
 ///          • head_ — write index, producer-owned (std::atomic, release on
 ///            store).
 ///          • tail_ — read index,  consumer-owned (std::atomic, release on
@@ -142,15 +142,14 @@ extern "C"
     /// @pre   sb_free(s) >= len.  Call only from the producer.
     static void sb_write(emu_sb_obj* s, const std::uint8_t* data, std::size_t len) noexcept
     {
-        std::size_t h = s->head.load(std::memory_order_relaxed);
-        for (std::size_t i = 0U; i < len; ++i)
+        std::size_t       h     = s->head.load(std::memory_order_relaxed);
+        const std::size_t first = std::min(len, s->ring_size - h);
+        std::memcpy(s->buf + h, data, first);
+        if (first < len)
         {
-            s->buf[h] = data[i];
-            if (++h == s->ring_size)
-            {
-                h = 0U;
-            }
+            std::memcpy(s->buf, data + first, len - first);
         }
+        h = (h + len < s->ring_size) ? (h + len) : (h + len - s->ring_size);
         s->head.store(h, std::memory_order_release);
     }
 
@@ -158,15 +157,14 @@ extern "C"
     /// @pre   sb_available(s) >= len.  Call only from the consumer.
     static void sb_read(emu_sb_obj* s, std::uint8_t* buf, std::size_t len) noexcept
     {
-        std::size_t t = s->tail.load(std::memory_order_relaxed);
-        for (std::size_t i = 0U; i < len; ++i)
+        std::size_t       t     = s->tail.load(std::memory_order_relaxed);
+        const std::size_t first = std::min(len, s->ring_size - t);
+        std::memcpy(buf, s->buf + t, first);
+        if (first < len)
         {
-            buf[i] = s->buf[t];
-            if (++t == s->ring_size)
-            {
-                t = 0U;
-            }
+            std::memcpy(buf + first, s->buf, len - first);
         }
+        t = (t + len < s->ring_size) ? (t + len) : (t + len - s->ring_size);
         s->tail.store(t, std::memory_order_release);
     }
 
@@ -175,13 +173,7 @@ extern "C"
     [[maybe_unused]] static void sb_skip(emu_sb_obj* s, std::size_t len) noexcept
     {
         std::size_t t = s->tail.load(std::memory_order_relaxed);
-        for (std::size_t i = 0U; i < len; ++i)
-        {
-            if (++t == s->ring_size)
-            {
-                t = 0U;
-            }
-        }
+        t             = (t + len < s->ring_size) ? (t + len) : (t + len - s->ring_size);
         s->tail.store(t, std::memory_order_release);
     }
 
@@ -189,14 +181,12 @@ extern "C"
     /// @pre   sb_available(s) >= len.  Call only from the consumer.
     [[maybe_unused]] static void sb_peek(const emu_sb_obj* s, std::uint8_t* buf, std::size_t len) noexcept
     {
-        std::size_t t = s->tail.load(std::memory_order_relaxed);
-        for (std::size_t i = 0U; i < len; ++i)
+        const std::size_t t     = s->tail.load(std::memory_order_relaxed);
+        const std::size_t first = std::min(len, s->ring_size - t);
+        std::memcpy(buf, s->buf + t, first);
+        if (first < len)
         {
-            buf[i] = s->buf[t];
-            if (++t == s->ring_size)
-            {
-                t = 0U;
-            }
+            std::memcpy(buf + first, s->buf, len - first);
         }
     }
 

@@ -133,6 +133,31 @@ TEST_CASE("stream_buffer: reset clears all data")
     CHECK(sb.free_space() == 32U);
 }
 
+TEST_CASE("stream_buffer: multi-byte wrap-around correctness")
+{
+    // Use a small buffer (capacity=8, ring_size=9) and force the internal
+    // indices past the wrap boundary to exercise the two-chunk memcpy path.
+    osal::stream_buffer<8> sb;
+    REQUIRE(sb.valid());
+
+    // Fill 6 bytes, consume 6 → moves tail/head to index 6.
+    const std::uint8_t fill[6] = {0xF0U, 0xF1U, 0xF2U, 0xF3U, 0xF4U, 0xF5U};
+    REQUIRE(sb.try_send(fill, 6U));
+    std::uint8_t sink[6]{};
+    CHECK(sb.try_receive(sink, 6U) == 6U);
+    CHECK(sb.empty());
+
+    // Now write 7 bytes starting at index 6 — wraps around ring_size=9.
+    const std::uint8_t tx[7] = {0xAAU, 0xBBU, 0xCCU, 0xDDU, 0xEEU, 0x11U, 0x22U};
+    REQUIRE(sb.try_send(tx, 7U));
+    CHECK(sb.available() == 7U);
+
+    std::uint8_t rx[7]{};
+    CHECK(sb.try_receive(rx, 7U) == 7U);
+    CHECK(std::memcmp(tx, rx, 7U) == 0);
+    CHECK(sb.empty());
+}
+
 TEST_CASE("stream_buffer: send and receive in multiple small chunks")
 {
     osal::stream_buffer<64> sb;

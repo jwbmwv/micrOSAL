@@ -99,6 +99,30 @@ end note
 rb --> cons : true, item = oldest
 deactivate rb
 
+== Bulk push / pop (memcpy, single atomic) ==
+
+prod -> rb : rb.try_push_n(items, 4)
+activate rb #E3F2FD
+note right of rb
+  1. Load head_ (relaxed), tail_ (acquire)
+  2. n = min(count, free slots)
+  3. Two-chunk memcpy across wrap
+  4. **Single** head_ store (release)
+end note
+rb --> prod : 4 (items pushed)
+deactivate rb
+
+cons -> rb : rb.try_pop_n(buf, 4)
+activate rb #E3F2FD
+note left of rb
+  1. Load tail_ (relaxed), head_ (acquire)
+  2. n = min(count, available)
+  3. Two-chunk memcpy across wrap
+  4. **Single** tail_ store (release)
+end note
+rb --> cons : 4 (items popped)
+deactivate rb
+
 == Query operations (either thread) ==
 
 prod -> rb : rb.size()

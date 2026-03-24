@@ -40,8 +40,11 @@
 #include "concepts.hpp"
 
 #include "detail/atomic_compat.hpp"
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
+#include <span>
 
 namespace osal
 {
@@ -88,6 +91,36 @@ public:
         return true;
     }
 
+    /// @brief Push up to @p count items into the buffer.
+    /// @param items  Source array of items to enqueue.
+    /// @param count  Number of items to attempt to enqueue.
+    /// @return Number of items actually enqueued (may be less than @p count).
+    std::size_t try_push_n(const T* items, std::size_t count) noexcept
+    {
+        const std::size_t h     = head_.load(std::memory_order_relaxed);
+        const std::size_t t     = tail_.load(std::memory_order_acquire);
+        const std::size_t avail = (t > h) ? (t - h - 1U) : (kCapacity - h + t - 1U);
+        const std::size_t n     = std::min(count, avail);
+        if (n == 0U)
+        {
+            return 0U;
+        }
+        const std::size_t first = std::min(n, kCapacity - h);
+        std::memcpy(&buf_[h], items, first * sizeof(T));
+        if (first < n)
+        {
+            std::memcpy(&buf_[0], items + first, (n - first) * sizeof(T));
+        }
+        const std::size_t new_h = (h + n < kCapacity) ? (h + n) : (h + n - kCapacity);
+        head_.store(new_h, std::memory_order_release);
+        return n;
+    }
+
+    /// @brief Push up to @p items.size() items into the buffer.
+    /// @param items  Span of items to enqueue.
+    /// @return Number of items actually enqueued.
+    std::size_t try_push_n(std::span<const T> items) noexcept { return try_push_n(items.data(), items.size()); }
+
     // ---- consumer API (single thread only) ---------------------------------
 
     /// @brief Pop the oldest item from the buffer.
@@ -104,6 +137,36 @@ public:
         tail_.store(increment(t), std::memory_order_release);
         return true;
     }
+
+    /// @brief Pop up to @p count items from the buffer.
+    /// @param[out] items  Destination array for dequeued items.
+    /// @param      count  Maximum number of items to dequeue.
+    /// @return Number of items actually dequeued (may be less than @p count).
+    std::size_t try_pop_n(T* items, std::size_t count) noexcept
+    {
+        const std::size_t t     = tail_.load(std::memory_order_relaxed);
+        const std::size_t h     = head_.load(std::memory_order_acquire);
+        const std::size_t avail = (h >= t) ? (h - t) : (kCapacity - t + h);
+        const std::size_t n     = std::min(count, avail);
+        if (n == 0U)
+        {
+            return 0U;
+        }
+        const std::size_t first = std::min(n, kCapacity - t);
+        std::memcpy(items, &buf_[t], first * sizeof(T));
+        if (first < n)
+        {
+            std::memcpy(items + first, &buf_[0], (n - first) * sizeof(T));
+        }
+        const std::size_t new_t = (t + n < kCapacity) ? (t + n) : (t + n - kCapacity);
+        tail_.store(new_t, std::memory_order_release);
+        return n;
+    }
+
+    /// @brief Pop up to @p items.size() items from the buffer.
+    /// @param[out] items  Span to receive dequeued items.
+    /// @return Number of items actually dequeued.
+    std::size_t try_pop_n(std::span<T> items) noexcept { return try_pop_n(items.data(), items.size()); }
 
     /// @brief Peek at the oldest item without removing it.
     /// @param[out] item  Receives a copy of the head item.

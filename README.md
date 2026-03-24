@@ -76,7 +76,7 @@ if (rc != osal::error_code::ok) { /* timed out */ }
 | `stream_buffer.hpp` | `osal::stream_buffer` | Byte-stream ring buffer; ISR-safe on FreeRTOS/Zephyr |
 | `message_buffer.hpp` | `osal::message_buffer` | Framed message buffer built on stream_buffer |
 | `memory_pool.hpp` | `osal::memory_pool` | Fixed-block memory pool (native or emulated) |
-| `ring_buffer.hpp` | `osal::ring_buffer<T, N>` | Header-only SPSC ring buffer, backend-independent |
+| `ring_buffer.hpp` | `osal::ring_buffer<T, N>` | Header-only SPSC ring buffer with bulk `try_push_n`/`try_pop_n`, backend-independent |
 | `work_queue.hpp` | `osal::work_queue` | Task-context deferred work queue |
 | `delayable_work.hpp` | `osal::delayable_work` | One-shot delayed work item built on `timer + work_queue` |
 | `notification.hpp` | `osal::notification<Slots>` | Indexed 32-bit notification words with FreeRTOS-like update actions |
