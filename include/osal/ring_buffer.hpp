@@ -40,7 +40,6 @@
 #include "concepts.hpp"
 
 #include "detail/atomic_compat.hpp"
-#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -100,12 +99,12 @@ public:
         const std::size_t h     = head_.load(std::memory_order_relaxed);
         const std::size_t t     = tail_.load(std::memory_order_acquire);
         const std::size_t avail = (t > h) ? (t - h - 1U) : (kCapacity - h + t - 1U);
-        const std::size_t n     = std::min(count, avail);
+        const std::size_t n     = min_of(count, avail);
         if (n == 0U)
         {
             return 0U;
         }
-        const std::size_t first = std::min(n, kCapacity - h);
+        const std::size_t first = min_of(n, kCapacity - h);
         std::memcpy(&buf_[h], items, first * sizeof(T));
         if (first < n)
         {
@@ -147,12 +146,12 @@ public:
         const std::size_t t     = tail_.load(std::memory_order_relaxed);
         const std::size_t h     = head_.load(std::memory_order_acquire);
         const std::size_t avail = (h >= t) ? (h - t) : (kCapacity - t + h);
-        const std::size_t n     = std::min(count, avail);
+        const std::size_t n     = min_of(count, avail);
         if (n == 0U)
         {
             return 0U;
         }
-        const std::size_t first = std::min(n, kCapacity - t);
+        const std::size_t first = min_of(n, kCapacity - t);
         std::memcpy(items, &buf_[t], first * sizeof(T));
         if (first < n)
         {
@@ -225,6 +224,9 @@ private:
 
     /// @brief Advance an index, wrapping around.
     static constexpr std::size_t increment(std::size_t idx) noexcept { return (idx + 1 == kCapacity) ? 0 : idx + 1; }
+
+    /// @brief Branchless min without pulling in <algorithm>.
+    static constexpr std::size_t min_of(std::size_t a, std::size_t b) noexcept { return (a < b) ? a : b; }
 
     T                        buf_[kCapacity]{};
     std::atomic<std::size_t> head_{0U};
