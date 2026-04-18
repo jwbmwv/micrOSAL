@@ -37,23 +37,25 @@
 #define OSAL_PX5_MAX_EVTGRPS 8
 #define OSAL_PX5_MAX_WAITSETS 4
 
-static TX_THREAD            px5_threads[OSAL_PX5_MAX_THREADS];
-static bool                 px5_thread_used[OSAL_PX5_MAX_THREADS];
-static TX_MUTEX             px5_mutexes[OSAL_PX5_MAX_MUTEXES];
-static bool                 px5_mutex_used[OSAL_PX5_MAX_MUTEXES];
-static TX_SEMAPHORE         px5_sems[OSAL_PX5_MAX_SEMS];
-static bool                 px5_sem_used[OSAL_PX5_MAX_SEMS];
-static TX_QUEUE             px5_queues[OSAL_PX5_MAX_QUEUES];
-static bool                 px5_queue_used[OSAL_PX5_MAX_QUEUES];
-static TX_TIMER             px5_timers[OSAL_PX5_MAX_TIMERS];
-static bool                 px5_timer_used[OSAL_PX5_MAX_TIMERS];
-static TX_EVENT_FLAGS_GROUP px5_evtgrps[OSAL_PX5_MAX_EVTGRPS];
-static bool                 px5_evtgrp_used[OSAL_PX5_MAX_EVTGRPS];
-static PX5_WAIT_SET         px5_wait_sets[OSAL_PX5_MAX_WAITSETS];
-static bool                 px5_ws_used[OSAL_PX5_MAX_WAITSETS];
+namespace {
+
+TX_THREAD            px5_threads[OSAL_PX5_MAX_THREADS];
+bool                 px5_thread_used[OSAL_PX5_MAX_THREADS];
+TX_MUTEX             px5_mutexes[OSAL_PX5_MAX_MUTEXES];
+bool                 px5_mutex_used[OSAL_PX5_MAX_MUTEXES];
+TX_SEMAPHORE         px5_sems[OSAL_PX5_MAX_SEMS];
+bool                 px5_sem_used[OSAL_PX5_MAX_SEMS];
+TX_QUEUE             px5_queues[OSAL_PX5_MAX_QUEUES];
+bool                 px5_queue_used[OSAL_PX5_MAX_QUEUES];
+TX_TIMER             px5_timers[OSAL_PX5_MAX_TIMERS];
+bool                 px5_timer_used[OSAL_PX5_MAX_TIMERS];
+TX_EVENT_FLAGS_GROUP px5_evtgrps[OSAL_PX5_MAX_EVTGRPS];
+bool                 px5_evtgrp_used[OSAL_PX5_MAX_EVTGRPS];
+PX5_WAIT_SET         px5_wait_sets[OSAL_PX5_MAX_WAITSETS];
+bool                 px5_ws_used[OSAL_PX5_MAX_WAITSETS];
 
 template<typename T, std::size_t N>
-static T* pool_acquire(T (&pool)[N], bool (&used)[N]) noexcept
+T* pool_acquire(T (&pool)[N], bool (&used)[N]) noexcept
 {
     for (std::size_t i = 0; i < N; ++i)
     {
@@ -67,7 +69,7 @@ static T* pool_acquire(T (&pool)[N], bool (&used)[N]) noexcept
 }
 
 template<typename T, std::size_t N>
-static void pool_release(T (&pool)[N], bool (&used)[N], T* p) noexcept
+void pool_release(T (&pool)[N], bool (&used)[N], T* p) noexcept
 {
     for (std::size_t i = 0; i < N; ++i)
     {
@@ -81,7 +83,7 @@ static void pool_release(T (&pool)[N], bool (&used)[N], T* p) noexcept
 
 // Helper macros
 /// @brief Map OSAL priority [0=lowest, 255=highest] to PX5/ThreadX priority [0=highest, TX_MAX_PRIORITIES-1=lowest].
-static constexpr UINT osal_to_px5_priority(osal::priority_t p) noexcept
+constexpr UINT osal_to_px5_priority(osal::priority_t p) noexcept
 {
     const UINT top = TX_MAX_PRIORITIES - 1U;
     return top - static_cast<UINT>((static_cast<std::uint32_t>(p) * static_cast<std::uint32_t>(top)) /
@@ -89,7 +91,7 @@ static constexpr UINT osal_to_px5_priority(osal::priority_t p) noexcept
 }
 
 /// @brief Map OSAL tick count to PX5/ThreadX wait option.
-static constexpr ULONG to_px5_ticks(osal::tick_t t) noexcept
+constexpr ULONG to_px5_ticks(osal::tick_t t) noexcept
 {
     if (t == osal::WAIT_FOREVER)
     {
@@ -115,12 +117,14 @@ static constexpr ULONG to_px5_ticks(osal::tick_t t) noexcept
 // ---------------------------------------------------------------------------
 struct px5_timer_ctx
 {
-    osal_timer_callback_t fn;
-    void*                 arg;
-    ULONG                 period;
-    TX_TIMER*             timer;
+    osal_timer_callback_t fn{};
+    void*                 arg{};
+    ULONG                 period{};
+    TX_TIMER*             timer{};
 };
-static px5_timer_ctx px5_timer_ctxs[OSAL_PX5_MAX_TIMERS];
+px5_timer_ctx px5_timer_ctxs[OSAL_PX5_MAX_TIMERS];
+
+}  // anonymous namespace
 
 extern "C"
 {
@@ -153,7 +157,7 @@ extern "C"
     /// @return Microseconds per tick (derived from TX_TIMER_TICKS_PER_SECOND).
     std::uint32_t osal_clock_tick_period_us() noexcept
     {
-        return 1'000'000U / TX_TIMER_TICKS_PER_SECOND;
+        return static_cast<std::uint32_t>(1'000'000U / TX_TIMER_TICKS_PER_SECOND);
     }
 
     // ---------------------------------------------------------------------------
@@ -173,14 +177,14 @@ extern "C"
                                     osal::priority_t priority, osal::affinity_t /*affinity*/, void* stack,
                                     osal::stack_size_t stack_bytes, const char* name) noexcept
     {
-        assert(handle && entry && stack);
+        assert(handle != nullptr && entry != nullptr && stack != nullptr);
         TX_THREAD* t = pool_acquire(px5_threads, px5_thread_used);
-        if (!t)
+        if (t == nullptr)
         {
             return osal::error_code::out_of_resources;
         }
         const UINT prio = osal_to_px5_priority(priority);
-        const UINT rc   = tx_thread_create(t, const_cast<CHAR*>(name ? name : "osal"),
+        const UINT rc   = tx_thread_create(t, const_cast<CHAR*>(name != nullptr ? name : "osal"),
                                            reinterpret_cast<void (*)(ULONG)>(reinterpret_cast<void*>(entry)),
                                            reinterpret_cast<ULONG>(arg), stack, static_cast<ULONG>(stack_bytes), prio,
                                            prio, TX_NO_TIME_SLICE, TX_AUTO_START);
@@ -198,7 +202,7 @@ extern "C"
     /// @return osal::ok() on success; osal::error_code::not_initialized if the handle is null.
     osal::result osal_thread_join(osal::active_traits::thread_handle_t* handle, osal::tick_t) noexcept
     {
-        if (!handle || !handle->native)
+        if (handle == nullptr || handle->native == nullptr)
         {
             return osal::error_code::not_initialized;
         }
@@ -214,7 +218,7 @@ extern "C"
     /// @return osal::ok() on success; osal::error_code::not_initialized if the handle is null.
     osal::result osal_thread_detach(osal::active_traits::thread_handle_t* handle) noexcept
     {
-        if (!handle || !handle->native)
+        if (handle == nullptr || handle->native == nullptr)
         {
             return osal::error_code::not_initialized;
         }
@@ -230,7 +234,7 @@ extern "C"
     osal::result osal_thread_set_priority(osal::active_traits::thread_handle_t* handle,
                                           osal::priority_t                      priority) noexcept
     {
-        if (!handle || !handle->native)
+        if (handle == nullptr || handle->native == nullptr)
         {
             return osal::error_code::not_initialized;
         }
@@ -286,7 +290,7 @@ extern "C"
     osal::result osal_mutex_create(osal::active_traits::mutex_handle_t* handle, bool) noexcept
     {
         TX_MUTEX* m = pool_acquire(px5_mutexes, px5_mutex_used);
-        if (!m)
+        if (m == nullptr)
         {
             return osal::error_code::out_of_resources;
         }
@@ -304,7 +308,7 @@ extern "C"
     /// @return osal::ok() always.
     osal::result osal_mutex_destroy(osal::active_traits::mutex_handle_t* handle) noexcept
     {
-        if (!handle || !handle->native)
+        if (handle == nullptr || handle->native == nullptr)
         {
             return osal::ok();
         }
@@ -320,7 +324,7 @@ extern "C"
     /// @return osal::ok() on success; osal::error_code::timeout or ::unknown on failure.
     osal::result osal_mutex_lock(osal::active_traits::mutex_handle_t* handle, osal::tick_t timeout) noexcept
     {
-        if (!handle || !handle->native)
+        if (handle == nullptr || handle->native == nullptr)
         {
             return osal::error_code::not_initialized;
         }
@@ -349,7 +353,7 @@ extern "C"
     /// @return osal::ok() on success; osal::error_code::not_owner if the caller does not own the mutex.
     osal::result osal_mutex_unlock(osal::active_traits::mutex_handle_t* handle) noexcept
     {
-        if (!handle || !handle->native)
+        if (handle == nullptr || handle->native == nullptr)
         {
             return osal::error_code::not_initialized;
         }
@@ -368,7 +372,7 @@ extern "C"
                                        unsigned) noexcept
     {
         TX_SEMAPHORE* s = pool_acquire(px5_sems, px5_sem_used);
-        if (!s)
+        if (s == nullptr)
         {
             return osal::error_code::out_of_resources;
         }
@@ -386,7 +390,7 @@ extern "C"
     /// @return osal::ok() always.
     osal::result osal_semaphore_destroy(osal::active_traits::semaphore_handle_t* handle) noexcept
     {
-        if (!handle || !handle->native)
+        if (handle == nullptr || handle->native == nullptr)
         {
             return osal::ok();
         }
@@ -401,7 +405,7 @@ extern "C"
     /// @return osal::ok() on success; osal::error_code::not_initialized if the handle is null.
     osal::result osal_semaphore_give(osal::active_traits::semaphore_handle_t* handle) noexcept
     {
-        if (!handle || !handle->native)
+        if (handle == nullptr || handle->native == nullptr)
         {
             return osal::error_code::not_initialized;
         }
@@ -423,7 +427,7 @@ extern "C"
     /// @return osal::ok() on success; osal::error_code::timeout if the semaphore was not signalled in time.
     osal::result osal_semaphore_take(osal::active_traits::semaphore_handle_t* handle, osal::tick_t timeout) noexcept
     {
-        if (!handle || !handle->native)
+        if (handle == nullptr || handle->native == nullptr)
         {
             return osal::error_code::not_initialized;
         }
@@ -453,7 +457,7 @@ extern "C"
                                    std::size_t cap) noexcept
     {
         TX_QUEUE* q = pool_acquire(px5_queues, px5_queue_used);
-        if (!q)
+        if (q == nullptr)
         {
             return osal::error_code::out_of_resources;
         }
@@ -473,7 +477,7 @@ extern "C"
     /// @return osal::ok() always.
     osal::result osal_queue_destroy(osal::active_traits::queue_handle_t* handle) noexcept
     {
-        if (!handle || !handle->native)
+        if (handle == nullptr || handle->native == nullptr)
         {
             return osal::ok();
         }
@@ -491,7 +495,7 @@ extern "C"
     osal::result osal_queue_send(osal::active_traits::queue_handle_t* handle, const void* item,
                                  osal::tick_t timeout) noexcept
     {
-        if (!handle || !handle->native)
+        if (handle == nullptr || handle->native == nullptr)
         {
             return osal::error_code::not_initialized;
         }
@@ -517,7 +521,7 @@ extern "C"
     osal::result osal_queue_receive(osal::active_traits::queue_handle_t* handle, void* item,
                                     osal::tick_t timeout) noexcept
     {
-        if (!handle || !handle->native)
+        if (handle == nullptr || handle->native == nullptr)
         {
             return osal::error_code::not_initialized;
         }
@@ -547,7 +551,7 @@ extern "C"
     /// @return Message count, or 0 if the handle is invalid.
     std::size_t osal_queue_count(const osal::active_traits::queue_handle_t* handle) noexcept
     {
-        if (!handle || !handle->native)
+        if (handle == nullptr || handle->native == nullptr)
         {
             return 0U;
         }
@@ -562,7 +566,7 @@ extern "C"
     /// @return Available slots, or 0 if the handle is invalid.
     std::size_t osal_queue_free(const osal::active_traits::queue_handle_t* handle) noexcept
     {
-        if (!handle || !handle->native)
+        if (handle == nullptr || handle->native == nullptr)
         {
             return 0U;
         }
@@ -576,15 +580,19 @@ extern "C"
     // Timer
     // ---------------------------------------------------------------------------
 
+    namespace {
+
     /// @brief Internal PX5 timer expiry callback; dispatches to the user callback.
     /// @param idx Index into px5_timer_ctxs[] identifying which timer fired.
-    static void px5_timer_expiry(ULONG idx) noexcept
+    void px5_timer_expiry(ULONG idx) noexcept
     {
-        if (px5_timer_ctxs[idx].fn)
+        if (px5_timer_ctxs[idx].fn != nullptr)
         {
             px5_timer_ctxs[idx].fn(px5_timer_ctxs[idx].arg);
         }
     }
+
+    }  // anonymous namespace
 
     /// @brief Create (but do not start) a PX5 timer.
     /// @param handle      Output handle populated with the new TX_TIMER pointer.
@@ -597,16 +605,16 @@ extern "C"
     osal::result osal_timer_create(osal::active_traits::timer_handle_t* handle, const char* name,
                                    osal_timer_callback_t cb, void* arg, osal::tick_t period, bool auto_reload) noexcept
     {
-        assert(handle && cb);
+        assert(handle != nullptr && cb != nullptr);
         TX_TIMER* t = pool_acquire(px5_timers, px5_timer_used);
-        if (!t)
+        if (t == nullptr)
         {
             return osal::error_code::out_of_resources;
         }
         ULONG idx = OSAL_PX5_MAX_TIMERS;
         for (ULONG i = 0; i < OSAL_PX5_MAX_TIMERS; ++i)
         {
-            if (!px5_timer_ctxs[i].fn)
+            if (px5_timer_ctxs[i].fn == nullptr)
             {
                 idx = i;
                 break;
@@ -619,7 +627,7 @@ extern "C"
         }
         px5_timer_ctxs[idx] = {cb, arg, static_cast<ULONG>(period), t};
         const ULONG resched = auto_reload ? static_cast<ULONG>(period) : 0U;
-        if (tx_timer_create(t, const_cast<CHAR*>(name ? name : "t"), px5_timer_expiry, idx, static_cast<ULONG>(period),
+        if (tx_timer_create(t, const_cast<CHAR*>(name != nullptr ? name : "t"), px5_timer_expiry, idx, static_cast<ULONG>(period),
                             resched, TX_NO_ACTIVATE) != TX_SUCCESS)
         {
             px5_timer_ctxs[idx].fn = nullptr;
@@ -635,7 +643,7 @@ extern "C"
     /// @return osal::ok() always.
     osal::result osal_timer_destroy(osal::active_traits::timer_handle_t* handle) noexcept
     {
-        if (!handle || !handle->native)
+        if (handle == nullptr || handle->native == nullptr)
         {
             return osal::ok();
         }
@@ -658,7 +666,7 @@ extern "C"
     /// @return osal::ok() on success; osal::error_code::not_initialized if the handle is null.
     osal::result osal_timer_start(osal::active_traits::timer_handle_t* handle) noexcept
     {
-        if (!handle || !handle->native)
+        if (handle == nullptr || handle->native == nullptr)
         {
             return osal::error_code::not_initialized;
         }
@@ -671,7 +679,7 @@ extern "C"
     /// @return osal::ok() on success; osal::error_code::not_initialized if the handle is null.
     osal::result osal_timer_stop(osal::active_traits::timer_handle_t* handle) noexcept
     {
-        if (!handle || !handle->native)
+        if (handle == nullptr || handle->native == nullptr)
         {
             return osal::error_code::not_initialized;
         }
@@ -694,7 +702,7 @@ extern "C"
     /// @return osal::ok() on success; osal::error_code::not_initialized if the handle is null.
     osal::result osal_timer_set_period(osal::active_traits::timer_handle_t* handle, osal::tick_t new_period) noexcept
     {
-        if (!handle || !handle->native)
+        if (handle == nullptr || handle->native == nullptr)
         {
             return osal::error_code::not_initialized;
         }
@@ -709,7 +717,7 @@ extern "C"
     /// @return True if the timer is running; false otherwise.
     bool osal_timer_is_active(const osal::active_traits::timer_handle_t* handle) noexcept
     {
-        if (!handle || !handle->native)
+        if (handle == nullptr || handle->native == nullptr)
         {
             return false;
         }
@@ -728,7 +736,7 @@ extern "C"
     osal::result osal_event_flags_create(osal::active_traits::event_flags_handle_t* handle) noexcept
     {
         TX_EVENT_FLAGS_GROUP* e = pool_acquire(px5_evtgrps, px5_evtgrp_used);
-        if (!e)
+        if (e == nullptr)
         {
             return osal::error_code::out_of_resources;
         }
@@ -746,7 +754,7 @@ extern "C"
     /// @return osal::ok() always.
     osal::result osal_event_flags_destroy(osal::active_traits::event_flags_handle_t* handle) noexcept
     {
-        if (!handle || !handle->native)
+        if (handle == nullptr || handle->native == nullptr)
         {
             return osal::ok();
         }
@@ -763,7 +771,7 @@ extern "C"
     osal::result osal_event_flags_set(osal::active_traits::event_flags_handle_t* handle,
                                       osal::event_bits_t                         bits) noexcept
     {
-        if (!handle || !handle->native)
+        if (handle == nullptr || handle->native == nullptr)
         {
             return osal::error_code::not_initialized;
         }
@@ -779,7 +787,7 @@ extern "C"
     osal::result osal_event_flags_clear(osal::active_traits::event_flags_handle_t* handle,
                                         osal::event_bits_t                         bits) noexcept
     {
-        if (!handle || !handle->native)
+        if (handle == nullptr || handle->native == nullptr)
         {
             return osal::error_code::not_initialized;
         }
@@ -793,7 +801,7 @@ extern "C"
     /// @return Current bit mask; 0 if the handle is invalid.
     osal::event_bits_t osal_event_flags_get(const osal::active_traits::event_flags_handle_t* handle) noexcept
     {
-        if (!handle || !handle->native)
+        if (handle == nullptr || handle->native == nullptr)
         {
             return 0U;
         }
@@ -803,6 +811,8 @@ extern "C"
         return static_cast<osal::event_bits_t>(actual);
     }
 
+    namespace {
+
     /// @brief Internal helper: wait for event flags with configurable AND/OR and clear-on-exit semantics.
     /// @param h       Event flags handle.
     /// @param bits    Bit mask to wait for.
@@ -811,10 +821,10 @@ extern "C"
     /// @param all     True = wait for ALL bits; false = wait for ANY bit.
     /// @param timeout Maximum wait in OSAL ticks.
     /// @return osal::ok() on success; osal::error_code::timeout on expiry.
-    static osal::result px5_evt_wait(osal::active_traits::event_flags_handle_t* h, osal::event_bits_t bits,
+    osal::result px5_evt_wait(osal::active_traits::event_flags_handle_t* h, osal::event_bits_t bits,
                                      osal::event_bits_t* actual, bool coe, bool all, osal::tick_t timeout) noexcept
     {
-        if (!h || !h->native)
+        if (h == nullptr || h->native == nullptr)
         {
             return osal::error_code::not_initialized;
         }
@@ -825,10 +835,14 @@ extern "C"
         }
         ULONG      a  = 0U;
         const UINT rc = tx_event_flags_get(PX5_EVT_PTR(h), static_cast<ULONG>(bits), opt, &a, to_px5_ticks(timeout));
-        if (actual)
+        if (actual != nullptr)
+        {
             *actual = static_cast<osal::event_bits_t>(a);
+        }
         return (rc == TX_SUCCESS) ? osal::ok() : osal::error_code::timeout;
     }
+
+    }  // anonymous namespace
 
     /// @brief Wait until any of the specified event bits are set.
     /// @param h       Event flags handle.
@@ -876,7 +890,7 @@ extern "C"
     osal::result osal_wait_set_create(osal::active_traits::wait_set_handle_t* handle) noexcept
     {
         PX5_WAIT_SET* ws = pool_acquire(px5_wait_sets, px5_ws_used);
-        if (!ws)
+        if (ws == nullptr)
         {
             return osal::error_code::out_of_resources;
         }
@@ -894,7 +908,7 @@ extern "C"
     /// @return osal::ok() always.
     osal::result osal_wait_set_destroy(osal::active_traits::wait_set_handle_t* handle) noexcept
     {
-        if (!handle || !handle->native)
+        if (handle == nullptr || handle->native == nullptr)
         {
             return osal::ok();
         }
@@ -912,7 +926,7 @@ extern "C"
     osal::result osal_wait_set_add(osal::active_traits::wait_set_handle_t* handle, int fd,
                                    std::uint32_t events) noexcept
     {
-        if (!handle || !handle->native)
+        if (handle == nullptr || handle->native == nullptr)
         {
             return osal::error_code::not_initialized;
         }
@@ -928,7 +942,7 @@ extern "C"
     /// @return osal::ok() on success; osal::error_code::not_initialized or ::invalid_argument on failure.
     osal::result osal_wait_set_remove(osal::active_traits::wait_set_handle_t* handle, int fd) noexcept
     {
-        if (!handle || !handle->native)
+        if (handle == nullptr || handle->native == nullptr)
         {
             return osal::error_code::not_initialized;
         }
@@ -946,7 +960,7 @@ extern "C"
                                     std::size_t /*max_ready*/, std::size_t*              n_ready,
                                     osal::tick_t timeout_ticks) noexcept
     {
-        if (!handle || !handle->native)
+        if (handle == nullptr || handle->native == nullptr)
         {
             return osal::error_code::not_initialized;
         }
@@ -956,17 +970,17 @@ extern "C"
             px5_wait_set_wait(PX5_WS_PTR(handle), &signaled_obj, &actual_events, to_px5_ticks(timeout_ticks));
         if (rc == PX5_SUCCESS)
         {
-            if (fds_ready)
+            if (fds_ready != nullptr)
             {
                 *fds_ready = static_cast<int>(reinterpret_cast<uintptr_t>(signaled_obj));
             }
-            if (n_ready)
+            if (n_ready != nullptr)
             {
                 *n_ready = 1U;
             }
             return osal::ok();
         }
-        if (n_ready)
+        if (n_ready != nullptr)
         {
             *n_ready = 0U;
         }
