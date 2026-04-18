@@ -481,10 +481,10 @@ TEST_CASE("nuttx/rwlock: basic read and write lock")
     }
     osal::rwlock rw;
     REQUIRE(rw.valid());
-    rw.read_lock();
-    rw.read_unlock();
-    rw.write_lock();
-    rw.write_unlock();
+    (void)rw.read_lock();
+    (void)rw.read_unlock();
+    (void)rw.write_lock();
+    (void)rw.write_unlock();
 }
 
 TEST_CASE("nuttx/rwlock: RAII write guard")
@@ -497,12 +497,12 @@ TEST_CASE("nuttx/rwlock: RAII write guard")
     osal::rwlock rw;
     REQUIRE(rw.valid());
     {
-        rw.write_lock();
-        rw.write_unlock();
+        (void)rw.write_lock();
+        (void)rw.write_unlock();
     }
     // Must be lockable again after guard release.
     CHECK(rw.write_lock().ok());
-    rw.write_unlock();
+    (void)rw.write_unlock();
 }
 
 // --------------------------------------------------------------------------
@@ -670,7 +670,7 @@ TEST_CASE("nuttx/memory_pool: alloc and free round-trip")
     void* p = pool.allocate();
     REQUIRE(p != nullptr);
     CHECK(pool.available() == 3U);
-    pool.deallocate(p);
+    (void)pool.deallocate(p);
     CHECK(pool.available() == 4U);
 }
 
@@ -686,6 +686,6 @@ TEST_CASE("nuttx/memory_pool: try_allocate returns nullptr when empty")
     REQUIRE(b != nullptr);
     CHECK(pool.allocate() == nullptr);  // exhausted
 
-    pool.deallocate(a);
-    pool.deallocate(b);
+    (void)pool.deallocate(a);
+    (void)pool.deallocate(b);
 }

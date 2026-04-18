@@ -431,7 +431,7 @@ TEST_CASE("freertos/event_flags: set and get")
 {
     osal::event_flags ef;
     REQUIRE(ef.valid());
-    ef.set(0b1010U);
+    (void)ef.set(0b1010U);
     CHECK((ef.get() & 0b1010U) == 0b1010U);
 }
 
@@ -439,7 +439,7 @@ TEST_CASE("freertos/event_flags: wait_any immediate")
 {
     osal::event_flags ef;
     REQUIRE(ef.valid());
-    ef.set(0x0FU);
+    (void)ef.set(0x0FU);
     osal::event_bits_t actual = 0U;
     auto               r      = ef.wait_any(0x0FU, &actual, /*clear_on_exit=*/true, osal::milliseconds{0});
     REQUIRE(r.ok());
@@ -457,7 +457,7 @@ TEST_CASE("freertos/event_flags: cross-thread set")
     cfg.entry = [](void*)
     {
         osal::thread::sleep_for(osal::milliseconds{30});
-        ef.set(0x01U);
+        (void)ef.set(0x01U);
     };
     cfg.arg         = nullptr;
     cfg.priority    = osal::PRIORITY_NORMAL;
@@ -922,7 +922,7 @@ TEST_CASE("freertos/memory_pool: alloc and free")
     void* p = pool.allocate();
     REQUIRE(p != nullptr);
     CHECK(pool.available() == 7U);
-    pool.deallocate(p);
+    (void)pool.deallocate(p);
     CHECK(pool.available() == 8U);
 }
 
@@ -940,6 +940,6 @@ TEST_CASE("freertos/memory_pool: exhaustion returns nullptr on try_allocate")
     void* p3 = pool.allocate();  // returns nullptr when exhausted
     CHECK(p3 == nullptr);
 
-    pool.deallocate(p1);
-    pool.deallocate(p2);
+    (void)pool.deallocate(p1);
+    (void)pool.deallocate(p2);
 }

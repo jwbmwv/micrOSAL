@@ -398,7 +398,7 @@ ZTEST(osal_timer, test_one_shot_fires)
 
     zassert_true(t.start().ok(), NULL);
     osal::thread::sleep_for(osal::milliseconds{200});
-    t.stop();
+    (void)t.stop();
 
     zassert_equal(g_timer_count, 1U, "one-shot timer should fire exactly once");
 }
@@ -411,7 +411,7 @@ ZTEST(osal_timer, test_periodic_fires_multiple)
 
     zassert_true(t.start().ok(), NULL);
     osal::thread::sleep_for(osal::milliseconds{200});
-    t.stop();
+    (void)t.stop();
 
     zassert_true(g_timer_count >= 2, "periodic timer should fire >= 2 times in 200 ms");
 }
@@ -426,7 +426,7 @@ ZTEST(osal_timer, test_config_construction)
 
     zassert_true(t.start().ok(), NULL);
     osal::thread::sleep_for(osal::milliseconds{200});
-    t.stop();
+    (void)t.stop();
     zassert_equal(g_timer_count, 1U, NULL);
 }
 
@@ -1029,14 +1029,14 @@ static osal::event_flags* g_xthread_ef;
 static void xthread_ef_setter(void*)
 {
     osal::thread::sleep_for(osal::milliseconds{20});
-    g_xthread_ef->set(0x03);
+    (void)g_xthread_ef->set(0x03);
 }
 
 ZTEST(osal_integration, test_cross_thread_event_flags)
 {
     osal::event_flags ef;
     zassert_true(ef.valid(), NULL);
-    ef.clear(0xFFFFFFFFU);
+    (void)ef.clear(0xFFFFFFFFU);
     g_xthread_ef = &ef;
 
     osal::thread        t;
@@ -1062,7 +1062,7 @@ static void xthread_sb_producer(void*)
 {
     osal::thread::sleep_for(osal::milliseconds{20});
     const std::uint8_t data[4] = {0x11, 0x22, 0x33, 0x44};
-    g_xthread_sb->send(data, sizeof(data));
+    (void)g_xthread_sb->send(data, sizeof(data));
 }
 
 ZTEST(osal_integration, test_cross_thread_stream_buffer)
@@ -1095,7 +1095,7 @@ static void xthread_mb_producer(void*)
 {
     osal::thread::sleep_for(osal::milliseconds{20});
     const std::uint8_t msg[4] = {0xDE, 0xAD, 0xBE, 0xEF};
-    g_xthread_mb->send(msg, sizeof(msg));
+    (void)g_xthread_mb->send(msg, sizeof(msg));
 }
 
 ZTEST(osal_integration, test_cross_thread_message_buffer)
@@ -1190,13 +1190,13 @@ static volatile bool    g_rw_reader_saw_overlap = false;
 
 static void rw_concurrent_reader(void*)
 {
-    g_rw_ext->read_lock();
+    (void)g_rw_ext->read_lock();
     g_rw_readers_inside.fetch_add(1, std::memory_order_relaxed);
     osal::thread::sleep_for(osal::milliseconds{40});
     if (g_rw_readers_inside.load(std::memory_order_relaxed) >= 2)
         g_rw_reader_saw_overlap = true;
     g_rw_readers_inside.fetch_sub(1, std::memory_order_relaxed);
-    g_rw_ext->read_unlock();
+    (void)g_rw_ext->read_unlock();
 }
 
 ZTEST(osal_rwlock, test_concurrent_readers)
@@ -1230,7 +1230,7 @@ ZTEST(osal_rwlock, test_write_lock_for_success)
     zassert_true(rw.valid(), NULL);
     auto r = rw.write_lock_for(osal::milliseconds{50});
     zassert_true(r.ok(), "write_lock_for on free rwlock should succeed");
-    rw.write_unlock();
+    (void)rw.write_unlock();
 }
 
 ZTEST(osal_rwlock, test_read_guard_write_guard)
@@ -1245,7 +1245,7 @@ ZTEST(osal_rwlock, test_read_guard_write_guard)
     }
     // Both guards released — write_lock should succeed immediately.
     zassert_true(rw.write_lock().ok(), "rwlock should be free after guards destroyed");
-    rw.write_unlock();
+    (void)rw.write_unlock();
 }
 
 // =========================================================================
