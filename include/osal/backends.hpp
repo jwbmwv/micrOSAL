@@ -45,8 +45,10 @@ namespace osal
 namespace detail
 {
 
+// NOLINTBEGIN(cert-dcl58-cpp) — false positive: standalone parsing confuses std::size_t usage with std modification
 template<std::size_t N>
 consteval std::size_t count_selected_backends(std::span<const bool, N> flags) noexcept
+// NOLINTEND(cert-dcl58-cpp)
 {
     std::size_t count = 0U;
     for (const bool flag : flags)

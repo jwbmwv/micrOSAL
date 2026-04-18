@@ -84,7 +84,8 @@ static_assert(configTICK_RATE_HZ > 0, "MicrOSAL FreeRTOS backend requires config
 // Internal helpers
 // ---------------------------------------------------------------------------
 
-namespace {
+namespace
+{
 /// @brief Converts OSAL priority (0–255) to FreeRTOS priority.
 /// @param p OSAL priority value in the range [PRIORITY_LOWEST, PRIORITY_HIGHEST].
 /// @return Equivalent FreeRTOS priority in [0, configMAX_PRIORITIES-1].
@@ -105,7 +106,8 @@ constexpr TickType_t to_freertos_ticks(osal::tick_t t) noexcept
     {
         return portMAX_DELAY;
     }
-    return static_cast<TickType_t>(t);
+    return static_cast<TickType_t>(
+        t);  // NOLINT(bugprone-narrowing-conversions,cppcoreguidelines-narrowing-conversions)
 }
 }  // namespace
 
@@ -166,7 +168,8 @@ static_assert(OSAL_FREERTOS_MAX_STREAM_BUFFERS > 0, "OSAL_FREERTOS_MAX_STREAM_BU
 static_assert(OSAL_FREERTOS_MAX_MESSAGE_BUFFERS > 0, "OSAL_FREERTOS_MAX_MESSAGE_BUFFERS must be > 0.");
 static_assert(OSAL_FREERTOS_MAX_THREADS > 0, "OSAL_FREERTOS_MAX_THREADS must be > 0.");
 
-namespace {
+namespace
+{
 StaticSemaphore_t fr_mutex_pool[OSAL_FREERTOS_MAX_MUTEXES];
 bool              fr_mutex_used[OSAL_FREERTOS_MAX_MUTEXES];
 
@@ -238,7 +241,8 @@ struct fr_thread_ctx_t
 };
 
 #if !defined(OSAL_FREERTOS_DYNAMIC_ALLOC)
-namespace {
+namespace
+{
 fr_thread_ctx_t  fr_thread_ctx_pool[OSAL_FREERTOS_MAX_THREADS];
 std::atomic_bool fr_thread_ctx_used[OSAL_FREERTOS_MAX_THREADS];
 
@@ -268,7 +272,8 @@ void fr_thread_ctx_release(fr_thread_ctx_t* ctx) noexcept
 }  // namespace
 #endif
 
-namespace {
+namespace
+{
 void fr_thread_ctx_destroy(fr_thread_ctx_t* ctx) noexcept
 {
     if (ctx == nullptr)
@@ -462,7 +467,8 @@ extern "C"
 
         auto* tcb = static_cast<StaticTask_t*>(stack);  // first sizeof(StaticTask_t) bytes
         auto* stk = reinterpret_cast<StackType_t*>(static_cast<std::uint8_t*>(stack) + sizeof(StaticTask_t));
-        const std::uint32_t real_words = static_cast<std::uint32_t>((stack_bytes - sizeof(StaticTask_t)) / sizeof(StackType_t));
+        const std::uint32_t real_words =  // NOLINT(cppcoreguidelines-init-variables)
+            static_cast<std::uint32_t>((stack_bytes - sizeof(StaticTask_t)) / sizeof(StackType_t));
 
         th = xTaskCreateStatic(fr_thread_wrapper_fn, (name != nullptr) ? name : "osal", real_words, ctx, fr_prio, stk,
                                tcb);
@@ -1091,7 +1097,7 @@ extern "C"
     {
         if (handle != nullptr && handle->native != nullptr)
         {
-            auto th = static_cast<TimerHandle_t>(handle->native);
+            auto* th = static_cast<TimerHandle_t>(handle->native);
             // Release the callback pair slot.
             auto* pair = static_cast<fr_cb_pair*>(pvTimerGetTimerID(th));
             if (pair != nullptr)
@@ -1492,7 +1498,8 @@ extern "C"
             return osal::error_code::invalid_argument;
         }
         auto*             h    = static_cast<StreamBufferHandle_t>(handle->native);
-        const std::size_t sent = xStreamBufferSend(h, data, len, to_freertos_ticks(timeout_ticks));
+        const std::size_t sent = xStreamBufferSend(
+            h, data, len, to_freertos_ticks(timeout_ticks));  // NOLINT(cppcoreguidelines-init-variables)
         return (sent == len) ? osal::ok() : osal::error_code::timeout;
     }
 
@@ -1673,7 +1680,8 @@ extern "C"
             return osal::error_code::invalid_argument;
         }
         auto*             h    = static_cast<MessageBufferHandle_t>(handle->native);
-        const std::size_t sent = xMessageBufferSend(h, msg, len, to_freertos_ticks(timeout_ticks));
+        const std::size_t sent = xMessageBufferSend(
+            h, msg, len, to_freertos_ticks(timeout_ticks));  // NOLINT(cppcoreguidelines-init-variables)
         return (sent == len) ? osal::ok() : osal::error_code::timeout;
     }
 

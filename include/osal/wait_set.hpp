@@ -165,7 +165,7 @@ public:
     ///         error_code::not_supported on unsupported backends.
     /// @complexity O(n) where n is number of monitored objects.
     /// @blocking   Potentially blocking.
-    result wait(int* ready_ids, std::size_t max_ready, std::size_t& n_ready,
+    result wait(int* ready_ids, std::size_t max_ready, std::size_t& n_ready,  // NOLINT(readability-non-const-parameter)
                 milliseconds timeout = milliseconds{-1}) noexcept
     {
         if constexpr (wait_set_backend<active_backend>)

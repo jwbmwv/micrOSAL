@@ -76,13 +76,13 @@ namespace osal
 ///          The caller is responsible for holding an osal::mutex when calling
 ///          wait() / wait_for().  The mutex is atomically released during the
 ///          wait and re-acquired before the call returns.
-class condvar
+class condvar  // NOLINT(cppcoreguidelines-pro-type-member-init,hicpp-member-init)
 {
 public:
     // ---- construction / destruction ----------------------------------------
 
     /// @brief Constructs a condition variable.
-    condvar() noexcept { valid_ = osal_condvar_create(&handle_).ok(); }
+    condvar() noexcept = default;  // NOLINT(cppcoreguidelines-pro-type-member-init,hicpp-member-init)
 
     /// @brief Destroys the condition variable.
     ~condvar() noexcept
@@ -211,8 +211,8 @@ public:
     [[nodiscard]] bool valid() const noexcept { return valid_; }
 
 private:
-    bool                            valid_{false};
     active_traits::condvar_handle_t handle_{};
+    bool                            valid_{osal_condvar_create(&handle_).ok()};
 };
 
 /// @} // osal_condvar

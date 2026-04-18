@@ -61,7 +61,8 @@
 // ---------------------------------------------------------------------------
 // Pool tracking — CMSIS-RTOS v1 IDs are stored directly in handle->native
 // ---------------------------------------------------------------------------
-namespace {
+namespace
+{
 
 struct cmsis1_thread_slot
 {
@@ -181,7 +182,7 @@ void cmsis1_timer_callback(void const* arg) noexcept
     }
 }
 
-} // namespace
+}  // namespace
 
 extern "C"
 {

@@ -211,7 +211,7 @@ public:
 
 private:
     bool                              valid_;  ///< Init succeeded.
-    active_traits::semaphore_handle_t handle_;
+    active_traits::semaphore_handle_t handle_{};
 };
 
 /// @} // osal_semaphore

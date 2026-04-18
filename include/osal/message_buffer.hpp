@@ -143,7 +143,7 @@ namespace osal
 ///             N - sizeof(osal_mb_length_t).
 template<std::size_t N>
     requires(N > kMsgHeaderBytes)
-class message_buffer
+class message_buffer  // NOLINT(cppcoreguidelines-pro-type-member-init,hicpp-member-init)
 {
 public:
     // ---- types -------------------------------------------------------------
@@ -156,7 +156,7 @@ public:
     /// @brief Constructs and initialises the message buffer.
     /// @complexity O(1)
     /// @blocking   Never.
-    message_buffer() noexcept { valid_ = osal_message_buffer_create(&handle_, storage_, N).ok(); }
+    message_buffer() noexcept = default;  // NOLINT(cppcoreguidelines-pro-type-member-init,hicpp-member-init)
 
     /// @brief Destructs the message buffer and releases OS resources.
     ~message_buffer() noexcept
@@ -323,10 +323,10 @@ public:
     [[nodiscard]] result reset() noexcept { return osal_message_buffer_reset(&handle_); }
 
 private:
-    bool                                           valid_{false};
     mutable active_traits::message_buffer_handle_t handle_{};
     /// @brief Ring storage: N usable bytes + 1 sentinel byte (SPSC ring marker).
     std::uint8_t storage_[N + 1U]{};
+    bool         valid_{osal_message_buffer_create(&handle_, storage_, N).ok()};
 };
 
 /// @} // osal_message_buffer

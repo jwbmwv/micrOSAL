@@ -26,7 +26,8 @@
 #include <cassert>
 #include <cstring>
 
-namespace {
+namespace
+{
 
 // ---------------------------------------------------------------------------
 // Pool sizes
@@ -104,7 +105,7 @@ constexpr OS_TICK to_uc_ticks(osal::tick_t t) noexcept
     {
         return 1U;  // Minimum non-zero; checked separately with OS_OPT_PEND_NON_BLOCKING
     }
-    return static_cast<OS_TICK>(t);
+    return static_cast<OS_TICK>(t);  // NOLINT(bugprone-narrowing-conversions,cppcoreguidelines-narrowing-conversions)
 }
 
 /// @brief Return µC/OS-III pend option for given timeout.
@@ -141,9 +142,9 @@ void uc_tmr_callback(void* /*p_tmr*/, void* p_arg) noexcept
 /// @param all          True = wait for ALL bits; false = wait for ANY bit.
 /// @param timeout_ticks Maximum wait in OSAL ticks.
 /// @return osal::ok() on success; osal::error_code::timeout on expiry.
-osal::result uc_event_wait_impl(osal::active_traits::event_flags_handle_t* handle,
-                                osal::event_bits_t wait_bits, osal::event_bits_t* actual_bits,
-                                bool clear_on_exit, bool all, osal::tick_t timeout_ticks) noexcept
+osal::result uc_event_wait_impl(osal::active_traits::event_flags_handle_t* handle, osal::event_bits_t wait_bits,
+                                osal::event_bits_t* actual_bits, bool clear_on_exit, bool all,
+                                osal::tick_t timeout_ticks) noexcept
 {
     if (handle == nullptr || handle->native == nullptr)
     {
@@ -171,7 +172,7 @@ osal::result uc_event_wait_impl(osal::active_traits::event_flags_handle_t* handl
     return osal::error_code::timeout;
 }
 
-} // namespace
+}  // namespace
 
 extern "C"
 {
@@ -625,11 +626,13 @@ extern "C"
         OS_ERR      err;
         OS_MSG_SIZE msg_size = 0;
         CPU_TS      ts;
-        void* msg = OSQPend(static_cast<OS_Q*>(handle->native), to_uc_ticks(timeout_ticks), uc_pend_opt(timeout_ticks),
-                            &msg_size, &ts, &err);
+        void*       msg = OSQPend(static_cast<OS_Q*>(handle->native), to_uc_ticks(timeout_ticks),
+                                  uc_pend_opt(timeout_ticks),  // NOLINT(cppcoreguidelines-init-variables)
+                                  &msg_size, &ts, &err);
         if (err == OS_ERR_NONE && msg != nullptr)
         {
-            std::memcpy(item, static_cast<const void*>(&msg), sizeof(void*));
+            std::memcpy(item, static_cast<const void*>(&msg),
+                        sizeof(void*));  // NOLINT(bugprone-multi-level-implicit-pointer-conversion)
             return osal::ok();
         }
         if (err == OS_ERR_TIMEOUT || err == OS_ERR_PEND_WOULD_BLOCK)

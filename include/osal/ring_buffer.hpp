@@ -79,11 +79,11 @@ public:
     /// @return true if enqueued; false if the buffer is full.
     bool try_push(const T& item) noexcept
     {
-        const std::size_t h    = head_.load(std::memory_order_relaxed);
+        const std::size_t h    = head_.load(std::memory_order_relaxed);  // NOLINT(cppcoreguidelines-init-variables)
         const std::size_t next = increment(h);
         if (next == tail_.load(std::memory_order_acquire))
         {
-            return false;  // full
+            return false;  // NOLINT(readability-simplify-boolean-expr) full
         }
         buf_[h] = item;
         head_.store(next, std::memory_order_release);
@@ -96,8 +96,8 @@ public:
     /// @return Number of items actually enqueued (may be less than @p count).
     std::size_t try_push_n(const T* items, std::size_t count) noexcept
     {
-        const std::size_t h     = head_.load(std::memory_order_relaxed);
-        const std::size_t t     = tail_.load(std::memory_order_acquire);
+        const std::size_t h     = head_.load(std::memory_order_relaxed);  // NOLINT(cppcoreguidelines-init-variables)
+        const std::size_t t     = tail_.load(std::memory_order_acquire);  // NOLINT(cppcoreguidelines-init-variables)
         const std::size_t avail = (t > h) ? (t - h - 1U) : (kCapacity - h + t - 1U);
         const std::size_t n     = min_of(count, avail);
         if (n == 0U)
@@ -127,10 +127,10 @@ public:
     /// @return true if an item was dequeued; false if the buffer was empty.
     bool try_pop(T& item) noexcept
     {
-        const std::size_t t = tail_.load(std::memory_order_relaxed);
+        const std::size_t t = tail_.load(std::memory_order_relaxed);  // NOLINT(cppcoreguidelines-init-variables)
         if (t == head_.load(std::memory_order_acquire))
         {
-            return false;  // empty
+            return false;  // NOLINT(readability-simplify-boolean-expr) empty
         }
         item = buf_[t];
         tail_.store(increment(t), std::memory_order_release);
@@ -143,8 +143,8 @@ public:
     /// @return Number of items actually dequeued (may be less than @p count).
     std::size_t try_pop_n(T* items, std::size_t count) noexcept
     {
-        const std::size_t t     = tail_.load(std::memory_order_relaxed);
-        const std::size_t h     = head_.load(std::memory_order_acquire);
+        const std::size_t t     = tail_.load(std::memory_order_relaxed);  // NOLINT(cppcoreguidelines-init-variables)
+        const std::size_t h     = head_.load(std::memory_order_acquire);  // NOLINT(cppcoreguidelines-init-variables)
         const std::size_t avail = (h >= t) ? (h - t) : (kCapacity - t + h);
         const std::size_t n     = min_of(count, avail);
         if (n == 0U)
@@ -172,10 +172,10 @@ public:
     /// @return true if an item was available; false if the buffer was empty.
     bool peek(T& item) const noexcept
     {
-        const std::size_t t = tail_.load(std::memory_order_relaxed);
+        const std::size_t t = tail_.load(std::memory_order_relaxed);  // NOLINT(cppcoreguidelines-init-variables)
         if (t == head_.load(std::memory_order_acquire))
         {
-            return false;
+            return false;  // NOLINT(readability-simplify-boolean-expr)
         }
         item = buf_[t];
         return true;
@@ -188,8 +188,8 @@ public:
     ///        the caller acts on it.
     [[nodiscard]] std::size_t size() const noexcept
     {
-        const std::size_t h = head_.load(std::memory_order_acquire);
-        const std::size_t t = tail_.load(std::memory_order_acquire);
+        const std::size_t h = head_.load(std::memory_order_acquire);  // NOLINT(cppcoreguidelines-init-variables)
+        const std::size_t t = tail_.load(std::memory_order_acquire);  // NOLINT(cppcoreguidelines-init-variables)
         if (h >= t)
         {
             return h - t;

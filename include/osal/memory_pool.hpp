@@ -183,7 +183,7 @@ public:
 private:
     bool                                        valid_;
     std::size_t                                 block_size_;
-    mutable active_traits::memory_pool_handle_t handle_;
+    mutable active_traits::memory_pool_handle_t handle_{};
 };
 
 /// @} // osal_memory_pool

@@ -27,8 +27,8 @@
 #ifndef OSAL_C_H
 #define OSAL_C_H
 
-#include <stddef.h>
-#include <stdint.h>
+#include <stddef.h>  // NOLINT(hicpp-deprecated-headers,modernize-deprecated-headers)
+#include <stdint.h>  // NOLINT(hicpp-deprecated-headers,modernize-deprecated-headers)
 
 #if ((defined(OSAL_CFG_TICK_TYPE_U16) ? 1 : 0) + (defined(OSAL_CFG_TICK_TYPE_U32) ? 1 : 0) + \
      (defined(OSAL_CFG_TICK_TYPE_U64) ? 1 : 0)) > 1

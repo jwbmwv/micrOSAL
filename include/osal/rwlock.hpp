@@ -75,13 +75,13 @@ namespace osal
 ///          On POSIX-family backends the native pthread_rwlock_t is used.
 ///          On all other backends, an emulated implementation is provided
 ///          using mutex + condvar + reader counter.
-class rwlock
+class rwlock  // NOLINT(cppcoreguidelines-pro-type-member-init,hicpp-member-init)
 {
 public:
     // ---- construction / destruction ----------------------------------------
 
     /// @brief Constructs a read-write lock.
-    rwlock() noexcept { valid_ = osal_rwlock_create(&handle_).ok(); }
+    rwlock() noexcept = default;  // NOLINT(cppcoreguidelines-pro-type-member-init,hicpp-member-init)
 
     /// @brief Destroys the read-write lock.
     ~rwlock() noexcept
@@ -166,8 +166,8 @@ public:
     [[nodiscard]] bool valid() const noexcept { return valid_; }
 
 private:
-    bool                           valid_{false};
     active_traits::rwlock_handle_t handle_{};
+    bool                           valid_{osal_rwlock_create(&handle_).ok()};
 };
 
 /// @} // osal_rwlock

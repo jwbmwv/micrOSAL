@@ -214,8 +214,8 @@ public:
 
 private:
     // ---- data members (mutable runtime state only — config is consumed at init)
-    bool                          valid_;   ///< Initialisation succeeded.
-    active_traits::mutex_handle_t handle_;  ///< Opaque backend handle.
+    bool                          valid_;     ///< Initialisation succeeded.
+    active_traits::mutex_handle_t handle_{};  ///< Opaque backend handle.
 };
 
 /// @} // osal_mutex

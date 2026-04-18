@@ -34,6 +34,7 @@
 
 extern "C"
 {
+    // NOLINTNEXTLINE(readability-inconsistent-declaration-parameter-name)
     osal::result osal_queue_create(osal::active_traits::queue_handle_t* handle, void* buf, std::size_t item_sz,
                                    std::size_t cap) noexcept;
 
@@ -70,7 +71,7 @@ namespace osal
 /// @tparam N  Maximum number of items (queue depth).
 template<queue_element T, queue_depth_t N>
     requires valid_queue_depth<N>
-class queue
+class queue  // NOLINT(cppcoreguidelines-pro-type-member-init,hicpp-member-init)
 {
 public:
     // ---- types -------------------------------------------------------------
@@ -82,7 +83,7 @@ public:
     /// @brief Constructs and initialises the queue.
     /// @complexity O(1)
     /// @blocking   Never.
-    queue() noexcept { valid_ = osal_queue_create(&handle_, storage_, sizeof(T), N).ok(); }
+    queue() noexcept = default;  // NOLINT(cppcoreguidelines-pro-type-member-init,hicpp-member-init)
 
     /// @brief Destructs the queue.
     ~queue() noexcept
@@ -196,10 +197,10 @@ public:
     bool peek(T& item) noexcept { return osal_queue_peek(&handle_, &item, NO_WAIT).ok(); }
 
 private:
-    bool                          valid_{false};
     active_traits::queue_handle_t handle_{};
     /// @brief Static backing storage — N items of size sizeof(T).
     alignas(T) std::uint8_t storage_[N * sizeof(T)]{};
+    bool valid_{osal_queue_create(&handle_, storage_, sizeof(T), N).ok()};
 };
 
 /// @} // osal_queue

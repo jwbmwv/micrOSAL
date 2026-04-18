@@ -43,14 +43,16 @@ extern "C"
     osal::event_bits_t osal_event_flags_get(const osal::active_traits::event_flags_handle_t* handle) noexcept;
 
     /// @brief Waits until any of the requested bits are set.
+    // NOLINTNEXTLINE(readability-inconsistent-declaration-parameter-name)
     osal::result osal_event_flags_wait_any(osal::active_traits::event_flags_handle_t* handle,
-                                           osal::event_bits_t wait_bits, osal::event_bits_t* actual_bits,
-                                           bool clear_on_exit, osal::tick_t timeout_ticks) noexcept;
+                                           osal::event_bits_t wait_bits, osal::event_bits_t* actual, bool clear_on_exit,
+                                           osal::tick_t timeout) noexcept;
 
     /// @brief Waits until ALL of the requested bits are set.
+    // NOLINTNEXTLINE(readability-inconsistent-declaration-parameter-name)
     osal::result osal_event_flags_wait_all(osal::active_traits::event_flags_handle_t* handle,
-                                           osal::event_bits_t wait_bits, osal::event_bits_t* actual_bits,
-                                           bool clear_on_exit, osal::tick_t timeout_ticks) noexcept;
+                                           osal::event_bits_t wait_bits, osal::event_bits_t* actual, bool clear_on_exit,
+                                           osal::tick_t timeout) noexcept;
 
     /// @brief ISR-safe set (only on capable backends).
     osal::result osal_event_flags_set_isr(osal::active_traits::event_flags_handle_t* handle,
@@ -68,14 +70,14 @@ namespace osal
 /// @brief OSAL event flag group.
 /// @details Stores 32 independently settable/clearable bits.
 ///          Uses native RTOS event group where available; emulates otherwise.
-class event_flags
+class event_flags  // NOLINT(cppcoreguidelines-pro-type-member-init,hicpp-member-init)
 {
 public:
     // ---- construction / destruction ----------------------------------------
 
     /// @brief Constructs and initialises the event flag group (all bits clear).
     /// @complexity O(1)
-    event_flags() noexcept { valid_ = osal_event_flags_create(&handle_).ok(); }
+    event_flags() noexcept = default;  // NOLINT(cppcoreguidelines-pro-type-member-init,hicpp-member-init)
 
     /// @brief Destructs the event flag group.
     ~event_flags() noexcept
@@ -151,8 +153,8 @@ public:
     [[nodiscard]] bool valid() const noexcept { return valid_; }
 
 private:
-    bool                                valid_{false};
     active_traits::event_flags_handle_t handle_{};
+    bool                                valid_{osal_event_flags_create(&handle_).ok()};
 };
 
 /// @} // osal_event_flags

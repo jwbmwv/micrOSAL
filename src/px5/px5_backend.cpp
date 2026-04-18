@@ -37,7 +37,8 @@
 #define OSAL_PX5_MAX_EVTGRPS 8
 #define OSAL_PX5_MAX_WAITSETS 4
 
-namespace {
+namespace
+{
 
 TX_THREAD            px5_threads[OSAL_PX5_MAX_THREADS];
 bool                 px5_thread_used[OSAL_PX5_MAX_THREADS];
@@ -101,7 +102,7 @@ constexpr ULONG to_px5_ticks(osal::tick_t t) noexcept
     {
         return TX_NO_WAIT;
     }
-    return static_cast<ULONG>(t);
+    return static_cast<ULONG>(t);  // NOLINT(bugprone-narrowing-conversions,cppcoreguidelines-narrowing-conversions)
 }
 
 #define PX5_THREAD_PTR(h) static_cast<TX_THREAD*>((h)->native)
@@ -580,7 +581,8 @@ extern "C"
     // Timer
     // ---------------------------------------------------------------------------
 
-    namespace {
+    namespace
+    {
 
     /// @brief Internal PX5 timer expiry callback; dispatches to the user callback.
     /// @param idx Index into px5_timer_ctxs[] identifying which timer fired.
@@ -627,8 +629,8 @@ extern "C"
         }
         px5_timer_ctxs[idx] = {cb, arg, static_cast<ULONG>(period), t};
         const ULONG resched = auto_reload ? static_cast<ULONG>(period) : 0U;
-        if (tx_timer_create(t, const_cast<CHAR*>(name != nullptr ? name : "t"), px5_timer_expiry, idx, static_cast<ULONG>(period),
-                            resched, TX_NO_ACTIVATE) != TX_SUCCESS)
+        if (tx_timer_create(t, const_cast<CHAR*>(name != nullptr ? name : "t"), px5_timer_expiry, idx,
+                            static_cast<ULONG>(period), resched, TX_NO_ACTIVATE) != TX_SUCCESS)
         {
             px5_timer_ctxs[idx].fn = nullptr;
             pool_release(px5_timers, px5_timer_used, t);
@@ -811,7 +813,8 @@ extern "C"
         return static_cast<osal::event_bits_t>(actual);
     }
 
-    namespace {
+    namespace
+    {
 
     /// @brief Internal helper: wait for event flags with configurable AND/OR and clear-on-exit semantics.
     /// @param h       Event flags handle.
@@ -822,7 +825,7 @@ extern "C"
     /// @param timeout Maximum wait in OSAL ticks.
     /// @return osal::ok() on success; osal::error_code::timeout on expiry.
     osal::result px5_evt_wait(osal::active_traits::event_flags_handle_t* h, osal::event_bits_t bits,
-                                     osal::event_bits_t* actual, bool coe, bool all, osal::tick_t timeout) noexcept
+                              osal::event_bits_t* actual, bool coe, bool all, osal::tick_t timeout) noexcept
     {
         if (h == nullptr || h->native == nullptr)
         {

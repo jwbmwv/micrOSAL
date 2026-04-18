@@ -1,0 +1,45 @@
+@startuml channel_architecture
+!include _render_profile.puml
+
+title micrOSAL Channel Layer — Architecture
+
+package "User Code" {
+    [Producer]
+    [Consumer A]
+    [Consumer B]
+}
+
+package "Channel API" {
+    interface "osal_signal<T,N,M>" as LCD
+    interface "osal_signal_premium<T,N,M>" as PREMIUM
+    PREMIUM -|> LCD
+}
+
+package "osal_bus<T,Capacity>" {
+    [Generic Channel\n(queue-backed)] as GEN_CH
+    [Zephyr Channel\n(zbus-backed)] as ZEP_CH
+}
+
+package "micrOSAL Primitives" {
+    [osal::queue<T,N>]
+    [osal::mutex]
+}
+
+package "Zephyr Zbus" {
+    [zbus_chan_pub()]
+    [zbus_sub_wait()]
+}
+
+[Producer]   --> LCD       : publish()
+[Consumer A] --> LCD       : subscribe() / try_receive()
+[Consumer B] --> PREMIUM   : subscribe_observer()
+
+LCD      --> GEN_CH : bus_backend_generic
+LCD      --> ZEP_CH : bus_backend_zephyr
+
+GEN_CH --> [osal::queue<T,N>]
+GEN_CH --> [osal::mutex]
+ZEP_CH --> [zbus_chan_pub()]
+ZEP_CH --> [zbus_sub_wait()]
+
+@enduml

@@ -1,0 +1,74 @@
+@startuml channel_class_diagram
+!include _render_profile.puml
+
+title micrOSAL Channel Layer — Class Diagram
+
+namespace osal {
+
+    class "osal_bus<T,N,BackendTag>" as Channel << (T,#ADD1B2) template >> {
+        +valid() : bool
+        +try_send(item : T) : bool
+        +send(item : T, ticks : tick_t) : bool
+        +try_receive(out : T&) : bool
+        +receive(out : T&, ticks : tick_t) : bool
+    }
+
+    class "osal_bus<T,N,\nbus_backend_generic>" as ChannelGen {
+        -handle : queue_handle_t
+        -storage : uint8_t[N*sizeof(T)]
+        -valid_ : bool
+    }
+
+    class "osal_bus<T,N,\nbus_backend_zephyr>" as ChannelZephyr {
+        .. Zbus channel reference ..
+    }
+
+    Channel <|.. ChannelGen
+    Channel <|.. ChannelZephyr
+
+    class "osal_signal<T,N,M,BackendTag>" as Topic << (T,#ADD1B2) template >> {
+        +subscribe(out_id : subscriber_id&) : bool
+        +unsubscribe(id : subscriber_id) : bool
+        +publish(msg : T) : bool
+        +try_receive(id : subscriber_id, out : T&) : bool
+        +receive(id : subscriber_id, out : T&, ticks) : bool
+        +subscriber_count() : size_t
+    }
+
+    class "osal_signal<T,N,M,\nbus_backend_generic>" as TopicGen {
+        -slots : subscriber_slot[N]
+        -mutex_ : osal::mutex
+        -subscriber_count_ : size_t
+    }
+
+    class subscriber_slot {
+        +in_use_ : bool
+        +queue_ : osal_bus<T,M,generic>
+    }
+
+    class "osal_signal_premium<T,N,M,BackendTag>" as TopicPremium {
+        +subscribe_observer(fn : observer_fn) : bool
+        +unsubscribe_observer(fn : observer_fn) : bool
+        +publish(msg : T) : bool
+        +publish_zero_copy(ptr : T*) : bool
+        +route_to(dest : signal_id, msg : T) : bool
+        +observer_count() : size_t
+        -observers_ : observer_fn[N]
+        -observer_count_ : size_t
+    }
+
+    class "osal_signal_capabilities<BackendTag>" as Caps {
+        +native_pubsub : bool
+        +native_observers : bool
+        +native_routing : bool
+        +zero_copy : bool
+    }
+
+    Topic <|.. TopicGen
+    TopicPremium --|> Topic
+    TopicGen *-- subscriber_slot
+    subscriber_slot *-- ChannelGen
+    TopicPremium ..> Caps : constexpr query
+}
+
+@enduml

@@ -75,3 +75,8 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     )
 endif()
 add_test(NAME test_c_api COMMAND test_c_api)
+
+# ---------------------------------------------------------------------------
+# Channel / pub-sub tests
+# ---------------------------------------------------------------------------
+add_subdirectory(bus)

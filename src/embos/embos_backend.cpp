@@ -40,40 +40,43 @@
 // ---------------------------------------------------------------------------
 // Static pools
 // ---------------------------------------------------------------------------
-static OS_TASK      eos_tasks[OSAL_EMBOS_MAX_THREADS];
-static bool         eos_task_used[OSAL_EMBOS_MAX_THREADS];
-static OS_MUTEX     eos_mutexes[OSAL_EMBOS_MAX_MUTEXES];
-static bool         eos_mutex_used[OSAL_EMBOS_MAX_MUTEXES];
-static OS_SEMAPHORE eos_sems[OSAL_EMBOS_MAX_SEMS];
-static bool         eos_sem_used[OSAL_EMBOS_MAX_SEMS];
+namespace
+{
+
+OS_TASK      eos_tasks[OSAL_EMBOS_MAX_THREADS];
+bool         eos_task_used[OSAL_EMBOS_MAX_THREADS];
+OS_MUTEX     eos_mutexes[OSAL_EMBOS_MAX_MUTEXES];
+bool         eos_mutex_used[OSAL_EMBOS_MAX_MUTEXES];
+OS_SEMAPHORE eos_sems[OSAL_EMBOS_MAX_SEMS];
+bool         eos_sem_used[OSAL_EMBOS_MAX_SEMS];
 
 struct eos_queue_slot
 {
-    OS_QUEUE q;
-    char     buf[OSAL_EMBOS_QUEUE_BUF_SIZE];
-    bool     used;
+    OS_QUEUE q{};
+    char     buf[OSAL_EMBOS_QUEUE_BUF_SIZE]{};
+    bool     used = false;
 };
-static eos_queue_slot eos_queues[OSAL_EMBOS_MAX_QUEUES];
+eos_queue_slot eos_queues[OSAL_EMBOS_MAX_QUEUES];
 
 struct eos_timer_slot
 {
-    OS_TIMER_EX           tmr;
-    osal_timer_callback_t fn;
-    void*                 arg;
-    OS_TIME               period;
-    bool                  auto_reload;
-    bool                  used;
+    OS_TIMER_EX           tmr{};
+    osal_timer_callback_t fn          = nullptr;
+    void*                 arg         = nullptr;
+    OS_TIME               period      = 0;
+    bool                  auto_reload = false;
+    bool                  used        = false;
 };
-static eos_timer_slot eos_timers[OSAL_EMBOS_MAX_TIMERS];
+eos_timer_slot eos_timers[OSAL_EMBOS_MAX_TIMERS];
 
-static OS_EVENT eos_events[OSAL_EMBOS_MAX_EVENTS];
-static bool     eos_event_used[OSAL_EMBOS_MAX_EVENTS];
+OS_EVENT eos_events[OSAL_EMBOS_MAX_EVENTS];
+bool     eos_event_used[OSAL_EMBOS_MAX_EVENTS];
 
 // ---------------------------------------------------------------------------
 // Pool helpers
 // ---------------------------------------------------------------------------
 template<typename T, std::size_t N>
-static T* pool_acquire(T (&pool)[N], bool (&used)[N]) noexcept
+T* pool_acquire(T (&pool)[N], bool (&used)[N]) noexcept
 {
     for (std::size_t i = 0; i < N; ++i)
     {
@@ -87,7 +90,7 @@ static T* pool_acquire(T (&pool)[N], bool (&used)[N]) noexcept
 }
 
 template<typename T, std::size_t N>
-static void pool_release(T (&pool)[N], bool (&used)[N], T* p) noexcept
+void pool_release(T (&pool)[N], bool (&used)[N], T* p) noexcept
 {
     for (std::size_t i = 0; i < N; ++i)
     {
@@ -100,7 +103,7 @@ static void pool_release(T (&pool)[N], bool (&used)[N], T* p) noexcept
 }
 
 template<typename T, std::size_t N>
-static T* pool_acquire_by_used(T (&pool)[N]) noexcept
+T* pool_acquire_by_used(T (&pool)[N]) noexcept
 {
     for (std::size_t i = 0; i < N; ++i)
     {
@@ -114,7 +117,7 @@ static T* pool_acquire_by_used(T (&pool)[N]) noexcept
 }
 
 template<typename T, std::size_t N>
-static void pool_release_by_used(T (&pool)[N], T* p) noexcept
+void pool_release_by_used(T (&pool)[N], T* p) noexcept
 {
     for (std::size_t i = 0; i < N; ++i)
     {
@@ -132,7 +135,7 @@ static void pool_release_by_used(T (&pool)[N], T* p) noexcept
 
 /// @brief Map OSAL priority [0=lowest..255=highest] to embOS priority [1=lowest..255=highest].
 /// embOS: higher numerical value = higher priority. 0 is reserved for the idle task.
-static constexpr OS_PRIO osal_to_embos_priority(osal::priority_t p) noexcept
+constexpr OS_PRIO osal_to_embos_priority(osal::priority_t p) noexcept
 {
     if (p == 0U)
     {
@@ -142,7 +145,7 @@ static constexpr OS_PRIO osal_to_embos_priority(osal::priority_t p) noexcept
 }
 
 /// @brief Convert OSAL ticks to embOS time value.
-static constexpr OS_TIME to_embos_ticks(osal::tick_t t) noexcept
+constexpr OS_TIME to_embos_ticks(osal::tick_t t) noexcept
 {
     if (t == osal::WAIT_FOREVER)
     {
@@ -152,13 +155,13 @@ static constexpr OS_TIME to_embos_ticks(osal::tick_t t) noexcept
     {
         return 1;  // minimum ticks — checked separately
     }
-    return static_cast<OS_TIME>(t);
+    return static_cast<OS_TIME>(t);  // NOLINT(bugprone-narrowing-conversions,cppcoreguidelines-narrowing-conversions)
 }
 
 // ---------------------------------------------------------------------------
 // Timer callback
 // ---------------------------------------------------------------------------
-static void eos_timer_callback(void* p_arg) noexcept
+void eos_timer_callback(void* p_arg) noexcept
 {
     auto* slot = static_cast<eos_timer_slot*>(p_arg);
     if (slot != nullptr && slot->fn != nullptr)
@@ -171,6 +174,8 @@ static void eos_timer_callback(void* p_arg) noexcept
         OS_TIMER_StartEx(&slot->tmr);
     }
 }
+
+}  // namespace
 
 extern "C"
 {
@@ -376,7 +381,7 @@ extern "C"
             const int r = OS_MUTEX_LockTimed(m, 1U);
             return (r != 0) ? osal::ok() : osal::error_code::would_block;
         }
-        const int r = OS_MUTEX_LockTimed(m, to_embos_ticks(timeout_ticks));
+        const int r = OS_MUTEX_LockTimed(m, to_embos_ticks(timeout_ticks));  // NOLINT(cppcoreguidelines-init-variables)
         return (r != 0) ? osal::ok() : osal::error_code::timeout;
     }
 
@@ -482,7 +487,8 @@ extern "C"
             const int r = OS_SEMAPHORE_TakeTimed(s, 1U);
             return (r != 0) ? osal::ok() : osal::error_code::would_block;
         }
-        const int r = OS_SEMAPHORE_TakeTimed(s, to_embos_ticks(timeout_ticks));
+        const int r =
+            OS_SEMAPHORE_TakeTimed(s, to_embos_ticks(timeout_ticks));  // NOLINT(cppcoreguidelines-init-variables)
         return (r != 0) ? osal::ok() : osal::error_code::timeout;
     }
 
@@ -505,6 +511,7 @@ extern "C"
     osal::result osal_queue_create(osal::active_traits::queue_handle_t* handle, void* /*buffer*/, std::size_t item_size,
                                    std::size_t /*capacity*/) noexcept
     {
+        (void)item_size;
         auto* slot = pool_acquire_by_used(eos_queues);
         if (slot == nullptr)
         {
@@ -539,13 +546,14 @@ extern "C"
     osal::result osal_queue_send(osal::active_traits::queue_handle_t* handle, const void* item,
                                  osal::tick_t timeout_ticks) noexcept
     {
+        (void)timeout_ticks;
         if (handle == nullptr || handle->native == nullptr)
         {
             return osal::error_code::not_initialized;
         }
         auto* slot = static_cast<eos_queue_slot*>(handle->native);
         // embOS OS_QUEUE_Put sends a sized message
-        const int r = OS_QUEUE_Put(&slot->q, item, sizeof(void*));
+        const int r = OS_QUEUE_Put(&slot->q, item, static_cast<OS_UINT>(sizeof(void*)));
         return (r == 0) ? osal::ok() : osal::error_code::would_block;
     }
 
@@ -577,7 +585,8 @@ extern "C"
             OS_QUEUE_GetPtr(&slot->q, nullptr);  // blocks until message available
             return osal::ok();
         }
-        const int r = OS_QUEUE_GetTimed(&slot->q, item, sizeof(void*), to_embos_ticks(timeout_ticks));
+        const int r =  // NOLINT(cppcoreguidelines-init-variables)
+            OS_QUEUE_GetTimed(&slot->q, item, static_cast<OS_UINT>(sizeof(void*)), to_embos_ticks(timeout_ticks));
         if (r != 0)
         {
             return osal::ok();
@@ -611,7 +620,7 @@ extern "C"
         {
             return 0U;
         }
-        auto* slot = static_cast<const eos_queue_slot*>(handle->native);
+        const auto* slot = static_cast<const eos_queue_slot*>(handle->native);
         return static_cast<std::size_t>(OS_QUEUE_GetMessageCnt(&slot->q));
     }
 
@@ -798,6 +807,7 @@ extern "C"
             return osal::error_code::not_initialized;
         }
         OS_EVENT_Reset(static_cast<OS_EVENT*>(handle->native));
+        (void)bits;
         // There's no selective clear in embOS; Reset clears all.
         // We re-set the bits that shouldn't be cleared.
         OS_EVENT_MASK current = OS_EVENT_Get(static_cast<OS_EVENT*>(handle->native));
@@ -835,7 +845,7 @@ extern "C"
         }
         auto*         e    = static_cast<OS_EVENT*>(handle->native);
         OS_EVENT_MASK mask = static_cast<OS_EVENT_MASK>(bits);
-        OS_EVENT_MASK got;
+        OS_EVENT_MASK got  = 0U;
 
         if (timeout == osal::WAIT_FOREVER)
         {
@@ -878,9 +888,9 @@ extern "C"
         }
         auto*         e    = static_cast<OS_EVENT*>(handle->native);
         OS_EVENT_MASK mask = static_cast<OS_EVENT_MASK>(bits);
-        OS_EVENT_MASK got;
+        OS_EVENT_MASK got  = 0U;
 
-        if (timeout == osal::WAIT_FOREVER)
+        if (timeout == osal::WAIT_FOREVER)  // NOLINT(bugprone-branch-clone)
         {
             got = OS_EVENT_GetMaskMode(e, mask, OS_EVENT_MODE_SET_ALL);
         }
@@ -948,8 +958,10 @@ extern "C"
     osal::result osal_wait_set_wait(osal::active_traits::wait_set_handle_t*, int*, std::size_t, std::size_t* n,
                                     osal::tick_t) noexcept
     {
-        if (n)
+        if (n != nullptr)
+        {
             *n = 0U;
+        }
         return osal::error_code::not_supported;
     }
 
@@ -1008,7 +1020,7 @@ extern "C"
     /// @return @c osal::ok() on success; @c error_code::not_initialized if null.
     osal::result osal_task_notify(osal::active_traits::thread_handle_t* handle, std::uint32_t value) noexcept
     {
-        if (!handle || !handle->native)
+        if (handle == nullptr || handle->native == nullptr)
         {
             return osal::error_code::not_initialized;
         }
@@ -1022,7 +1034,7 @@ extern "C"
     /// @return @c osal::ok() on success; @c error_code::not_initialized if null.
     osal::result osal_task_notify_isr(osal::active_traits::thread_handle_t* handle, std::uint32_t value) noexcept
     {
-        if (!handle || !handle->native)
+        if (handle == nullptr || handle->native == nullptr)
         {
             return osal::error_code::not_initialized;
         }
@@ -1053,7 +1065,7 @@ extern "C"
             OS_TASKEVENT_Clear(static_cast<OS_TASKEVENT>(clear_on_entry));
         }
 
-        OS_TASKEVENT received;
+        OS_TASKEVENT received = 0U;
         if (timeout_ticks == osal::WAIT_FOREVER)
         {
             received = OS_TASKEVENT_GetMasked(static_cast<OS_TASKEVENT>(0xFFFFU));
@@ -1069,7 +1081,7 @@ extern "C"
         else
         {
             OS_TASKEVENT got = 0U;
-            const int    rc =
+            const int    rc  =  // NOLINT(cppcoreguidelines-init-variables)
                 OS_TASKEVENT_GetMaskedEx(static_cast<OS_TASKEVENT>(0xFFFFU), to_embos_ticks(timeout_ticks), &got);
             if (rc != 0)
             {
@@ -1078,7 +1090,7 @@ extern "C"
             received = got;
         }
 
-        if (value_out)
+        if (value_out != nullptr)
         {
             *value_out = static_cast<std::uint32_t>(received);
         }

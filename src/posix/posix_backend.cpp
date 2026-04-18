@@ -582,7 +582,7 @@ extern "C"
         auto* s = static_cast<sem_t*>(handle->native);
         if (timeout_ticks == osal::WAIT_FOREVER)
         {
-            int rc;
+            int rc = 0;
             do
             {
                 rc = sem_wait(s);
@@ -870,9 +870,9 @@ extern "C"
         ctx->arg         = arg;
         ctx->auto_reload = auto_reload;
 
-        const time_t sec  = static_cast<time_t>(period_ticks / 1000U);
-        const auto   nsec = static_cast<decltype(timespec{}.tv_nsec)>(static_cast<std::int64_t>(period_ticks % 1000U) *
-                                                                      kNanosecondsPerMillisecond);
+        const auto sec  = static_cast<time_t>(period_ticks / 1000U);
+        const auto nsec = static_cast<decltype(timespec{}.tv_nsec)>(static_cast<std::int64_t>(period_ticks % 1000U) *
+                                                                    kNanosecondsPerMillisecond);
         ctx->spec.it_value.tv_sec     = sec;
         ctx->spec.it_value.tv_nsec    = nsec;
         ctx->spec.it_interval.tv_sec  = auto_reload ? sec : 0;
@@ -979,9 +979,9 @@ extern "C"
         {
             return osal::error_code::not_initialized;
         }
-        auto*        ctx              = static_cast<posix_timer_ctx*>(handle->native);
-        const time_t sec              = static_cast<time_t>(p / 1000U);
-        const auto   nsec             = static_cast<decltype(timespec{}.tv_nsec)>(static_cast<std::int64_t>(p % 1000U) *
+        auto*      ctx                = static_cast<posix_timer_ctx*>(handle->native);
+        const auto sec                = static_cast<time_t>(p / 1000U);
+        const auto nsec               = static_cast<decltype(timespec{}.tv_nsec)>(static_cast<std::int64_t>(p % 1000U) *
                                                                                   kNanosecondsPerMillisecond);
         ctx->spec.it_value.tv_sec     = sec;
         ctx->spec.it_value.tv_nsec    = nsec;
@@ -999,7 +999,7 @@ extern "C"
         {
             return false;
         }
-        auto* ctx = static_cast<const posix_timer_ctx*>(handle->native);
+        const auto* ctx = static_cast<const posix_timer_ctx*>(handle->native);
         struct itimerspec cur
         {
         };

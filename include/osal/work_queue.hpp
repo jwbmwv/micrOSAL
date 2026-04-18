@@ -193,7 +193,7 @@ public:
 
 private:
     bool                               valid_;
-    active_traits::work_queue_handle_t handle_;
+    active_traits::work_queue_handle_t handle_{};
 };
 
 /// @} // osal_work_queue

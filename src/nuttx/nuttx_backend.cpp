@@ -36,39 +36,42 @@
 #include <pthread.h>
 #include <mqueue.h>
 #include <sched.h>
-#include <stdio.h>
-#include <time.h>
-#include <errno.h>
-#include <signal.h>
-#include <assert.h>
-#include <string.h>
+#include <cstdio>
+#include <ctime>
+#include <cerrno>
+#include <csignal>
+#include <cassert>
+#include <cstring>
 #include <new>
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
+namespace
+{
+
 /// @brief Convert ms timeout to absolute timespec (CLOCK_MONOTONIC).
-static struct timespec ms_to_abs_timespec(osal::tick_t ms) noexcept
+struct timespec ms_to_abs_timespec(osal::tick_t ms) noexcept
 {
     return osal::detail::backend_timeout_adapter::to_abs_timespec(CLOCK_MONOTONIC, ms);
 }
 
 /// @brief Select the best clock source for queue condition variables.
 #if defined(__APPLE__) || !defined(_POSIX_MONOTONIC_CLOCK)
-static constexpr clockid_t kQueueCondClock = CLOCK_REALTIME;
+constexpr clockid_t kQueueCondClock = CLOCK_REALTIME;
 #else
-static constexpr clockid_t kQueueCondClock = CLOCK_MONOTONIC;
+constexpr clockid_t kQueueCondClock = CLOCK_MONOTONIC;
 #endif
 
 /// @brief Convert queue wait timeouts to an absolute condvar deadline.
-static struct timespec ms_to_abs_timespec_cond(osal::tick_t timeout_ticks) noexcept
+struct timespec ms_to_abs_timespec_cond(osal::tick_t timeout_ticks) noexcept
 {
     return osal::detail::backend_timeout_adapter::to_abs_timespec(kQueueCondClock, timeout_ticks);
 }
 
 /// @brief Init a queue condvar with CLOCK_MONOTONIC where supported.
-static int cond_init_monotonic(pthread_cond_t* cond) noexcept
+int cond_init_monotonic(pthread_cond_t* cond) noexcept
 {
 #if defined(__APPLE__) || !defined(_POSIX_MONOTONIC_CLOCK)
     return pthread_cond_init(cond, nullptr);
@@ -90,15 +93,15 @@ static int cond_init_monotonic(pthread_cond_t* cond) noexcept
 struct nx_timer_ctx
 {
     struct work_s         work;
-    osal_timer_callback_t fn;
-    void*                 arg;
-    uint32_t              period_ticks;
-    bool                  auto_reload;
-    bool                  active;
+    osal_timer_callback_t fn           = nullptr;
+    void*                 arg          = nullptr;
+    uint32_t              period_ticks = 0;
+    bool                  auto_reload  = false;
+    bool                  active       = false;
 };
-static nx_timer_ctx nx_timer_ctxs[OSAL_NX_MAX_TIMERS];
+nx_timer_ctx nx_timer_ctxs[OSAL_NX_MAX_TIMERS];
 
-static void nx_timer_worker(void* arg) noexcept
+void nx_timer_worker(void* arg) noexcept
 {
     auto* ctx = static_cast<nx_timer_ctx*>(arg);
     if (ctx->fn != nullptr)
@@ -110,6 +113,8 @@ static void nx_timer_worker(void* arg) noexcept
         work_queue(LPWORK, &ctx->work, nx_timer_worker, ctx, ctx->period_ticks);
     }
 }
+
+}  // namespace
 
 // ---------------------------------------------------------------------------
 // Shared-include macro contract for posix_rwlock.inl.
@@ -145,17 +150,20 @@ extern "C"
 
     struct nx_thread_ctx
     {
-        void (*entry)(void*);
-        void* arg;
+        void (*entry)(void*) = nullptr;
+        void* arg            = nullptr;
     };
 
-    static void* nx_thread_trampoline(void* raw) noexcept
+    namespace
+    {
+    void* nx_thread_trampoline(void* raw) noexcept
     {
         auto* ctx = static_cast<nx_thread_ctx*>(raw);
         ctx->entry(ctx->arg);
         delete ctx;
         return nullptr;
     }
+    }  // namespace
 
     /// @brief Create a NuttX pthread via pthread_create() with SCHED_RR policy.
     /// @param handle      Output handle owns a heap-allocated pthread_t pointer.
@@ -170,7 +178,7 @@ extern "C"
     {
         assert(handle != nullptr && entry != nullptr);
         auto* ctx = new (std::nothrow) nx_thread_ctx{entry, arg};
-        if (!ctx)
+        if (ctx == nullptr)
         {
             return osal::error_code::out_of_resources;
         }
@@ -191,7 +199,7 @@ extern "C"
         pthread_attr_setschedpolicy(&attr, SCHED_RR);
 
         auto* tid = new (std::nothrow) pthread_t;
-        if (!tid)
+        if (tid == nullptr)
         {
             delete ctx;
             pthread_attr_destroy(&attr);
@@ -295,7 +303,9 @@ extern "C"
     /// @param ms Delay in milliseconds.
     void osal_thread_sleep_ms(std::uint32_t ms) noexcept
     {
-        struct timespec ts;
+        struct timespec ts
+        {
+        };
         ts.tv_sec  = static_cast<time_t>(ms / 1000U);
         ts.tv_nsec = static_cast<long>((ms % 1000U) * 1'000'000L);
         nanosleep(&ts, nullptr);
@@ -311,7 +321,7 @@ extern "C"
     osal::result osal_mutex_create(osal::active_traits::mutex_handle_t* handle, bool /*recursive*/) noexcept
     {
         auto* m = new (std::nothrow) mutex_t;
-        if (!m)
+        if (m == nullptr)
         {
             return osal::error_code::out_of_resources;
         }
@@ -403,7 +413,7 @@ extern "C"
                                        unsigned /*max_count*/) noexcept
     {
         auto* s = new (std::nothrow) sem_t;
-        if (!s)
+        if (s == nullptr)
         {
             return osal::error_code::out_of_resources;
         }
@@ -467,7 +477,7 @@ extern "C"
         auto* s = static_cast<sem_t*>(handle->native);
         if (timeout_ticks == osal::WAIT_FOREVER)
         {
-            int rc;
+            int rc = 0;
             do
             {
                 rc = nxsem_wait(s);
@@ -512,7 +522,10 @@ extern "C"
         std::uint8_t*           cache;
     };
 
-    static int g_nx_mq_counter = 0;
+    namespace
+    {
+    int g_nx_mq_counter = 0;
+    }  // namespace
 
     /// @brief Create a POSIX message queue with a unique generated name via mq_open().
     /// @details The name is immediately unlinked so the queue is destroyed when closed.
@@ -527,7 +540,7 @@ extern "C"
     {
         assert(handle != nullptr && item_size > 0 && capacity > 0);
         auto* q = new (std::nothrow) nx_queue_obj{};
-        if (!q)
+        if (q == nullptr)
         {
             return osal::error_code::out_of_resources;
         }
@@ -565,7 +578,8 @@ extern "C"
 
         // Generate a unique name for the POSIX mqueue.
         char name[32];
-        snprintf(name, sizeof(name), "/osal_q_%d", g_nx_mq_counter++);
+        snprintf(name, sizeof(name), "/osal_q_%d",
+                 g_nx_mq_counter++);  // NOLINT(cert-err33-c,cppcoreguidelines-pro-type-vararg)
 
         struct mq_attr attr
         {
@@ -573,7 +587,8 @@ extern "C"
         attr.mq_maxmsg  = static_cast<long>(capacity);
         attr.mq_msgsize = static_cast<long>(item_size);
 
-        q->mq = mq_open(name, O_RDWR | O_CREAT | O_EXCL | O_NONBLOCK, 0600, &attr);
+        q->mq = mq_open(name, O_RDWR | O_CREAT | O_EXCL | O_NONBLOCK,  // NOLINT(cppcoreguidelines-pro-type-vararg)
+                        0600, &attr);
         if (q->mq == (mqd_t)-1)
         {
             pthread_cond_destroy(&q->not_empty);
@@ -583,7 +598,7 @@ extern "C"
             delete q;
             return osal::error_code::out_of_resources;
         }
-        mq_unlink(name);  // unlink so it disappears when closed
+        (void)mq_unlink(name);  // unlink so it disappears when closed
         q->item_size   = item_size;
         q->capacity    = capacity;
         q->count       = 0U;
@@ -819,7 +834,7 @@ extern "C"
         {
             return 0U;
         }
-        auto* q = static_cast<const nx_queue_obj*>(handle->native);
+        const auto* q = static_cast<const nx_queue_obj*>(handle->native);
         pthread_mutex_lock(&q->mutex);
         const std::size_t count = q->count;
         pthread_mutex_unlock(&q->mutex);
@@ -835,7 +850,7 @@ extern "C"
         {
             return 0U;
         }
-        auto* q = static_cast<const nx_queue_obj*>(handle->native);
+        const auto* q = static_cast<const nx_queue_obj*>(handle->native);
         pthread_mutex_lock(&q->mutex);
         const std::size_t free_slots = q->capacity - q->count;
         pthread_mutex_unlock(&q->mutex);
@@ -922,7 +937,8 @@ extern "C"
         }
         auto& ctx    = nx_timer_ctxs[idx];
         ctx.active   = true;
-        const int rc = work_queue(LPWORK, &ctx.work, nx_timer_worker, &ctx, ctx.period_ticks);
+        const int rc = work_queue(LPWORK, &ctx.work, nx_timer_worker, &ctx,
+                                  ctx.period_ticks);  // NOLINT(cppcoreguidelines-init-variables)
         return (rc >= 0) ? osal::ok() : osal::error_code::unknown;
     }
 
@@ -1003,8 +1019,8 @@ extern "C"
 
     struct nx_condvar_obj
     {
-        sem_t        sem;
-        volatile int nwaiters;
+        sem_t        sem{};  ///< NuttX semaphore for condvar signalling.
+        volatile int nwaiters = 0;
     };
 
     /// @brief Allocate and initialise an nxsem-based condvar (sem count = 0).
@@ -1012,11 +1028,15 @@ extern "C"
     /// @return osal::ok() on success; osal::error_code::out_of_resources on failure.
     osal::result osal_condvar_create(osal::active_traits::condvar_handle_t* handle) noexcept
     {
-        if (!handle)
+        if (handle == nullptr)
+        {
             return osal::error_code::invalid_argument;
+        }
         auto* obj = new (std::nothrow) nx_condvar_obj{};
-        if (!obj)
+        if (obj == nullptr)
+        {
             return osal::error_code::out_of_resources;
+        }
         nxsem_init(&obj->sem, 0, 0);
         obj->nwaiters  = 0;
         handle->native = static_cast<void*>(obj);
@@ -1028,8 +1048,10 @@ extern "C"
     /// @return osal::ok() always.
     osal::result osal_condvar_destroy(osal::active_traits::condvar_handle_t* handle) noexcept
     {
-        if (!handle || !handle->native)
+        if (handle == nullptr || handle->native == nullptr)
+        {
             return osal::ok();
+        }
         auto* obj = static_cast<nx_condvar_obj*>(handle->native);
         nxsem_destroy(&obj->sem);
         delete obj;
@@ -1045,13 +1067,15 @@ extern "C"
     osal::result osal_condvar_wait(osal::active_traits::condvar_handle_t* handle,
                                    osal::active_traits::mutex_handle_t* mutex, osal::tick_t timeout) noexcept
     {
-        if (!handle || !handle->native || !mutex || !mutex->native)
+        if (handle == nullptr || handle->native == nullptr || mutex == nullptr || mutex->native == nullptr)
+        {
             return osal::error_code::not_initialized;
+        }
         auto* obj = static_cast<nx_condvar_obj*>(handle->native);
         auto* mtx = static_cast<mutex_t*>(mutex->native);
         obj->nwaiters++;
         nxmutex_unlock(mtx);
-        int rc;
+        int rc = 0;
         if (timeout == osal::WAIT_FOREVER)
         {
             do
@@ -1067,9 +1091,13 @@ extern "C"
         obj->nwaiters--;
         nxmutex_lock(mtx);
         if (rc >= 0)
+        {
             return osal::ok();
+        }
         if (rc == -ETIMEDOUT)
+        {
             return osal::error_code::timeout;
+        }
         return osal::error_code::unknown;
     }
 
@@ -1078,8 +1106,10 @@ extern "C"
     /// @return osal::ok() on success; osal::error_code::not_initialized if the handle is null.
     osal::result osal_condvar_notify_one(osal::active_traits::condvar_handle_t* handle) noexcept
     {
-        if (!handle || !handle->native)
+        if (handle == nullptr || handle->native == nullptr)
+        {
             return osal::error_code::not_initialized;
+        }
         auto* obj = static_cast<nx_condvar_obj*>(handle->native);
         if (obj->nwaiters > 0)
         {
@@ -1093,8 +1123,10 @@ extern "C"
     /// @return osal::ok() on success; osal::error_code::not_initialized if the handle is null.
     osal::result osal_condvar_notify_all(osal::active_traits::condvar_handle_t* handle) noexcept
     {
-        if (!handle || !handle->native)
+        if (handle == nullptr || handle->native == nullptr)
+        {
             return osal::error_code::not_initialized;
+        }
         auto*     obj = static_cast<nx_condvar_obj*>(handle->native);
         const int n   = obj->nwaiters;
         for (int i = 0; i < n; ++i)
@@ -1138,8 +1170,10 @@ extern "C"
     osal::result osal_wait_set_wait(osal::active_traits::wait_set_handle_t*, int*, std::size_t, std::size_t* n,
                                     osal::tick_t) noexcept
     {
-        if (n)
+        if (n != nullptr)
+        {
             *n = 0U;
+        }
         return osal::error_code::not_supported;
     }
 

@@ -38,7 +38,7 @@
 
 #include <cstring>
 #include <cassert>
-#include <setjmp.h>
+#include <csetjmp>
 #include <cstdint>
 #include <atomic>
 #if defined(OSAL_BM_TEST_SELF_TICK)
@@ -69,13 +69,15 @@
 // ---------------------------------------------------------------------------
 // Tick counter (volatile so the compiler doesn't cache it across calls)
 // ---------------------------------------------------------------------------
-static volatile std::uint64_t g_ticks = 0U;
+namespace
+{
+volatile std::uint64_t g_ticks = 0U;
 
 #if defined(OSAL_BM_TEST_SELF_TICK)
-static void bm_advance_timers() noexcept;
-static bool bm_self_tick_active = false;
+void bm_advance_timers() noexcept;
+bool bm_self_tick_active = false;
 
-static inline void bm_maybe_self_tick() noexcept
+inline void bm_maybe_self_tick() noexcept
 {
     if (bm_self_tick_active)
     {
@@ -88,8 +90,9 @@ static inline void bm_maybe_self_tick() noexcept
     bm_self_tick_active = false;
 }
 #else
-static inline void bm_maybe_self_tick() noexcept {}
+inline void bm_maybe_self_tick() noexcept {}
 #endif
+}  // namespace
 
 /// @brief Called by the SysTick handler (or equivalent) each tick.
 extern "C" void osal_baremetal_tick() noexcept
@@ -161,18 +164,20 @@ extern "C"
         std::size_t   stack_bytes;
     };
 
-    static bm_task bm_tasks[OSAL_BM_MAX_TASKS];
-    static int     bm_current         = -1;  ///< Index of currently running task; -1 = caller/scheduler context.
-    static int     bm_last_scheduled  = -1;
-    static bool    bm_sched_ctx_valid = false;
+    namespace
+    {
+    bm_task bm_tasks[OSAL_BM_MAX_TASKS];
+    int     bm_current         = -1;  ///< Index of currently running task; -1 = caller/scheduler context.
+    int     bm_last_scheduled  = -1;
+    bool    bm_sched_ctx_valid = false;
 #if defined(OSAL_BM_TEST_SELF_TICK)
-    static ucontext_t bm_sched_ctx;  ///< Caller context returned to when no peer task can run.
+    ucontext_t bm_sched_ctx;  ///< Caller context returned to when no peer task can run.
 #else
-    static jmp_buf bm_sched_ctx;  ///< Caller context returned to when no peer task can run.
+    jmp_buf bm_sched_ctx;  ///< Caller context returned to when no peer task can run.
 #endif
 
 #if defined(OSAL_BM_TEST_SELF_TICK)
-    static int bm_find_next_ready_task(int current, bool include_waiting) noexcept
+    int bm_find_next_ready_task(int current, bool include_waiting) noexcept
     {
         const int anchor = (current < 0) ? bm_last_scheduled : current;
         const int start  = (anchor < 0) ? 0 : ((anchor + 1) % OSAL_BM_MAX_TASKS);
@@ -191,7 +196,7 @@ extern "C"
         return -1;
     }
 
-    static void bm_task_trampoline(int idx) noexcept
+    void bm_task_trampoline(int idx) noexcept
     {
         bm_current = idx;
         bm_tasks[idx].entry(bm_tasks[idx].arg);
@@ -220,7 +225,7 @@ extern "C"
     }
 
     /// @brief Internal cooperative scheduler — invoked by yield and sleep.
-    static void bm_schedule() noexcept
+    void bm_schedule() noexcept
     {
         if (bm_current < 0)
         {
@@ -258,7 +263,7 @@ extern "C"
 #else
 
     /// @brief Internal cooperative scheduler — invoked by yield and sleep.
-    static void bm_schedule() noexcept
+    void bm_schedule() noexcept
     {
         const int current = bm_current;
         const int start   = (current < 0) ? 0 : ((current + 1) % OSAL_BM_MAX_TASKS);
@@ -296,6 +301,7 @@ extern "C"
         }
     }
 #endif
+    }  // namespace
 
     /// @brief Register a cooperative task (thread) in the bare-metal scheduler.
     /// @param handle      Output handle; `handle->native` points to the `bm_task` slot.
@@ -308,30 +314,31 @@ extern "C"
                                     osal::priority_t /*priority*/, osal::affinity_t /*affinity*/, void*       stack,
                                     osal::stack_size_t stack_bytes, const char* /*name*/) noexcept
     {
-        assert(handle && entry);
-        for (int i = 0; i < OSAL_BM_MAX_TASKS; ++i)
+        assert(handle != nullptr && entry != nullptr);
+        for (auto& task : bm_tasks)
         {
-            if (!bm_tasks[i].valid)
+            if (!task.valid)
             {
-                bm_tasks[i]             = {};
-                bm_tasks[i].valid       = true;
-                bm_tasks[i].started     = false;
-                bm_tasks[i].finished    = false;
-                bm_tasks[i].entry       = entry;
-                bm_tasks[i].arg         = arg;
-                bm_tasks[i].detached    = false;
-                bm_tasks[i].waiting     = false;
-                bm_tasks[i].stack       = static_cast<std::uint8_t*>(stack);
-                bm_tasks[i].stack_bytes = stack_bytes;
+                task             = {};
+                task.valid       = true;
+                task.started     = false;
+                task.finished    = false;
+                task.entry       = entry;
+                task.arg         = arg;
+                task.detached    = false;
+                task.waiting     = false;
+                task.stack       = static_cast<std::uint8_t*>(stack);
+                task.stack_bytes = stack_bytes;
 #if defined(OSAL_BM_TEST_SELF_TICK)
-                getcontext(&bm_tasks[i].ctx);
-                bm_tasks[i].ctx.uc_stack.ss_sp   = bm_tasks[i].stack;
-                bm_tasks[i].ctx.uc_stack.ss_size = bm_tasks[i].stack_bytes;
-                bm_tasks[i].ctx.uc_link          = nullptr;
-                makecontext(&bm_tasks[i].ctx, reinterpret_cast<void (*)()>(bm_task_trampoline), 1, i);
-                bm_tasks[i].started = true;
+                getcontext(&task.ctx);
+                task.ctx.uc_stack.ss_sp   = task.stack;
+                task.ctx.uc_stack.ss_size = task.stack_bytes;
+                task.ctx.uc_link          = nullptr;
+                makecontext(&task.ctx, reinterpret_cast<void (*)()>(bm_task_trampoline), 1,
+                            static_cast<int>(&task - bm_tasks));
+                task.started = true;
 #endif
-                handle->native = static_cast<void*>(&bm_tasks[i]);
+                handle->native = static_cast<void*>(&task);
                 return osal::ok();
             }
         }
@@ -344,7 +351,7 @@ extern "C"
     /// @return `osal::ok()` when the task finishes, `timeout` on expiry.
     osal::result osal_thread_join(osal::active_traits::thread_handle_t* handle, osal::tick_t timeout) noexcept
     {
-        if (!handle || !handle->native)
+        if (handle == nullptr || handle->native == nullptr)
         {
             return osal::error_code::not_initialized;
         }
@@ -368,7 +375,7 @@ extern "C"
     /// @return `osal::ok()` on success, `not_initialized` if the handle is null.
     osal::result osal_thread_detach(osal::active_traits::thread_handle_t* handle) noexcept
     {
-        if (!handle || !handle->native)
+        if (handle == nullptr || handle->native == nullptr)
         {
             return osal::error_code::not_initialized;
         }
@@ -449,7 +456,9 @@ extern "C"
         return bm_current;
     }
 
-    static inline void bm_wait_yield() noexcept
+    namespace
+    {
+    inline void bm_wait_yield() noexcept
     {
 #if defined(OSAL_BM_TEST_SELF_TICK)
         if (bm_current >= 0)
@@ -465,6 +474,7 @@ extern "C"
         }
 #endif
     }
+    }  // namespace
 
     /// @brief Spin-yield until at least @p ms ticks have elapsed since entry.
     /// @param ms Milliseconds to sleep (1 tick = 1 ms by default).
@@ -488,8 +498,11 @@ extern "C"
     {
         std::atomic_flag flag;
     };
-    static bm_mutex bm_mutex_pool[OSAL_BM_MAX_MUTEXES];
-    static bool     bm_mutex_used[OSAL_BM_MAX_MUTEXES];
+    namespace
+    {
+    bm_mutex bm_mutex_pool[OSAL_BM_MAX_MUTEXES];
+    bool     bm_mutex_used[OSAL_BM_MAX_MUTEXES];
+    }  // namespace
 
     /// @brief Allocate a spin-lock mutex from the static pool.
     /// @param handle Output handle.
@@ -514,7 +527,7 @@ extern "C"
     /// @return `osal::ok()` always.
     osal::result osal_mutex_destroy(osal::active_traits::mutex_handle_t* handle) noexcept
     {
-        if (!handle || !handle->native)
+        if (handle == nullptr || handle->native == nullptr)
         {
             return osal::ok();
         }
@@ -536,7 +549,7 @@ extern "C"
     /// @return `osal::ok()` on success, `timeout` on expiry.
     osal::result osal_mutex_lock(osal::active_traits::mutex_handle_t* handle, osal::tick_t timeout) noexcept
     {
-        if (!handle || !handle->native)
+        if (handle == nullptr || handle->native == nullptr)
         {
             return osal::error_code::not_initialized;
         }
@@ -559,7 +572,7 @@ extern "C"
     /// @return `osal::ok()` if acquired, `would_block` otherwise.
     osal::result osal_mutex_try_lock(osal::active_traits::mutex_handle_t* handle) noexcept
     {
-        if (!handle || !handle->native)
+        if (handle == nullptr || handle->native == nullptr)
         {
             return osal::error_code::not_initialized;
         }
@@ -572,7 +585,7 @@ extern "C"
     /// @return `osal::ok()` on success, `not_initialized` if the handle is invalid.
     osal::result osal_mutex_unlock(osal::active_traits::mutex_handle_t* handle) noexcept
     {
-        if (!handle || !handle->native)
+        if (handle == nullptr || handle->native == nullptr)
         {
             return osal::error_code::not_initialized;
         }
@@ -591,8 +604,11 @@ extern "C"
     {
         std::atomic<unsigned> count;
     };
-    static bm_semaphore bm_sem_pool[OSAL_BM_MAX_SEMS];
-    static bool         bm_sem_used[OSAL_BM_MAX_SEMS];
+    namespace
+    {
+    bm_semaphore bm_sem_pool[OSAL_BM_MAX_SEMS];
+    bool         bm_sem_used[OSAL_BM_MAX_SEMS];
+    }  // namespace
 
     /// @brief Allocate a counting semaphore from the static pool.
     /// @param handle Output handle.
@@ -619,7 +635,7 @@ extern "C"
     /// @return `osal::ok()` always.
     osal::result osal_semaphore_destroy(osal::active_traits::semaphore_handle_t* handle) noexcept
     {
-        if (!handle || !handle->native)
+        if (handle == nullptr || handle->native == nullptr)
         {
             return osal::ok();
         }
@@ -640,7 +656,7 @@ extern "C"
     /// @return `osal::ok()` on success, `not_initialized` if the handle is invalid.
     osal::result osal_semaphore_give(osal::active_traits::semaphore_handle_t* handle) noexcept
     {
-        if (!handle || !handle->native)
+        if (handle == nullptr || handle->native == nullptr)
         {
             return osal::error_code::not_initialized;
         }
@@ -662,7 +678,7 @@ extern "C"
     /// @return `osal::ok()` on success, `timeout` on expiry.
     osal::result osal_semaphore_take(osal::active_traits::semaphore_handle_t* handle, osal::tick_t timeout) noexcept
     {
-        if (!handle || !handle->native)
+        if (handle == nullptr || handle->native == nullptr)
         {
             return osal::error_code::not_initialized;
         }
@@ -710,8 +726,11 @@ extern "C"
         std::uint8_t* buf;
         std::size_t   item_size, capacity, head, tail, count;
     };
-    static bm_queue bm_queue_pool[OSAL_BM_MAX_QUEUES];
-    static bool     bm_queue_used[OSAL_BM_MAX_QUEUES];
+    namespace
+    {
+    bm_queue bm_queue_pool[OSAL_BM_MAX_QUEUES];
+    bool     bm_queue_used[OSAL_BM_MAX_QUEUES];
+    }  // namespace
 
     /// @brief Allocate a circular queue from the static pool, backed by @p buf.
     /// @param handle    Output handle.
@@ -740,7 +759,7 @@ extern "C"
     /// @return `osal::ok()` always.
     osal::result osal_queue_destroy(osal::active_traits::queue_handle_t* handle) noexcept
     {
-        if (!handle || !handle->native)
+        if (handle == nullptr || handle->native == nullptr)
         {
             return osal::ok();
         }
@@ -764,7 +783,7 @@ extern "C"
     osal::result osal_queue_send(osal::active_traits::queue_handle_t* handle, const void* item,
                                  osal::tick_t timeout) noexcept
     {
-        if (!handle || !handle->native)
+        if (handle == nullptr || handle->native == nullptr)
         {
             return osal::error_code::not_initialized;
         }
@@ -808,7 +827,7 @@ extern "C"
     osal::result osal_queue_receive(osal::active_traits::queue_handle_t* handle, void* item,
                                     osal::tick_t timeout) noexcept
     {
-        if (!handle || !handle->native)
+        if (handle == nullptr || handle->native == nullptr)
         {
             return osal::error_code::not_initialized;
         }
@@ -850,7 +869,7 @@ extern "C"
     /// @return `osal::ok()` on success, `would_block` if the queue is empty.
     osal::result osal_queue_peek(osal::active_traits::queue_handle_t* handle, void* item, osal::tick_t) noexcept
     {
-        if (!handle || !handle->native)
+        if (handle == nullptr || handle->native == nullptr)
         {
             return osal::error_code::not_initialized;
         }
@@ -871,8 +890,10 @@ extern "C"
     /// @return Item count, or 0 if the handle is invalid.
     std::size_t osal_queue_count(const osal::active_traits::queue_handle_t* handle) noexcept
     {
-        if (!handle || !handle->native)
+        if (handle == nullptr || handle->native == nullptr)
+        {
             return 0U;
+        }
         return static_cast<const bm_queue*>(handle->native)->count;
     }
 
@@ -881,9 +902,11 @@ extern "C"
     /// @return Free slot count, or 0 if the handle is invalid.
     std::size_t osal_queue_free(const osal::active_traits::queue_handle_t* handle) noexcept
     {
-        if (!handle || !handle->native)
+        if (handle == nullptr || handle->native == nullptr)
+        {
             return 0U;
-        auto* q = static_cast<const bm_queue*>(handle->native);
+        }
+        const auto* q = static_cast<const bm_queue*>(handle->native);
         return q->capacity - q->count;
     }
 
@@ -904,12 +927,17 @@ extern "C"
         bool                  active;
         bool                  valid;
     };
-    static bm_timer bm_timer_pool[OSAL_BM_MAX_TIMERS];
+    namespace
+    {
+    bm_timer bm_timer_pool[OSAL_BM_MAX_TIMERS];
+    }  // namespace
 
     // Advance timers — called from osal_baremetal_tick().
 }  // close extern "C" temporarily to define the timer advance function
 
-static void bm_advance_timers() noexcept
+namespace
+{
+void bm_advance_timers() noexcept
 {
     for (auto& t : bm_timer_pool)
     {
@@ -919,7 +947,7 @@ static void bm_advance_timers() noexcept
         }
         if (g_ticks >= t.deadline)
         {
-            if (t.fn)
+            if (t.fn != nullptr)
             {
                 t.fn(t.arg);
             }
@@ -934,6 +962,7 @@ static void bm_advance_timers() noexcept
         }
     }
 }
+}  // namespace
 
 extern "C"
 {
@@ -959,13 +988,13 @@ extern "C"
     osal::result osal_timer_create(osal::active_traits::timer_handle_t* handle, const char* /*name*/,
                                    osal_timer_callback_t cb, void* arg, osal::tick_t period, bool auto_reload) noexcept
     {
-        assert(handle && cb);
-        for (int i = 0; i < OSAL_BM_MAX_TIMERS; ++i)
+        assert(handle != nullptr && cb != nullptr);
+        for (auto& timer : bm_timer_pool)
         {
-            if (!bm_timer_pool[i].valid)
+            if (!timer.valid)
             {
-                bm_timer_pool[i] = {cb, arg, period, 0, auto_reload, false, true};
-                handle->native   = static_cast<void*>(&bm_timer_pool[i]);
+                timer          = {cb, arg, period, 0, auto_reload, false, true};
+                handle->native = static_cast<void*>(&timer);
                 return osal::ok();
             }
         }
@@ -977,7 +1006,7 @@ extern "C"
     /// @return `osal::ok()` always.
     osal::result osal_timer_destroy(osal::active_traits::timer_handle_t* handle) noexcept
     {
-        if (!handle || !handle->native)
+        if (handle == nullptr || handle->native == nullptr)
         {
             return osal::ok();
         }
@@ -991,7 +1020,7 @@ extern "C"
     /// @return `osal::ok()` on success, `not_initialized` if the handle is invalid.
     osal::result osal_timer_start(osal::active_traits::timer_handle_t* handle) noexcept
     {
-        if (!handle || !handle->native)
+        if (handle == nullptr || handle->native == nullptr)
         {
             return osal::error_code::not_initialized;
         }
@@ -1006,7 +1035,7 @@ extern "C"
     /// @return `osal::ok()` on success, `not_initialized` if the handle is invalid.
     osal::result osal_timer_stop(osal::active_traits::timer_handle_t* handle) noexcept
     {
-        if (!handle || !handle->native)
+        if (handle == nullptr || handle->native == nullptr)
         {
             return osal::error_code::not_initialized;
         }
@@ -1029,7 +1058,7 @@ extern "C"
     /// @return `osal::ok()` on success, `not_initialized` if the handle is invalid.
     osal::result osal_timer_set_period(osal::active_traits::timer_handle_t* handle, osal::tick_t p) noexcept
     {
-        if (!handle || !handle->native)
+        if (handle == nullptr || handle->native == nullptr)
         {
             return osal::error_code::not_initialized;
         }
@@ -1044,8 +1073,10 @@ extern "C"
     /// @return `true` if the timer is armed, `false` otherwise.
     bool osal_timer_is_active(const osal::active_traits::timer_handle_t* handle) noexcept
     {
-        if (!handle || !handle->native)
+        if (handle == nullptr || handle->native == nullptr)
+        {
             return false;
+        }
         return static_cast<const bm_timer*>(handle->native)->active;
     }
 
@@ -1088,8 +1119,10 @@ extern "C"
     osal::result osal_wait_set_wait(osal::active_traits::wait_set_handle_t*, int*, std::size_t, std::size_t* n,
                                     osal::tick_t) noexcept
     {
-        if (n)
+        if (n != nullptr)
+        {
             *n = 0U;
+        }
         return osal::error_code::not_supported;
     }
 

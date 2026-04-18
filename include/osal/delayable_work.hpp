@@ -349,10 +349,11 @@ private:
 
     bool compare_exchange_state(state& expected, state desired) noexcept
     {
-        auto       expected_raw = static_cast<std::uint8_t>(expected);
-        const bool exchanged    = state_.compare_exchange_strong(expected_raw, static_cast<std::uint8_t>(desired),
-                                                                 std::memory_order_acq_rel, std::memory_order_acquire);
-        expected                = static_cast<state>(expected_raw);
+        auto expected_raw = static_cast<std::uint8_t>(expected);
+        bool exchanged    = false;
+        exchanged         = state_.compare_exchange_strong(expected_raw, static_cast<std::uint8_t>(desired),
+                                                           std::memory_order_acq_rel, std::memory_order_acquire);
+        expected          = static_cast<state>(expected_raw);
         return exchanged;
     }
 
@@ -370,7 +371,7 @@ private:
     std::atomic<std::uint8_t> state_;
     std::atomic<std::int32_t> dispatch_error_;
     std::atomic<bool>         dispatch_failed_;
-    bool                      valid_;
+    bool                      valid_{false};
 };
 
 /// @} // osal_delayable_work

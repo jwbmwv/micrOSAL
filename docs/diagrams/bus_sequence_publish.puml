@@ -1,0 +1,67 @@
+@startuml channel_sequence_publish
+!include _render_profile.puml
+
+title osal_signal::publish() — Generic Backend Sequence
+
+participant "Producer\nThread" as P
+participant "osal_signal\n(generic)" as T
+participant "osal::mutex" as M
+participant "subscriber_slot[0]\n(osal_bus)" as Q0
+participant "subscriber_slot[1]\n(osal_bus)" as Q1
+participant "Consumer A\nThread" as CA
+participant "Consumer B\nThread" as CB
+
+== publish ==
+
+P -> T : publish(msg)
+activate T
+
+T -> M : lock()
+activate M
+M --> T : ok
+
+loop for each active slot
+
+  T -> Q0 : try_send(msg)  [slot 0 in_use]
+  activate Q0
+  Q0 -> Q0 : osal_queue_send(NO_WAIT)
+  Q0 --> T : true
+  deactivate Q0
+
+  T -> Q1 : try_send(msg)  [slot 1 in_use]
+  activate Q1
+  Q1 -> Q1 : osal_queue_send(NO_WAIT)
+  Q1 --> T : true
+  deactivate Q1
+
+end
+
+T -> M : unlock()
+deactivate M
+
+T --> P : true (both queues accepted)
+deactivate T
+
+== receive (independent, concurrent) ==
+
+CA -> T : try_receive(sub_a, out)
+activate T
+T -> Q0 : try_receive(out)
+activate Q0
+Q0 -> Q0 : osal_queue_receive(NO_WAIT)
+Q0 --> T : true
+deactivate Q0
+T --> CA : true, out = msg
+deactivate T
+
+CB -> T : receive(sub_b, out, WAIT_FOREVER)
+activate T
+T -> Q1 : receive(out, WAIT_FOREVER)
+activate Q1
+Q1 -> Q1 : osal_queue_receive(WAIT_FOREVER)
+Q1 --> T : true
+deactivate Q1
+T --> CB : true, out = msg
+deactivate T
+
+@enduml

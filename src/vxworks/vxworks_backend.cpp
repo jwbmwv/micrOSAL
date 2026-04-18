@@ -39,7 +39,8 @@
 #include <cassert>
 #include <cstring>
 
-namespace {
+namespace
+{
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -95,7 +96,7 @@ void vx_timer_expiry(long ctx_idx) noexcept
     }
 }
 
-} // namespace
+}  // namespace
 
 extern "C"
 {
@@ -107,7 +108,9 @@ extern "C"
     /// @return Monotonic time in milliseconds since an arbitrary epoch.
     std::int64_t osal_clock_monotonic_ms() noexcept
     {
-        struct timespec ts{};
+        struct timespec ts
+        {
+        };
         clock_gettime(CLOCK_MONOTONIC, &ts);
         return static_cast<std::int64_t>(ts.tv_sec) * 1000LL + static_cast<std::int64_t>(ts.tv_nsec) / 1'000'000LL;
     }
@@ -116,7 +119,9 @@ extern "C"
     /// @return System (real) time in milliseconds.
     std::int64_t osal_clock_system_ms() noexcept
     {
-        struct timespec ts{};
+        struct timespec ts
+        {
+        };
         clock_gettime(CLOCK_REALTIME, &ts);
         return static_cast<std::int64_t>(ts.tv_sec) * 1000LL + static_cast<std::int64_t>(ts.tv_nsec) / 1'000'000LL;
     }

@@ -57,7 +57,8 @@
 #define OSAL_CMSIS2_MAX_POOLS 4
 #endif
 
-namespace {
+namespace
+{
 
 // ---------------------------------------------------------------------------
 // Slot tracking
@@ -189,7 +190,7 @@ void cmsis2_timer_callback(void* arg) noexcept
     }
 }
 
-} // namespace
+}  // namespace
 
 extern "C"
 {
@@ -917,7 +918,7 @@ extern "C"
             return osal::error_code::not_initialized;
         }
         auto*    slot    = static_cast<cmsis2_event_slot*>(handle->native);
-        uint32_t options = osFlagsWaitAny;
+        uint32_t options = osFlagsWaitAny;  // NOLINT(cppcoreguidelines-init-variables)
         if (!clear_on_exit)
         {
             options |= osFlagsNoClear;
@@ -950,7 +951,7 @@ extern "C"
             return osal::error_code::not_initialized;
         }
         auto*    slot    = static_cast<cmsis2_event_slot*>(handle->native);
-        uint32_t options = osFlagsWaitAll;
+        uint32_t options = osFlagsWaitAll;  // NOLINT(cppcoreguidelines-init-variables)
         if (!clear_on_exit)
         {
             options |= osFlagsNoClear;

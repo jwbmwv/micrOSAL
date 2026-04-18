@@ -124,7 +124,7 @@ namespace osal
 /// @tparam TriggerLevel  Minimum bytes available before receive() unblocks.
 template<std::size_t N, std::size_t TriggerLevel = 1U>
     requires valid_trigger_level<N, TriggerLevel>
-class stream_buffer
+class stream_buffer  // NOLINT(cppcoreguidelines-pro-type-member-init,hicpp-member-init)
 {
 public:
     // ---- types -------------------------------------------------------------
@@ -136,7 +136,7 @@ public:
     /// @brief Constructs and initialises the stream buffer.
     /// @complexity O(1)
     /// @blocking   Never.
-    stream_buffer() noexcept { valid_ = osal_stream_buffer_create(&handle_, storage_, N, TriggerLevel).ok(); }
+    stream_buffer() noexcept = default;  // NOLINT(cppcoreguidelines-pro-type-member-init,hicpp-member-init)
 
     /// @brief Destructs the stream buffer and releases OS resources.
     ~stream_buffer() noexcept
@@ -310,10 +310,10 @@ public:
     result reset() noexcept { return osal_stream_buffer_reset(&handle_); }
 
 private:
-    bool                                          valid_{false};
     mutable active_traits::stream_buffer_handle_t handle_{};
     /// @brief Ring storage: N usable bytes + 1 sentinel byte (SPSC ring marker).
     std::uint8_t storage_[N + 1U]{};
+    bool         valid_{osal_stream_buffer_create(&handle_, storage_, N, TriggerLevel).ok()};
 };
 
 /// @} // osal_stream_buffer

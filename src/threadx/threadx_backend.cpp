@@ -38,7 +38,8 @@
 // ---------------------------------------------------------------------------
 // Static object pools
 // ---------------------------------------------------------------------------
-namespace {
+namespace
+{
 
 TX_THREAD            tx_threads[OSAL_TX_MAX_THREADS];
 bool                 tx_thread_used[OSAL_TX_MAX_THREADS];
@@ -103,7 +104,7 @@ constexpr ULONG to_tx_ticks(osal::tick_t t) noexcept
     {
         return TX_NO_WAIT;
     }
-    return static_cast<ULONG>(t);
+    return static_cast<ULONG>(t);  // NOLINT(bugprone-narrowing-conversions,cppcoreguidelines-narrowing-conversions)
 }
 
 #define TX_THREAD_PTR(h) static_cast<TX_THREAD*>((h)->native)
@@ -614,7 +615,8 @@ extern "C"
     // Timer (TX_TIMER)
     // ---------------------------------------------------------------------------
 
-    namespace {
+    namespace
+    {
 
     void tx_timer_expiry(ULONG ctx_idx) noexcept
     {
@@ -859,11 +861,12 @@ extern "C"
         return static_cast<osal::event_bits_t>(actual);
     }
 
-    namespace {
+    namespace
+    {
 
-    osal::result tx_event_wait_impl(osal::active_traits::event_flags_handle_t* handle,
-                                           osal::event_bits_t wait_bits, osal::event_bits_t* actual_bits,
-                                           bool clear_on_exit, bool all, osal::tick_t timeout_ticks) noexcept
+    osal::result tx_event_wait_impl(osal::active_traits::event_flags_handle_t* handle, osal::event_bits_t wait_bits,
+                                    osal::event_bits_t* actual_bits, bool clear_on_exit, bool all,
+                                    osal::tick_t timeout_ticks) noexcept
     {
         if (handle == nullptr || handle->native == nullptr)
         {
@@ -960,7 +963,8 @@ extern "C"
     osal::result osal_wait_set_wait(osal::active_traits::wait_set_handle_t*, int*, std::size_t, std::size_t* n,
                                     osal::tick_t) noexcept
     {
-        if (n != nullptr) {
+        if (n != nullptr)
+        {
             *n = 0U;
         }
         return osal::error_code::not_supported;

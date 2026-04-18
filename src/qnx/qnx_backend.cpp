@@ -45,7 +45,8 @@
 // Helpers
 // ---------------------------------------------------------------------------
 
-namespace {
+namespace
+{
 
 /// @brief Get CLOCK_MONOTONIC and add ms to produce an absolute timespec.
 struct timespec ms_to_abs_mono(osal::tick_t ms) noexcept
@@ -113,7 +114,7 @@ int cond_init_monotonic(pthread_cond_t* cond) noexcept
     return rc;
 }
 
-} // namespace
+}  // namespace
 
 // ---------------------------------------------------------------------------
 // Shared-include macro contracts for posix_condvar.inl and posix_rwlock.inl.
@@ -281,8 +282,9 @@ extern "C"
             return osal::error_code::not_initialized;
         }
         // QNX: thread affinity via ThreadCtl or runmask
-        auto  rmask = static_cast<unsigned>(affinity);
-        const int rc    = ThreadCtl(_NTO_TCTL_RUNMASK, reinterpret_cast<void*>(static_cast<uintptr_t>(rmask)));
+        auto      rmask = static_cast<unsigned>(affinity);
+        const int rc    = ThreadCtl(_NTO_TCTL_RUNMASK, reinterpret_cast<void*>(static_cast<uintptr_t>(
+                                                        rmask)));  // NOLINT(cppcoreguidelines-init-variables)
         return (rc == 0) ? osal::ok() : osal::error_code::unknown;
     }
 
@@ -532,7 +534,9 @@ extern "C"
     {
         char           name[32]{};
         const unsigned id = qnx_q_counter.fetch_add(1U, std::memory_order_relaxed);
-        (void)snprintf(name, sizeof(name), "/osal_q_%u_%u", static_cast<unsigned>(getpid()), id);  // NOLINT(cppcoreguidelines-pro-type-vararg)
+        (void)snprintf(name, sizeof(name), "/osal_q_%u_%u",
+                       static_cast<unsigned>(getpid()),  // NOLINT(cppcoreguidelines-pro-type-vararg)
+                       id);
 
         struct mq_attr attr
         {
@@ -540,7 +544,8 @@ extern "C"
         attr.mq_maxmsg  = static_cast<long>(capacity > 0 ? capacity : 8);
         attr.mq_msgsize = static_cast<long>(item_size > 0 ? item_size : sizeof(void*));
 
-        mqd_t mq = mq_open(name, O_CREAT | O_RDWR | O_NONBLOCK, 0600, &attr);  // NOLINT(cppcoreguidelines-pro-type-vararg)
+        mqd_t mq =
+            mq_open(name, O_CREAT | O_RDWR | O_NONBLOCK, 0600, &attr);  // NOLINT(cppcoreguidelines-pro-type-vararg)
         if (mq == static_cast<mqd_t>(-1))
         {
             return osal::error_code::out_of_resources;
@@ -785,8 +790,8 @@ extern "C"
         ctx->auto_reload = auto_reload;
 
         // Convert ticks (ms) to itimerspec
-        const auto sec          = static_cast<time_t>(period_ticks / 1000U);
-        const auto   nsec         = static_cast<long>((period_ticks % 1000U) * 1'000'000L);
+        const auto sec            = static_cast<time_t>(period_ticks / 1000U);
+        const auto nsec           = static_cast<long>((period_ticks % 1000U) * 1'000'000L);
         ctx->its.it_value.tv_sec  = sec;
         ctx->its.it_value.tv_nsec = nsec;
         if (auto_reload)
@@ -891,9 +896,9 @@ extern "C"
         {
             return osal::error_code::not_initialized;
         }
-        auto*        ctx          = static_cast<qnx_timer_ctx*>(handle->native);
-        const auto sec          = static_cast<time_t>(new_period_ticks / 1000U);
-        const auto   nsec         = static_cast<long>((new_period_ticks % 1000U) * 1'000'000L);
+        auto*      ctx            = static_cast<qnx_timer_ctx*>(handle->native);
+        const auto sec            = static_cast<time_t>(new_period_ticks / 1000U);
+        const auto nsec           = static_cast<long>((new_period_ticks % 1000U) * 1'000'000L);
         ctx->its.it_value.tv_sec  = sec;
         ctx->its.it_value.tv_nsec = nsec;
         if (ctx->auto_reload)

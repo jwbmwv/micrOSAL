@@ -27,6 +27,7 @@ using osal_timer_callback_t = void (*)(void* arg);
 
 extern "C"
 {
+    // NOLINTNEXTLINE(readability-inconsistent-declaration-parameter-name)
     osal::result osal_timer_create(osal::active_traits::timer_handle_t* handle, const char* name,
                                    osal_timer_callback_t cb, void* arg, osal::tick_t period_ticks,
                                    bool auto_reload) noexcept;
@@ -39,7 +40,9 @@ extern "C"
 
     osal::result osal_timer_reset(osal::active_traits::timer_handle_t* handle) noexcept;
 
-    osal::result osal_timer_set_period(osal::active_traits::timer_handle_t* handle, osal::tick_t p) noexcept;
+    osal::result
+    osal_timer_set_period(osal::active_traits::timer_handle_t* handle,
+                          osal::tick_t p) noexcept;  // NOLINT(readability-inconsistent-declaration-parameter-name)
 
     bool osal_timer_is_active(const osal::active_traits::timer_handle_t* handle) noexcept;
 
@@ -209,7 +212,7 @@ public:
 
 private:
     bool                          valid_;
-    active_traits::timer_handle_t handle_;
+    active_traits::timer_handle_t handle_{};
 };
 
 /// @} // osal_timer
