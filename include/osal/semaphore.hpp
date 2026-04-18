@@ -97,7 +97,7 @@ public:
     /// @param max_count      Maximum permit count (ignored for binary — forced to 1).
     /// @complexity O(1)
     /// @blocking   Never.
-    semaphore(semaphore_type type, unsigned initial_count, unsigned max_count = 1U) noexcept : valid_(false), handle_{}
+    semaphore(semaphore_type type, unsigned initial_count, unsigned max_count = 1U) noexcept : valid_(false)
     {
         const unsigned mc = (type == semaphore_type::binary) ? 1U : max_count;
         valid_            = osal_semaphore_create(&handle_, initial_count, mc).ok();
@@ -107,7 +107,7 @@ public:
     /// @param cfg  Configuration — typically declared @c const / @c constexpr.
     /// @complexity O(1)
     /// @blocking   Never.
-    explicit semaphore(const semaphore_config& cfg) noexcept : valid_(false), handle_{}
+    explicit semaphore(const semaphore_config& cfg) noexcept : valid_(false)
     {
         const unsigned mc = (cfg.type == semaphore_type::binary) ? 1U : cfg.max_count;
         valid_            = osal_semaphore_create(&handle_, cfg.initial_count, mc).ok();

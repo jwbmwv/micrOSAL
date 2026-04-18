@@ -21,7 +21,7 @@ jobs:
     name: clang-format check
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Install clang-format
         run: sudo apt-get update && sudo apt-get install -y clang-format-18
       - name: Check formatting
@@ -53,7 +53,7 @@ jobs:
           - backend: BAREMETAL
             run_tests: true
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Configure
         run: |
@@ -79,7 +79,7 @@ jobs:
     runs-on: ubuntu-24.04
     needs: build-test
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install clang-tidy
         run: sudo apt-get update && sudo apt-get install -y clang-tidy
@@ -109,7 +109,7 @@ jobs:
     runs-on: ubuntu-24.04
     needs: build-test
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Configure
         run: |
@@ -141,7 +141,7 @@ jobs:
     runs-on: ubuntu-24.04
     needs: build-test
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install build dependencies
         run: sudo apt-get update && sudo apt-get install -y build-essential cmake
@@ -168,7 +168,7 @@ jobs:
     runs-on: ubuntu-24.04
     needs: build-test
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           path: microsal
 
@@ -272,8 +272,8 @@ jobs:
             board: native_sim
             runner: native
             renode_version: ""
-          - zephyr_version: "v4.3.0"
-            zephyr_sdk_version: "0.17.0"
+          - zephyr_version: "v4.4.0"
+            zephyr_sdk_version: "1.0.1"
             board: native_sim
             runner: native
             renode_version: ""
@@ -283,15 +283,15 @@ jobs:
             zephyr_sdk_version: "0.16.8"
             board: nrf52840dk/nrf52840
             runner: renode
-            renode_version: "1.15.3"
-          - zephyr_version: "v4.3.0"
-            zephyr_sdk_version: "0.17.0"
+            renode_version: "1.16.1"
+          - zephyr_version: "v4.4.0"
+            zephyr_sdk_version: "1.0.1"
             board: nrf52840dk/nrf52840
             runner: renode
-            renode_version: "1.15.3"
+            renode_version: "1.16.1"
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           path: modules/lib/microsal
 
@@ -403,7 +403,7 @@ jobs:
 
       # twister full-discovery run on native_sim / latest Zephyr only
       - name: Run twister full sweep (native_sim + latest Zephyr only)
-        if: matrix.runner == 'native' && matrix.zephyr_version == 'v4.3.0'
+        if: matrix.runner == 'native' && matrix.zephyr_version == 'v4.4.0'
         continue-on-error: true
         run: |
           cd zephyrproject

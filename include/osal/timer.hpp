@@ -111,7 +111,7 @@ public:
     /// @complexity O(1)
     timer(osal_timer_callback_t callback, void* arg, milliseconds period, timer_mode mode = timer_mode::one_shot,
           const char* name = nullptr) noexcept
-        : valid_(false), handle_{}
+        : valid_(false)
     {
         if constexpr (timer_backend<active_backend>)
         {
@@ -123,7 +123,7 @@ public:
     /// @brief Constructs from an immutable config (config may reside in FLASH).
     /// @param cfg  Configuration — typically declared @c const / @c constexpr.
     /// @complexity O(1)
-    explicit timer(const timer_config& cfg) noexcept : valid_(false), handle_{}
+    explicit timer(const timer_config& cfg) noexcept : valid_(false)
     {
         if constexpr (timer_backend<active_backend>)
         {

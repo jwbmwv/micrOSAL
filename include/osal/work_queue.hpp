@@ -120,7 +120,7 @@ public:
     ///                     OSAL_WORK_QUEUE_MAX_DEPTH).
     /// @param name         Human-readable name (for debugging).
     work_queue(void* stack, std::size_t stack_bytes, std::size_t depth = 16, const char* name = "wq") noexcept
-        : valid_(false), handle_{}
+        : valid_(false)
     {
         const std::size_t capped = (depth > OSAL_WORK_QUEUE_MAX_DEPTH) ? OSAL_WORK_QUEUE_MAX_DEPTH : depth;
         valid_                   = osal_work_queue_create(&handle_, stack, stack_bytes, capped, name).ok();
@@ -129,7 +129,7 @@ public:
     /// @brief Constructs from an immutable config (config may reside in FLASH).
     /// @param cfg  Configuration — typically declared @c const.
     /// @complexity O(1)
-    explicit work_queue(const work_queue_config& cfg) noexcept : valid_(false), handle_{}
+    explicit work_queue(const work_queue_config& cfg) noexcept : valid_(false)
     {
         const std::size_t capped = (cfg.depth > OSAL_WORK_QUEUE_MAX_DEPTH) ? OSAL_WORK_QUEUE_MAX_DEPTH : cfg.depth;
         valid_                   = osal_work_queue_create(&handle_, cfg.stack, cfg.stack_bytes, capped, cfg.name).ok();

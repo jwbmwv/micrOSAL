@@ -121,7 +121,7 @@ public:
     /// @param name         Debug name (may be nullptr).
     memory_pool(void* buffer, std::size_t buf_bytes, std::size_t block_size, std::size_t block_count,
                 const char* name = nullptr) noexcept
-        : valid_(false), block_size_(block_size), handle_{}
+        : valid_(false), block_size_(block_size)
     {
         valid_ = osal_memory_pool_create(&handle_, buffer, buf_bytes, block_size, block_count, name).ok();
     }
@@ -129,7 +129,7 @@ public:
     /// @brief Constructs from an immutable config (config may reside in FLASH).
     /// @param cfg  Configuration — typically declared @c const.
     /// @complexity O(1)
-    explicit memory_pool(const memory_pool_config& cfg) noexcept : valid_(false), block_size_(cfg.block_size), handle_{}
+    explicit memory_pool(const memory_pool_config& cfg) noexcept : valid_(false), block_size_(cfg.block_size)
     {
         valid_ = osal_memory_pool_create(&handle_, cfg.buffer, cfg.buf_bytes, cfg.block_size, cfg.block_count, cfg.name)
                      .ok();
