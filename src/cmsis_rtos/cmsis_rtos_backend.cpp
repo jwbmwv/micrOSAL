@@ -61,60 +61,62 @@
 // ---------------------------------------------------------------------------
 // Pool tracking — CMSIS-RTOS v1 IDs are stored directly in handle->native
 // ---------------------------------------------------------------------------
+namespace {
+
 struct cmsis1_thread_slot
 {
-    osThreadId id;
-    bool       used;
+    osThreadId id{};
+    bool       used{};
 };
-static cmsis1_thread_slot cmsis1_threads[OSAL_CMSIS1_MAX_THREADS];
+cmsis1_thread_slot cmsis1_threads[OSAL_CMSIS1_MAX_THREADS];
 
 struct cmsis1_mutex_slot
 {
-    osMutexId id;
-    bool      used;
+    osMutexId id{};
+    bool      used{};
 };
-static cmsis1_mutex_slot cmsis1_mutexes[OSAL_CMSIS1_MAX_MUTEXES];
+cmsis1_mutex_slot cmsis1_mutexes[OSAL_CMSIS1_MAX_MUTEXES];
 
 struct cmsis1_sem_slot
 {
-    osSemaphoreId id;
-    bool          used;
+    osSemaphoreId id{};
+    bool          used{};
 };
-static cmsis1_sem_slot cmsis1_sems[OSAL_CMSIS1_MAX_SEMS];
+cmsis1_sem_slot cmsis1_sems[OSAL_CMSIS1_MAX_SEMS];
 
 struct cmsis1_queue_slot
 {
-    osMessageQId id;
-    std::size_t  item_size;
-    bool         used;
+    osMessageQId id{};
+    std::size_t  item_size{};
+    bool         used{};
 };
-static cmsis1_queue_slot cmsis1_queues[OSAL_CMSIS1_MAX_QUEUES];
+cmsis1_queue_slot cmsis1_queues[OSAL_CMSIS1_MAX_QUEUES];
 
 struct cmsis1_timer_slot
 {
-    osTimerId             id;
-    osal_timer_callback_t fn;
-    void*                 arg;
-    osal::tick_t          period;
-    bool                  auto_reload;
-    bool                  used;
+    osTimerId             id{};
+    osal_timer_callback_t fn{};
+    void*                 arg{};
+    osal::tick_t          period{};
+    bool                  auto_reload{};
+    bool                  used{};
 };
-static cmsis1_timer_slot cmsis1_timers[OSAL_CMSIS1_MAX_TIMERS];
+cmsis1_timer_slot cmsis1_timers[OSAL_CMSIS1_MAX_TIMERS];
 
 struct cmsis1_pool_slot
 {
-    osPoolId    id;
-    std::size_t block_size;
-    std::size_t block_count;
-    bool        used;
+    osPoolId    id{};
+    std::size_t block_size{};
+    std::size_t block_count{};
+    bool        used{};
 };
-static cmsis1_pool_slot cmsis1_pools[OSAL_CMSIS1_MAX_POOLS];
+cmsis1_pool_slot cmsis1_pools[OSAL_CMSIS1_MAX_POOLS];
 
 // ---------------------------------------------------------------------------
 // Pool helpers
 // ---------------------------------------------------------------------------
 template<typename T, std::size_t N>
-static T* slot_acquire(T (&pool)[N]) noexcept
+T* slot_acquire(T (&pool)[N]) noexcept
 {
     for (std::size_t i = 0; i < N; ++i)
     {
@@ -128,8 +130,9 @@ static T* slot_acquire(T (&pool)[N]) noexcept
 }
 
 template<typename T, std::size_t N>
-static void slot_release(T (&pool)[N], T* p) noexcept
+void slot_release(T (&pool)[N], T* p) noexcept
 {
+    (void)pool;
     if (p != nullptr)
     {
         p->used = false;
@@ -141,7 +144,7 @@ static void slot_release(T (&pool)[N], T* p) noexcept
 // ---------------------------------------------------------------------------
 
 /// @brief Map OSAL priority [0=lowest..255=highest] to CMSIS-RTOS priority enum.
-static constexpr osPriority osal_to_cmsis1_priority(osal::priority_t p) noexcept
+constexpr osPriority osal_to_cmsis1_priority(osal::priority_t p) noexcept
 {
     if (p <= 16)
         return osPriorityIdle;
@@ -159,7 +162,7 @@ static constexpr osPriority osal_to_cmsis1_priority(osal::priority_t p) noexcept
 }
 
 /// @brief Convert OSAL ticks to CMSIS wait value (milliseconds).
-static constexpr uint32_t to_cmsis1_timeout(osal::tick_t t) noexcept
+constexpr uint32_t to_cmsis1_timeout(osal::tick_t t) noexcept
 {
     if (t == osal::WAIT_FOREVER)
         return osWaitForever;
@@ -169,7 +172,7 @@ static constexpr uint32_t to_cmsis1_timeout(osal::tick_t t) noexcept
 // ---------------------------------------------------------------------------
 // Timer trampoline
 // ---------------------------------------------------------------------------
-static void cmsis1_timer_callback(void const* arg) noexcept
+void cmsis1_timer_callback(void const* arg) noexcept
 {
     auto* slot = const_cast<cmsis1_timer_slot*>(static_cast<const cmsis1_timer_slot*>(arg));
     if (slot != nullptr && slot->fn != nullptr)
@@ -177,6 +180,8 @@ static void cmsis1_timer_callback(void const* arg) noexcept
         slot->fn(slot->arg);
     }
 }
+
+} // namespace
 
 extern "C"
 {
@@ -816,8 +821,10 @@ extern "C"
     osal::result osal_wait_set_wait(osal::active_traits::wait_set_handle_t*, int*, std::size_t, std::size_t* n,
                                     osal::tick_t) noexcept
     {
-        if (n)
+        if (n != nullptr)
+        {
             *n = 0U;
+        }
         return osal::error_code::not_supported;
     }
 

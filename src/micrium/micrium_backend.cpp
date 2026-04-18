@@ -26,6 +26,8 @@
 #include <cassert>
 #include <cstring>
 
+namespace {
+
 // ---------------------------------------------------------------------------
 // Pool sizes
 // ---------------------------------------------------------------------------
@@ -39,21 +41,21 @@
 // ---------------------------------------------------------------------------
 // Static object pools
 // ---------------------------------------------------------------------------
-static OS_TCB      uc_tcbs[OSAL_UC_MAX_THREADS];
-static bool        uc_tcb_used[OSAL_UC_MAX_THREADS];
-static OS_MUTEX    uc_mutexes[OSAL_UC_MAX_MUTEXES];
-static bool        uc_mutex_used[OSAL_UC_MAX_MUTEXES];
-static OS_SEM      uc_sems[OSAL_UC_MAX_SEMS];
-static bool        uc_sem_used[OSAL_UC_MAX_SEMS];
-static OS_Q        uc_queues[OSAL_UC_MAX_QUEUES];
-static bool        uc_queue_used[OSAL_UC_MAX_QUEUES];
-static OS_TMR      uc_timers[OSAL_UC_MAX_TIMERS];
-static bool        uc_timer_used[OSAL_UC_MAX_TIMERS];
-static OS_FLAG_GRP uc_flags[OSAL_UC_MAX_FLAGS];
-static bool        uc_flag_used[OSAL_UC_MAX_FLAGS];
+OS_TCB      uc_tcbs[OSAL_UC_MAX_THREADS];
+bool        uc_tcb_used[OSAL_UC_MAX_THREADS];
+OS_MUTEX    uc_mutexes[OSAL_UC_MAX_MUTEXES];
+bool        uc_mutex_used[OSAL_UC_MAX_MUTEXES];
+OS_SEM      uc_sems[OSAL_UC_MAX_SEMS];
+bool        uc_sem_used[OSAL_UC_MAX_SEMS];
+OS_Q        uc_queues[OSAL_UC_MAX_QUEUES];
+bool        uc_queue_used[OSAL_UC_MAX_QUEUES];
+OS_TMR      uc_timers[OSAL_UC_MAX_TIMERS];
+bool        uc_timer_used[OSAL_UC_MAX_TIMERS];
+OS_FLAG_GRP uc_flags[OSAL_UC_MAX_FLAGS];
+bool        uc_flag_used[OSAL_UC_MAX_FLAGS];
 
 template<typename T, std::size_t N>
-static T* pool_acquire(T (&pool)[N], bool (&used)[N]) noexcept
+T* pool_acquire(T (&pool)[N], bool (&used)[N]) noexcept
 {
     for (std::size_t i = 0; i < N; ++i)
     {
@@ -67,7 +69,7 @@ static T* pool_acquire(T (&pool)[N], bool (&used)[N]) noexcept
 }
 
 template<typename T, std::size_t N>
-static void pool_release(T (&pool)[N], bool (&used)[N], T* p) noexcept
+void pool_release(T (&pool)[N], bool (&used)[N], T* p) noexcept
 {
     for (std::size_t i = 0; i < N; ++i)
     {
@@ -84,7 +86,7 @@ static void pool_release(T (&pool)[N], bool (&used)[N], T* p) noexcept
 // ---------------------------------------------------------------------------
 
 /// @brief Map OSAL priority [0=lowest, 255=highest] to µC/OS-III [OS_CFG_PRIO_MAX-2=lowest, 1=highest].
-static constexpr OS_PRIO osal_to_uc_priority(osal::priority_t p) noexcept
+constexpr OS_PRIO osal_to_uc_priority(osal::priority_t p) noexcept
 {
     const OS_PRIO max_prio = OS_CFG_PRIO_MAX - 2U;  // 0 is reserved for ISR, max-1 for idle
     return max_prio - static_cast<OS_PRIO>((static_cast<std::uint32_t>(p) * static_cast<std::uint32_t>(max_prio)) /
@@ -92,7 +94,7 @@ static constexpr OS_PRIO osal_to_uc_priority(osal::priority_t p) noexcept
 }
 
 /// @brief Convert OSAL tick count to µC/OS-III OS_TICK.
-static constexpr OS_TICK to_uc_ticks(osal::tick_t t) noexcept
+constexpr OS_TICK to_uc_ticks(osal::tick_t t) noexcept
 {
     if (t == osal::WAIT_FOREVER)
     {
@@ -106,7 +108,7 @@ static constexpr OS_TICK to_uc_ticks(osal::tick_t t) noexcept
 }
 
 /// @brief Return µC/OS-III pend option for given timeout.
-static constexpr OS_OPT uc_pend_opt(osal::tick_t t) noexcept
+constexpr OS_OPT uc_pend_opt(osal::tick_t t) noexcept
 {
     return (t == osal::NO_WAIT) ? OS_OPT_PEND_NON_BLOCKING : OS_OPT_PEND_BLOCKING;
 }
@@ -116,13 +118,13 @@ static constexpr OS_OPT uc_pend_opt(osal::tick_t t) noexcept
 // ---------------------------------------------------------------------------
 struct uc_timer_ctx
 {
-    osal_timer_callback_t fn;
-    void*                 arg;
-    OS_TMR*               tmr;
+    osal_timer_callback_t fn{};
+    void*                 arg{};
+    OS_TMR*               tmr{};
 };
-static uc_timer_ctx uc_timer_ctxs[OSAL_UC_MAX_TIMERS];
+uc_timer_ctx uc_timer_ctxs[OSAL_UC_MAX_TIMERS];
 
-static void uc_tmr_callback(void* /*p_tmr*/, void* p_arg) noexcept
+void uc_tmr_callback(void* /*p_tmr*/, void* p_arg) noexcept
 {
     auto* ctx = static_cast<uc_timer_ctx*>(p_arg);
     if (ctx != nullptr && ctx->fn != nullptr)
@@ -130,6 +132,46 @@ static void uc_tmr_callback(void* /*p_tmr*/, void* p_arg) noexcept
         ctx->fn(ctx->arg);
     }
 }
+
+/// @brief Internal helper: wait for event flags with configurable AND/OR and clear-on-exit semantics.
+/// @param handle       Event flags handle.
+/// @param wait_bits    Bit mask to wait for.
+/// @param actual_bits  Optional output: bits that were set at wakeup.
+/// @param clear_on_exit Clear matched bits after wakeup when true.
+/// @param all          True = wait for ALL bits; false = wait for ANY bit.
+/// @param timeout_ticks Maximum wait in OSAL ticks.
+/// @return osal::ok() on success; osal::error_code::timeout on expiry.
+osal::result uc_event_wait_impl(osal::active_traits::event_flags_handle_t* handle,
+                                osal::event_bits_t wait_bits, osal::event_bits_t* actual_bits,
+                                bool clear_on_exit, bool all, osal::tick_t timeout_ticks) noexcept
+{
+    if (handle == nullptr || handle->native == nullptr)
+    {
+        return osal::error_code::not_initialized;
+    }
+    OS_OPT wait_opt = all ? OS_OPT_PEND_FLAG_SET_ALL : OS_OPT_PEND_FLAG_SET_ANY;
+    if (clear_on_exit)
+    {
+        wait_opt |= OS_OPT_PEND_FLAG_CONSUME;
+    }
+    wait_opt |= uc_pend_opt(timeout_ticks);
+
+    OS_ERR         err;
+    CPU_TS         ts;
+    const OS_FLAGS got = OSFlagPend(static_cast<OS_FLAG_GRP*>(handle->native), static_cast<OS_FLAGS>(wait_bits),
+                                    to_uc_ticks(timeout_ticks), wait_opt, &ts, &err);
+    if (actual_bits != nullptr)
+    {
+        *actual_bits = static_cast<osal::event_bits_t>(got);
+    }
+    if (err == OS_ERR_NONE)
+    {
+        return osal::ok();
+    }
+    return osal::error_code::timeout;
+}
+
+} // namespace
 
 extern "C"
 {
@@ -143,7 +185,7 @@ extern "C"
     {
         OS_ERR        err;
         const OS_TICK ticks = OSTimeGet(&err);
-        return static_cast<std::int64_t>(ticks) * (1000 / OSCfg_TickRate_Hz);
+        return static_cast<std::int64_t>(ticks) * static_cast<std::int64_t>(1000 / OSCfg_TickRate_Hz);
     }
 
     /// @brief Return wall-clock time in milliseconds (aliased to monotonic; µC/OS-III has no wall clock).
@@ -581,13 +623,13 @@ extern "C"
             return osal::error_code::not_initialized;
         }
         OS_ERR      err;
-        OS_MSG_SIZE msg_size;
+        OS_MSG_SIZE msg_size = 0;
         CPU_TS      ts;
         void* msg = OSQPend(static_cast<OS_Q*>(handle->native), to_uc_ticks(timeout_ticks), uc_pend_opt(timeout_ticks),
                             &msg_size, &ts, &err);
         if (err == OS_ERR_NONE && msg != nullptr)
         {
-            std::memcpy(item, &msg, sizeof(void*));
+            std::memcpy(item, static_cast<const void*>(&msg), sizeof(void*));
             return osal::ok();
         }
         if (err == OS_ERR_TIMEOUT || err == OS_ERR_PEND_WOULD_BLOCK)
@@ -880,44 +922,6 @@ extern "C"
         return static_cast<osal::event_bits_t>(static_cast<const OS_FLAG_GRP*>(handle->native)->Flags);
     }
 
-    /// @brief Internal helper: wait for event flags with configurable AND/OR and clear-on-exit semantics.
-    /// @param handle       Event flags handle.
-    /// @param wait_bits    Bit mask to wait for.
-    /// @param actual_bits  Optional output: bits that were set at wakeup.
-    /// @param clear_on_exit Clear matched bits after wakeup when true.
-    /// @param all          True = wait for ALL bits; false = wait for ANY bit.
-    /// @param timeout_ticks Maximum wait in OSAL ticks.
-    /// @return osal::ok() on success; osal::error_code::timeout on expiry.
-    static osal::result uc_event_wait_impl(osal::active_traits::event_flags_handle_t* handle,
-                                           osal::event_bits_t wait_bits, osal::event_bits_t* actual_bits,
-                                           bool clear_on_exit, bool all, osal::tick_t timeout_ticks) noexcept
-    {
-        if (handle == nullptr || handle->native == nullptr)
-        {
-            return osal::error_code::not_initialized;
-        }
-        OS_OPT wait_opt = all ? OS_OPT_PEND_FLAG_SET_ALL : OS_OPT_PEND_FLAG_SET_ANY;
-        if (clear_on_exit)
-        {
-            wait_opt |= OS_OPT_PEND_FLAG_CONSUME;
-        }
-        wait_opt |= uc_pend_opt(timeout_ticks);
-
-        OS_ERR         err;
-        CPU_TS         ts;
-        const OS_FLAGS got = OSFlagPend(static_cast<OS_FLAG_GRP*>(handle->native), static_cast<OS_FLAGS>(wait_bits),
-                                        to_uc_ticks(timeout_ticks), wait_opt, &ts, &err);
-        if (actual_bits != nullptr)
-        {
-            *actual_bits = static_cast<osal::event_bits_t>(got);
-        }
-        if (err == OS_ERR_NONE)
-        {
-            return osal::ok();
-        }
-        return osal::error_code::timeout;
-    }
-
     /// @brief Wait until any of the specified event bits are set.
     /// @param handle  Event flags handle.
     /// @param bits    Bit mask: wake when any bit in this mask becomes set.
@@ -988,8 +992,10 @@ extern "C"
     osal::result osal_wait_set_wait(osal::active_traits::wait_set_handle_t*, int*, std::size_t, std::size_t* n,
                                     osal::tick_t) noexcept
     {
-        if (n)
+        if (n != nullptr)
+        {
             *n = 0U;
+        }
         return osal::error_code::not_supported;
     }
 

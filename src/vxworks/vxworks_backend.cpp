@@ -35,22 +35,24 @@
 #include <tickLib.h>
 #include <selectLib.h>
 #include <condVarLib.h>
-#include <time.h>
+#include <ctime>
 #include <cassert>
 #include <cstring>
+
+namespace {
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
 /// @brief Map OSAL priority [0=lowest, 255=highest] to VxWorks priority [255=lowest, 0=highest].
-static constexpr int osal_to_vx_priority(osal::priority_t p) noexcept
+constexpr int osal_to_vx_priority(osal::priority_t p) noexcept
 {
     return 255 - static_cast<int>(p);
 }
 
 /// @brief Convert OSAL tick count to VxWorks tick count.
-static int to_vx_ticks(osal::tick_t t) noexcept
+int to_vx_ticks(osal::tick_t t) noexcept
 {
     if (t == osal::WAIT_FOREVER)
     {
@@ -72,15 +74,15 @@ static int to_vx_ticks(osal::tick_t t) noexcept
 
 struct vx_timer_ctx
 {
-    osal_timer_callback_t fn;
-    void*                 arg;
-    WDOG_ID               wd;
-    int                   period_ticks;  ///< 0 = one-shot
-    bool                  auto_reload;
+    osal_timer_callback_t fn{};
+    void*                 arg{};
+    WDOG_ID               wd{};
+    int                   period_ticks{};  ///< 0 = one-shot
+    bool                  auto_reload{};
 };
-static vx_timer_ctx vx_timer_ctxs[OSAL_VX_MAX_TIMERS];
+vx_timer_ctx vx_timer_ctxs[OSAL_VX_MAX_TIMERS];
 
-static void vx_timer_expiry(long ctx_idx) noexcept
+void vx_timer_expiry(long ctx_idx) noexcept
 {
     auto& ctx = vx_timer_ctxs[ctx_idx];
     if (ctx.fn != nullptr)
@@ -93,6 +95,8 @@ static void vx_timer_expiry(long ctx_idx) noexcept
     }
 }
 
+} // namespace
+
 extern "C"
 {
     // ---------------------------------------------------------------------------
@@ -103,7 +107,7 @@ extern "C"
     /// @return Monotonic time in milliseconds since an arbitrary epoch.
     std::int64_t osal_clock_monotonic_ms() noexcept
     {
-        struct timespec ts;
+        struct timespec ts{};
         clock_gettime(CLOCK_MONOTONIC, &ts);
         return static_cast<std::int64_t>(ts.tv_sec) * 1000LL + static_cast<std::int64_t>(ts.tv_nsec) / 1'000'000LL;
     }
@@ -112,7 +116,7 @@ extern "C"
     /// @return System (real) time in milliseconds.
     std::int64_t osal_clock_system_ms() noexcept
     {
-        struct timespec ts;
+        struct timespec ts{};
         clock_gettime(CLOCK_REALTIME, &ts);
         return static_cast<std::int64_t>(ts.tv_sec) * 1000LL + static_cast<std::int64_t>(ts.tv_nsec) / 1'000'000LL;
     }
@@ -669,13 +673,9 @@ extern "C"
             return false;
         }
         const long idx = static_cast<long>(reinterpret_cast<intptr_t>(handle->native));
-        if (idx < 0 || idx >= OSAL_VX_MAX_TIMERS || vx_timer_ctxs[idx].wd == nullptr)
-        {
-            return false;
-        }
         // VxWorks 7 does not expose a direct "is active" query for watchdogs.
         // A custom flag could track this; for now return true if the wd exists.
-        return true;
+        return idx >= 0 && idx < OSAL_VX_MAX_TIMERS && vx_timer_ctxs[idx].wd != nullptr;
     }
 
     // ---------------------------------------------------------------------------
@@ -719,8 +719,10 @@ extern "C"
     osal::result osal_wait_set_wait(osal::active_traits::wait_set_handle_t*, int*, std::size_t, std::size_t* n,
                                     osal::tick_t) noexcept
     {
-        if (n)
+        if (n != nullptr)
+        {
             *n = 0U;
+        }
         return osal::error_code::not_supported;
     }
 
@@ -733,8 +735,10 @@ extern "C"
     /// @return `osal::ok()` on success, `out_of_resources` on failure.
     osal::result osal_condvar_create(osal::active_traits::condvar_handle_t* handle) noexcept
     {
-        if (!handle)
+        if (handle == nullptr)
+        {
             return osal::error_code::invalid_argument;
+        }
         COND_VAR_ID cv = condVarCreate(0);
         if (cv == NULL)
         {
@@ -749,8 +753,10 @@ extern "C"
     /// @return `osal::ok()` always.
     osal::result osal_condvar_destroy(osal::active_traits::condvar_handle_t* handle) noexcept
     {
-        if (!handle || !handle->native)
+        if (handle == nullptr || handle->native == nullptr)
+        {
             return osal::ok();
+        }
         condVarDelete(static_cast<COND_VAR_ID>(handle->native));
         handle->native = nullptr;
         return osal::ok();
@@ -764,8 +770,10 @@ extern "C"
     osal::result osal_condvar_wait(osal::active_traits::condvar_handle_t* handle,
                                    osal::active_traits::mutex_handle_t* mutex, osal::tick_t timeout) noexcept
     {
-        if (!handle || !handle->native || !mutex || !mutex->native)
+        if (handle == nullptr || handle->native == nullptr || mutex == nullptr || mutex->native == nullptr)
+        {
             return osal::error_code::not_initialized;
+        }
         COND_VAR_ID  cv  = static_cast<COND_VAR_ID>(handle->native);
         SEM_ID       mtx = static_cast<SEM_ID>(mutex->native);
         const STATUS rc  = condVarWait(cv, mtx, to_vx_ticks(timeout));
@@ -777,8 +785,10 @@ extern "C"
     /// @return `osal::ok()` on success.
     osal::result osal_condvar_notify_one(osal::active_traits::condvar_handle_t* handle) noexcept
     {
-        if (!handle || !handle->native)
+        if (handle == nullptr || handle->native == nullptr)
+        {
             return osal::error_code::not_initialized;
+        }
         condVarSignal(static_cast<COND_VAR_ID>(handle->native));
         return osal::ok();
     }
@@ -788,8 +798,10 @@ extern "C"
     /// @return `osal::ok()` on success.
     osal::result osal_condvar_notify_all(osal::active_traits::condvar_handle_t* handle) noexcept
     {
-        if (!handle || !handle->native)
+        if (handle == nullptr || handle->native == nullptr)
+        {
             return osal::error_code::not_initialized;
+        }
         condVarBroadcast(static_cast<COND_VAR_ID>(handle->native));
         return osal::ok();
     }

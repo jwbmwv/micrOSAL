@@ -38,21 +38,23 @@
 // ---------------------------------------------------------------------------
 // Static object pools
 // ---------------------------------------------------------------------------
-static TX_THREAD            tx_threads[OSAL_TX_MAX_THREADS];
-static bool                 tx_thread_used[OSAL_TX_MAX_THREADS];
-static TX_MUTEX             tx_mutexes[OSAL_TX_MAX_MUTEXES];
-static bool                 tx_mutex_used[OSAL_TX_MAX_MUTEXES];
-static TX_SEMAPHORE         tx_sems[OSAL_TX_MAX_SEMS];
-static bool                 tx_sem_used[OSAL_TX_MAX_SEMS];
-static TX_QUEUE             tx_queues[OSAL_TX_MAX_QUEUES];
-static bool                 tx_queue_used[OSAL_TX_MAX_QUEUES];
-static TX_TIMER             tx_timers[OSAL_TX_MAX_TIMERS];
-static bool                 tx_timer_used[OSAL_TX_MAX_TIMERS];
-static TX_EVENT_FLAGS_GROUP tx_evtgrps[OSAL_TX_MAX_EVTGRPS];
-static bool                 tx_evtgrp_used[OSAL_TX_MAX_EVTGRPS];
+namespace {
+
+TX_THREAD            tx_threads[OSAL_TX_MAX_THREADS];
+bool                 tx_thread_used[OSAL_TX_MAX_THREADS];
+TX_MUTEX             tx_mutexes[OSAL_TX_MAX_MUTEXES];
+bool                 tx_mutex_used[OSAL_TX_MAX_MUTEXES];
+TX_SEMAPHORE         tx_sems[OSAL_TX_MAX_SEMS];
+bool                 tx_sem_used[OSAL_TX_MAX_SEMS];
+TX_QUEUE             tx_queues[OSAL_TX_MAX_QUEUES];
+bool                 tx_queue_used[OSAL_TX_MAX_QUEUES];
+TX_TIMER             tx_timers[OSAL_TX_MAX_TIMERS];
+bool                 tx_timer_used[OSAL_TX_MAX_TIMERS];
+TX_EVENT_FLAGS_GROUP tx_evtgrps[OSAL_TX_MAX_EVTGRPS];
+bool                 tx_evtgrp_used[OSAL_TX_MAX_EVTGRPS];
 
 template<typename T, std::size_t N>
-static T* pool_acquire(T (&pool)[N], bool (&used)[N]) noexcept
+T* pool_acquire(T (&pool)[N], bool (&used)[N]) noexcept
 {
     for (std::size_t i = 0; i < N; ++i)
     {
@@ -66,7 +68,7 @@ static T* pool_acquire(T (&pool)[N], bool (&used)[N]) noexcept
 }
 
 template<typename T, std::size_t N>
-static void pool_release(T (&pool)[N], bool (&used)[N], T* p) noexcept
+void pool_release(T (&pool)[N], bool (&used)[N], T* p) noexcept
 {
     for (std::size_t i = 0; i < N; ++i)
     {
@@ -83,7 +85,7 @@ static void pool_release(T (&pool)[N], bool (&used)[N], T* p) noexcept
 // ---------------------------------------------------------------------------
 
 /// @brief Map OSAL priority [0=lowest, 255=highest] to ThreadX priority [0=highest, 31=lowest].
-static constexpr UINT osal_to_tx_priority(osal::priority_t p) noexcept
+constexpr UINT osal_to_tx_priority(osal::priority_t p) noexcept
 {
     const UINT tx_max = TX_MAX_PRIORITIES - 1U;
     return tx_max - static_cast<UINT>((static_cast<std::uint32_t>(p) * static_cast<std::uint32_t>(tx_max)) /
@@ -91,7 +93,7 @@ static constexpr UINT osal_to_tx_priority(osal::priority_t p) noexcept
 }
 
 /// @brief Map OSAL tick count to ThreadX wait option.
-static constexpr ULONG to_tx_ticks(osal::tick_t t) noexcept
+constexpr ULONG to_tx_ticks(osal::tick_t t) noexcept
 {
     if (t == osal::WAIT_FOREVER)
     {
@@ -116,12 +118,14 @@ static constexpr ULONG to_tx_ticks(osal::tick_t t) noexcept
 // ---------------------------------------------------------------------------
 struct tx_timer_ctx
 {
-    osal_timer_callback_t fn;
-    void*                 arg;
-    ULONG                 period;  ///< 0 = one-shot
-    TX_TIMER*             timer;
+    osal_timer_callback_t fn{};
+    void*                 arg{};
+    ULONG                 period{};  ///< 0 = one-shot
+    TX_TIMER*             timer{};
 };
-static tx_timer_ctx tx_timer_ctxs[OSAL_TX_MAX_TIMERS];
+tx_timer_ctx tx_timer_ctxs[OSAL_TX_MAX_TIMERS];
+
+}  // namespace
 
 extern "C"
 {
@@ -154,7 +158,7 @@ extern "C"
     /// @return 1 000 000 / `TX_TIMER_TICKS_PER_SECOND`.
     std::uint32_t osal_clock_tick_period_us() noexcept
     {
-        return 1'000'000U / TX_TIMER_TICKS_PER_SECOND;
+        return static_cast<std::uint32_t>(1'000'000U / TX_TIMER_TICKS_PER_SECOND);
     }
 
     // ---------------------------------------------------------------------------
@@ -610,7 +614,9 @@ extern "C"
     // Timer (TX_TIMER)
     // ---------------------------------------------------------------------------
 
-    static void tx_timer_expiry(ULONG ctx_idx) noexcept
+    namespace {
+
+    void tx_timer_expiry(ULONG ctx_idx) noexcept
     {
         auto& ctx = tx_timer_ctxs[ctx_idx];
         if (ctx.fn != nullptr)
@@ -619,6 +625,8 @@ extern "C"
         }
         // Periodic re-arm is handled by tx_timer activating with reschedule_ticks.
     }
+
+    }  // namespace
 
     /// @brief Create a `TX_TIMER` wrapping @p callback.
     /// @param handle       Output handle.
@@ -851,7 +859,9 @@ extern "C"
         return static_cast<osal::event_bits_t>(actual);
     }
 
-    static osal::result tx_event_wait_impl(osal::active_traits::event_flags_handle_t* handle,
+    namespace {
+
+    osal::result tx_event_wait_impl(osal::active_traits::event_flags_handle_t* handle,
                                            osal::event_bits_t wait_bits, osal::event_bits_t* actual_bits,
                                            bool clear_on_exit, bool all, osal::tick_t timeout_ticks) noexcept
     {
@@ -875,6 +885,8 @@ extern "C"
         }
         return (rc == TX_SUCCESS) ? osal::ok() : osal::error_code::timeout;
     }
+
+    }  // namespace
 
     /// @brief Wait until any of @p wait_bits are set.
     /// @param handle         Event-flags handle.
@@ -948,8 +960,9 @@ extern "C"
     osal::result osal_wait_set_wait(osal::active_traits::wait_set_handle_t*, int*, std::size_t, std::size_t* n,
                                     osal::tick_t) noexcept
     {
-        if (n)
+        if (n != nullptr) {
             *n = 0U;
+        }
         return osal::error_code::not_supported;
     }
 

@@ -35,24 +35,26 @@
 #include <pthread.h>
 #include <semaphore.h>
 #include <mqueue.h>
-#include <time.h>
+#include <ctime>
 #include <unistd.h>
 #include <sched.h>
-#include <signal.h>
+#include <csignal>
 #include <sys/neutrino.h>
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
+namespace {
+
 /// @brief Get CLOCK_MONOTONIC and add ms to produce an absolute timespec.
-static struct timespec ms_to_abs_mono(osal::tick_t ms) noexcept
+struct timespec ms_to_abs_mono(osal::tick_t ms) noexcept
 {
     return osal::detail::backend_timeout_adapter::to_abs_timespec(CLOCK_MONOTONIC, ms);
 }
 
 /// @brief Map OSAL priority [0=lowest..255=highest] to QNX SCHED_RR range.
-static int osal_to_qnx_priority(osal::priority_t p) noexcept
+int osal_to_qnx_priority(osal::priority_t p) noexcept
 {
     const int lo = sched_get_priority_min(SCHED_RR);
     const int hi = sched_get_priority_max(SCHED_RR);
@@ -72,7 +74,7 @@ struct qnx_timer_ctx
     std::atomic<bool>     alive;
 };
 
-static qnx_timer_ctx* timer_alloc() noexcept
+qnx_timer_ctx* timer_alloc() noexcept
 {
     auto* ctx = new (std::nothrow) qnx_timer_ctx{};
     if (ctx != nullptr)
@@ -83,7 +85,7 @@ static qnx_timer_ctx* timer_alloc() noexcept
 }
 
 /// @brief SIGEV_THREAD callback for QNX timer.
-static void qnx_timer_callback(union sigval sv) noexcept
+void qnx_timer_callback(union sigval sv) noexcept
 {
     auto* ctx = static_cast<qnx_timer_ctx*>(sv.sival_ptr);
     if (ctx != nullptr && ctx->alive.load(std::memory_order_acquire) && ctx->fn != nullptr)
@@ -95,13 +97,13 @@ static void qnx_timer_callback(union sigval sv) noexcept
 // ---------------------------------------------------------------------------
 // Queue name helper
 // ---------------------------------------------------------------------------
-static std::atomic<unsigned> qnx_q_counter{0};
+std::atomic<unsigned> qnx_q_counter{0};
 
 // ---------------------------------------------------------------------------
 // Initialise a pthread_cond_t that uses CLOCK_MONOTONIC for timed waits.
 // QNX supports this via standard condattr.
 // ---------------------------------------------------------------------------
-static int cond_init_monotonic(pthread_cond_t* cond) noexcept
+int cond_init_monotonic(pthread_cond_t* cond) noexcept
 {
     pthread_condattr_t attr;
     pthread_condattr_init(&attr);
@@ -110,6 +112,8 @@ static int cond_init_monotonic(pthread_cond_t* cond) noexcept
     pthread_condattr_destroy(&attr);
     return rc;
 }
+
+} // namespace
 
 // ---------------------------------------------------------------------------
 // Shared-include macro contracts for posix_condvar.inl and posix_rwlock.inl.
@@ -277,7 +281,7 @@ extern "C"
             return osal::error_code::not_initialized;
         }
         // QNX: thread affinity via ThreadCtl or runmask
-        unsigned  rmask = static_cast<unsigned>(affinity);
+        auto  rmask = static_cast<unsigned>(affinity);
         const int rc    = ThreadCtl(_NTO_TCTL_RUNMASK, reinterpret_cast<void*>(static_cast<uintptr_t>(rmask)));
         return (rc == 0) ? osal::ok() : osal::error_code::unknown;
     }
@@ -526,9 +530,9 @@ extern "C"
     osal::result osal_queue_create(osal::active_traits::queue_handle_t* handle, void* /*buffer*/, std::size_t item_size,
                                    std::size_t capacity) noexcept
     {
-        char           name[32];
+        char           name[32]{};
         const unsigned id = qnx_q_counter.fetch_add(1U, std::memory_order_relaxed);
-        snprintf(name, sizeof(name), "/osal_q_%u_%u", static_cast<unsigned>(getpid()), id);
+        (void)snprintf(name, sizeof(name), "/osal_q_%u_%u", static_cast<unsigned>(getpid()), id);  // NOLINT(cppcoreguidelines-pro-type-vararg)
 
         struct mq_attr attr
         {
@@ -536,7 +540,7 @@ extern "C"
         attr.mq_maxmsg  = static_cast<long>(capacity > 0 ? capacity : 8);
         attr.mq_msgsize = static_cast<long>(item_size > 0 ? item_size : sizeof(void*));
 
-        mqd_t mq = mq_open(name, O_CREAT | O_RDWR | O_NONBLOCK, 0600, &attr);
+        mqd_t mq = mq_open(name, O_CREAT | O_RDWR | O_NONBLOCK, 0600, &attr);  // NOLINT(cppcoreguidelines-pro-type-vararg)
         if (mq == static_cast<mqd_t>(-1))
         {
             return osal::error_code::out_of_resources;
@@ -613,7 +617,7 @@ extern "C"
         new_attr.mq_flags = 0;  // blocking
         mq_setattr(ctx->mq, &new_attr, &old_attr);
 
-        int rc;
+        int rc = 0;
         if (timeout_ticks == osal::WAIT_FOREVER)
         {
             rc = mq_send(ctx->mq, static_cast<const char*>(item), static_cast<std::size_t>(ctx->msg_size), 0);
@@ -675,7 +679,7 @@ extern "C"
         new_attr.mq_flags = 0;
         mq_setattr(ctx->mq, &new_attr, &old_attr);
 
-        ssize_t n;
+        ssize_t n = 0;
         if (timeout_ticks == osal::WAIT_FOREVER)
         {
             n = mq_receive(ctx->mq, static_cast<char*>(item), static_cast<std::size_t>(ctx->msg_size), nullptr);
@@ -781,8 +785,8 @@ extern "C"
         ctx->auto_reload = auto_reload;
 
         // Convert ticks (ms) to itimerspec
-        const time_t sec          = static_cast<time_t>(period_ticks / 1000U);
-        const long   nsec         = static_cast<long>((period_ticks % 1000U) * 1'000'000L);
+        const auto sec          = static_cast<time_t>(period_ticks / 1000U);
+        const auto   nsec         = static_cast<long>((period_ticks % 1000U) * 1'000'000L);
         ctx->its.it_value.tv_sec  = sec;
         ctx->its.it_value.tv_nsec = nsec;
         if (auto_reload)
@@ -888,8 +892,8 @@ extern "C"
             return osal::error_code::not_initialized;
         }
         auto*        ctx          = static_cast<qnx_timer_ctx*>(handle->native);
-        const time_t sec          = static_cast<time_t>(new_period_ticks / 1000U);
-        const long   nsec         = static_cast<long>((new_period_ticks % 1000U) * 1'000'000L);
+        const auto sec          = static_cast<time_t>(new_period_ticks / 1000U);
+        const auto   nsec         = static_cast<long>((new_period_ticks % 1000U) * 1'000'000L);
         ctx->its.it_value.tv_sec  = sec;
         ctx->its.it_value.tv_nsec = nsec;
         if (ctx->auto_reload)
@@ -909,7 +913,7 @@ extern "C"
         {
             return false;
         }
-        auto* ctx = static_cast<const qnx_timer_ctx*>(handle->native);
+        const auto* ctx = static_cast<const qnx_timer_ctx*>(handle->native);
         struct itimerspec cur
         {
         };
@@ -961,8 +965,10 @@ extern "C"
     osal::result osal_wait_set_wait(osal::active_traits::wait_set_handle_t*, int*, std::size_t, std::size_t* n,
                                     osal::tick_t) noexcept
     {
-        if (n)
+        if (n != nullptr)
+        {
             *n = 0U;
+        }
         return osal::error_code::not_supported;
     }
 
