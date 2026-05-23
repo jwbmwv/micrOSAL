@@ -267,7 +267,11 @@ struct thread_affinity_query_capability<backend_zephyr>
 template<>
 struct current_cpu_query_capability<backend_zephyr>
 {
+#if defined(CONFIG_MP_MAX_NUM_CPUS) && (CONFIG_MP_MAX_NUM_CPUS > 1)
+    static constexpr bool value = false;
+#else
     static constexpr bool value = true;
+#endif
 };
 
 template<>

@@ -330,8 +330,10 @@ extern "C"
 
         if (priority != osal::PRIORITY_NORMAL)
         {
-            const int          policy = SCHED_FIFO;
-            struct sched_param sp{};
+            const int policy = SCHED_FIFO;
+            struct sched_param sp
+            {
+            };
             sp.sched_priority = sched_get_priority_min(policy) +
                                 static_cast<int>((static_cast<std::uint32_t>(priority) *
                                                   static_cast<std::uint32_t>(sched_get_priority_max(policy) -
@@ -464,8 +466,10 @@ extern "C"
             thread_id = *static_cast<const pthread_t*>(handle->native);
         }
 
-        struct sched_param sp{};
-        int                policy = 0;
+        struct sched_param sp
+        {
+        };
+        int policy = 0;
         if (pthread_getschedparam(thread_id, &policy, &sp) != 0)
         {
             return osal::error_code::unknown;
@@ -582,9 +586,11 @@ extern "C"
         {
             return osal::error_code::not_initialized;
         }
-        auto* const        thread_id = static_cast<pthread_t*>(handle->native);
-        struct sched_param sp{};
-        int                policy{0};
+        auto* const thread_id = static_cast<pthread_t*>(handle->native);
+        struct sched_param sp
+        {
+        };
+        int policy{0};
         pthread_getschedparam(*thread_id, &policy, &sp);
         sp.sched_priority = sched_get_priority_min(policy) +
                             static_cast<int>((static_cast<std::uint32_t>(priority) *
@@ -644,10 +650,10 @@ extern "C"
     /// @param ms Delay in milliseconds.
     void osal_thread_sleep_ms(std::uint32_t ms) noexcept
     {
-        const auto            nanoseconds = static_cast<std::int64_t>(ms % 1000U) * kNanosecondsPerMillisecond;
-        const struct timespec ts{
-            static_cast<time_t>(ms / 1000U),
-            static_cast<decltype(timespec{}.tv_nsec)>(nanoseconds),
+        const auto nanoseconds = static_cast<std::int64_t>(ms % 1000U) * kNanosecondsPerMillisecond;
+        const struct timespec ts
+        {
+            static_cast<time_t>(ms / 1000U), static_cast<decltype(timespec{}.tv_nsec)>(nanoseconds),
         };
         nanosleep(&ts, nullptr);
     }
@@ -1134,8 +1140,10 @@ extern "C"
         {
             return osal::error_code::not_initialized;
         }
-        auto* const       ctx = static_cast<linux_timer_ctx*>(handle->native);
-        struct itimerspec dis{};
+        auto* const ctx = static_cast<linux_timer_ctx*>(handle->native);
+        struct itimerspec dis
+        {
+        };
         timerfd_settime(ctx->timerfd, 0, &dis, nullptr);
         return osal::ok();
     }
@@ -1203,8 +1211,10 @@ extern "C"
         {
             return false;
         }
-        const auto*       ctx = static_cast<const linux_timer_ctx*>(handle->native);
-        struct itimerspec cur{};
+        const auto* ctx = static_cast<const linux_timer_ctx*>(handle->native);
+        struct itimerspec cur
+        {
+        };
         timerfd_gettime(ctx->timerfd, &cur);
         return (cur.it_value.tv_sec != 0 || cur.it_value.tv_nsec != 0);
     }
@@ -1266,8 +1276,10 @@ extern "C"
         {
             return osal::error_code::not_initialized;
         }
-        auto*              ws = static_cast<linux_wait_set_obj*>(handle->native);
-        struct epoll_event ev{};
+        auto* ws = static_cast<linux_wait_set_obj*>(handle->native);
+        struct epoll_event ev
+        {
+        };
         ev.events  = events;
         ev.data.fd = fd;
         return (epoll_ctl(ws->epfd, EPOLL_CTL_ADD, fd, &ev) == 0) ? osal::ok() : osal::error_code::invalid_argument;

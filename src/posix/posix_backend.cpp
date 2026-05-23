@@ -267,10 +267,12 @@ extern "C"
         // Set FIFO scheduling if priority != default.
         if (priority != osal::PRIORITY_NORMAL)
         {
-            struct sched_param sp{};
-            const int          policy = SCHED_FIFO;
-            const int          max_p  = sched_get_priority_max(policy);
-            const int          min_p  = sched_get_priority_min(policy);
+            struct sched_param sp
+            {
+            };
+            const int policy = SCHED_FIFO;
+            const int max_p  = sched_get_priority_max(policy);
+            const int min_p  = sched_get_priority_min(policy);
             sp.sched_priority =
                 min_p +
                 static_cast<int>((static_cast<std::uint32_t>(priority) * static_cast<std::uint32_t>(max_p - min_p)) /
@@ -421,8 +423,10 @@ extern "C"
             thread_id = *static_cast<const pthread_t*>(handle->native);
         }
 
-        struct sched_param sp{};
-        int                policy = 0;
+        struct sched_param sp
+        {
+        };
+        int policy = 0;
         if (pthread_getschedparam(thread_id, &policy, &sp) != 0)
         {
             return osal::error_code::unknown;
@@ -492,9 +496,11 @@ extern "C"
         {
             return osal::error_code::not_initialized;
         }
-        auto* const        thread_id = static_cast<pthread_t*>(handle->native);
-        struct sched_param sp{};
-        int                policy{0};
+        auto* const thread_id = static_cast<pthread_t*>(handle->native);
+        struct sched_param sp
+        {
+        };
+        int policy{0};
         pthread_getschedparam(*thread_id, &policy, &sp);
         const int max_p = sched_get_priority_max(policy);
         const int min_p = sched_get_priority_min(policy);
@@ -562,10 +568,10 @@ extern "C"
     /// @param ms Delay in milliseconds.
     void osal_thread_sleep_ms(std::uint32_t ms) noexcept
     {
-        const auto            nanoseconds = static_cast<std::int64_t>(ms % 1000U) * kNanosecondsPerMillisecond;
-        const struct timespec ts{
-            static_cast<time_t>(ms / 1000U),
-            static_cast<decltype(timespec{}.tv_nsec)>(nanoseconds),
+        const auto nanoseconds = static_cast<std::int64_t>(ms % 1000U) * kNanosecondsPerMillisecond;
+        const struct timespec ts
+        {
+            static_cast<time_t>(ms / 1000U), static_cast<decltype(timespec{}.tv_nsec)>(nanoseconds),
         };
         nanosleep(&ts, nullptr);
     }
@@ -1043,7 +1049,9 @@ extern "C"
         ctx->spec.it_interval.tv_sec  = auto_reload ? sec : 0;
         ctx->spec.it_interval.tv_nsec = auto_reload ? nsec : 0;
 
-        struct sigevent sev{};
+        struct sigevent sev
+        {
+        };
         sev.sigev_notify = SIGEV_THREAD;
         // NOLINTNEXTLINE(cppcoreguidelines-pro-type-union-access)
         sev.sigev_value.sival_ptr = static_cast<void*>(ctx);
@@ -1076,13 +1084,18 @@ extern "C"
         }
         auto* ctx = static_cast<posix_timer_ctx*>(handle->native);
         // Disarm the timer first to prevent new SIGEV_THREAD callbacks.
-        struct itimerspec disarm{};
+        struct itimerspec disarm
+        {
+        };
         timer_settime(ctx->id, 0, &disarm, nullptr);
         // Mark dead so any in-flight callback thread bails out.
         ctx->alive.store(false, std::memory_order_release);
         timer_delete(ctx->id);
         // Brief yield to allow in-flight callback threads to finish.
-        const struct timespec ts{0, static_cast<decltype(timespec{}.tv_nsec)>(2 * kNanosecondsPerMillisecond)};
+        const struct timespec ts
+        {
+            0, static_cast<decltype(timespec{}.tv_nsec)>(2 * kNanosecondsPerMillisecond)
+        };
         nanosleep(&ts, nullptr);
         delete ctx;
         handle->native = nullptr;
@@ -1111,8 +1124,10 @@ extern "C"
         {
             return osal::error_code::not_initialized;
         }
-        auto*             ctx = static_cast<posix_timer_ctx*>(handle->native);
-        struct itimerspec disarm{};
+        auto* ctx = static_cast<posix_timer_ctx*>(handle->native);
+        struct itimerspec disarm
+        {
+        };
         return (timer_settime(ctx->id, 0, &disarm, nullptr) == 0) ? osal::ok() : osal::error_code::unknown;
     }
 
@@ -1155,8 +1170,10 @@ extern "C"
         {
             return false;
         }
-        const auto*       ctx = static_cast<const posix_timer_ctx*>(handle->native);
-        struct itimerspec cur{};
+        const auto* ctx = static_cast<const posix_timer_ctx*>(handle->native);
+        struct itimerspec cur
+        {
+        };
         timer_gettime(ctx->id, &cur);
         return (cur.it_value.tv_sec != 0 || cur.it_value.tv_nsec != 0);
     }

@@ -607,8 +607,12 @@ extern "C"
             return osal::error_code::invalid_argument;
         }
 
-        *out_cpu = static_cast<std::uint32_t>(CPU_ID);
+#if defined(CONFIG_MP_MAX_NUM_CPUS) && (CONFIG_MP_MAX_NUM_CPUS > 1)
+        return osal::error_code::not_supported;
+#else
+        *out_cpu = 0U;
         return osal::ok();
+#endif
     }
 
     /// @brief Returns the stack low-watermark for a Zephyr thread.
