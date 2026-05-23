@@ -55,6 +55,41 @@ TEST_CASE("c_api: clock ticks returns non-zero value")
     CHECK(t >= 0);
 }
 
+TEST_CASE("c_api: monotonic deadline helper expires and saturates as expected")
+{
+    const osal_monotonic_deadline immediate = osal_c_monotonic_deadline_after_ms(0);
+    CHECK(osal_c_monotonic_deadline_expired(immediate) == 1);
+    CHECK(osal_c_monotonic_deadline_remaining_ms(immediate) == 0);
+
+    const osal_monotonic_deadline future = osal_c_monotonic_deadline_after_ms(100);
+    CHECK(osal_c_monotonic_deadline_expired(future) == 0);
+    CHECK(osal_c_monotonic_deadline_remaining_ms(future) > 0);
+
+    osal_monotonic_deadline restarted = osal_c_monotonic_deadline_at_ms(osal_c_clock_monotonic_ms());
+    osal_c_monotonic_deadline_restart_ms(&restarted, 50);
+    CHECK(osal_c_monotonic_deadline_remaining_ms(restarted) > 0);
+}
+
+TEST_CASE("c_api: high-resolution clock and deadline helper mirror C++ support")
+{
+    CHECK(osal_c_clock_high_resolution_supported() == static_cast<int>(osal::high_resolution_clock::is_supported));
+    CHECK(osal_c_clock_high_resolution_resolution_ns() == osal::high_resolution_clock::resolution().count());
+
+    const osal_high_resolution_deadline immediate = osal_c_high_resolution_deadline_after_us(0);
+    CHECK(osal_c_high_resolution_deadline_expired(immediate) == 1);
+    CHECK(osal_c_high_resolution_deadline_remaining_ns(immediate) == 0);
+    CHECK(osal_c_high_resolution_deadline_remaining_us(immediate) == 0);
+
+    const osal_high_resolution_deadline future = osal_c_high_resolution_deadline_after_us(2000);
+    CHECK(osal_c_high_resolution_deadline_expired(future) == 0);
+    CHECK(osal_c_high_resolution_deadline_remaining_ns(future) > 0);
+    CHECK(osal_c_high_resolution_deadline_remaining_us(future) > 0);
+
+    osal_high_resolution_deadline restarted = osal_c_high_resolution_deadline_at_ns(osal_c_clock_high_resolution_ns());
+    osal_c_high_resolution_deadline_restart_us(&restarted, 1000);
+    CHECK(osal_c_high_resolution_deadline_remaining_us(restarted) > 0);
+}
+
 // =========================================================================
 // Mutex
 // =========================================================================

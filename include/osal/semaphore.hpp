@@ -199,14 +199,12 @@ public:
     /// @blocking   Until deadline.
     bool take_until(monotonic_clock::time_point deadline) noexcept
     {
-        const auto now = monotonic_clock::now();
-        if (deadline <= now)
+        const monotonic_deadline take_deadline = monotonic_deadline::at(deadline);
+        if (take_deadline.expired())
         {
             return try_take();
         }
-        const auto diff = deadline - now;
-        const auto ms   = std::chrono::duration_cast<milliseconds>(diff);
-        return take_for(ms);
+        return take_for(take_deadline.remaining());
     }
 
 private:

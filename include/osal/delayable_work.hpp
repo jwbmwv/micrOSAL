@@ -189,11 +189,10 @@ public:
             return error_code::not_initialized;
         }
 
-        const auto deadline =
-            (timeout.count() < 0) ? monotonic_clock::time_point::max() : (monotonic_clock::now() + timeout);
+        const monotonic_deadline flush_deadline = monotonic_deadline::after(timeout);
         while (load_state() != state::idle)
         {
-            if ((timeout.count() >= 0) && (monotonic_clock::now() >= deadline))
+            if ((timeout.count() >= 0) && flush_deadline.expired())
             {
                 return error_code::timeout;
             }

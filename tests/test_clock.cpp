@@ -5,6 +5,29 @@
 #include <doctest/doctest.h>
 #include <osal/osal.hpp>
 
+namespace
+{
+
+struct fake_deadline_clock
+{
+    using rep        = std::int64_t;
+    using period     = std::milli;
+    using duration   = std::chrono::duration<rep, period>;
+    using time_point = std::chrono::time_point<fake_deadline_clock>;
+
+    static constexpr bool is_steady = true;
+
+    static time_point now() noexcept { return current; }
+
+    static time_point current;
+};
+
+fake_deadline_clock::time_point fake_deadline_clock::current{};
+
+using fake_deadline = osal::basic_deadline<fake_deadline_clock>;
+
+}  // namespace
+
 TEST_CASE("monotonic_clock::now returns positive time")
 {
     const auto t  = osal::monotonic_clock::now();
@@ -77,4 +100,32 @@ TEST_CASE("high_resolution_clock reflects backend support")
     {
         CHECK(resolution == tick_resolution);
     }
+}
+
+TEST_CASE("basic_deadline rounds relative timeouts up to the clock resolution")
+{
+    fake_deadline_clock::current = fake_deadline_clock::time_point{fake_deadline_clock::duration{10}};
+
+    const auto timeout = fake_deadline::after(osal::microseconds{1500});
+    CHECK(timeout.expires_at() == fake_deadline_clock::time_point{fake_deadline_clock::duration{12}});
+}
+
+TEST_CASE("basic_deadline remaining saturates at zero")
+{
+    const auto expiry  = osal::monotonic_clock::time_point{osal::milliseconds{25}};
+    const auto timeout = osal::monotonic_deadline::at(expiry);
+
+    CHECK_FALSE(timeout.expired(osal::monotonic_clock::time_point{osal::milliseconds{24}}));
+    CHECK(timeout.remaining(osal::monotonic_clock::time_point{osal::milliseconds{24}}) == osal::milliseconds{1});
+    CHECK(timeout.expired(expiry));
+    CHECK(timeout.remaining(expiry) == osal::milliseconds{0});
+    CHECK(timeout.remaining(osal::monotonic_clock::time_point{osal::milliseconds{30}}) == osal::milliseconds{0});
+}
+
+TEST_CASE("basic_deadline saturates oversized relative timeouts")
+{
+    fake_deadline_clock::current = fake_deadline_clock::time_point::max() - fake_deadline_clock::duration{1};
+
+    const auto timeout = fake_deadline::after(std::chrono::seconds{1});
+    CHECK(timeout.expires_at() == fake_deadline_clock::time_point::max());
 }

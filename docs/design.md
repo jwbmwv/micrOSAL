@@ -807,6 +807,21 @@ The current design resolves this cleanly:
 The only runtime dependency is `osal_clock_tick_period_us()`, which is
 provided by each backend's `.cpp`.
 
+### Deadline Helper
+
+`clock.hpp` also exposes a small header-only absolute-time helper for live
+timeout checks in work loops:
+
+- `osal::monotonic_deadline` uses `osal::monotonic_clock`
+- `osal::high_resolution_deadline` uses `osal::high_resolution_clock`
+- `osal_c.h` exposes matching C helpers: `osal_monotonic_deadline` with
+    `osal_c_monotonic_deadline_after_ms()` and `osal_high_resolution_deadline`
+    with `osal_c_high_resolution_deadline_after_us()`
+
+The helper stores an absolute expiry and exposes `expired()` and `remaining()`
+queries. Relative timeouts are rounded up to the clock resolution so a
+non-zero timeout does not expire early due to duration truncation.
+
 ---
 
 ## Static Pool Sizing

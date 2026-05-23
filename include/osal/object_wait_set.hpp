@@ -257,10 +257,10 @@ public:
             return error_code::invalid_argument;
         }
 
-        n_ready             = 0U;
-        const bool forever  = timeout.count() < 0;
-        const bool no_wait  = timeout.count() == 0;
-        const auto deadline = forever ? monotonic_clock::time_point::max() : (monotonic_clock::now() + timeout);
+        n_ready                                = 0U;
+        const bool               no_wait       = timeout.count() == 0;
+        const bool               forever       = timeout.count() < 0;
+        const monotonic_deadline wait_deadline = monotonic_deadline::after(timeout);
 
         for (;;)
         {
@@ -293,7 +293,7 @@ public:
                 return error_code::timeout;
             }
 
-            if (!forever && (monotonic_clock::now() >= deadline))
+            if (!forever && wait_deadline.expired())
             {
                 return error_code::timeout;
             }

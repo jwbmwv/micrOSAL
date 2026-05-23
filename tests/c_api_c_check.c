@@ -38,6 +38,24 @@ int osal_c_smoke_test(void)
     (void)mono;
     osal_tick_t ticks = osal_c_clock_ticks();
     (void)ticks;
+    int64_t hi_res = osal_c_clock_high_resolution_ns();
+    (void)hi_res;
+    int hi_res_supported = osal_c_clock_high_resolution_supported();
+    (void)hi_res_supported;
+
+    osal_monotonic_deadline mono_deadline = osal_c_monotonic_deadline_after_ms(5);
+    if (osal_c_monotonic_deadline_remaining_ms(mono_deadline) <= 0)
+        return 100;
+
+    mono_deadline = osal_c_monotonic_deadline_at_ms(osal_c_clock_monotonic_ms());
+    if (osal_c_monotonic_deadline_expired(mono_deadline) == 0)
+        return 101;
+
+    osal_high_resolution_deadline hi_res_deadline = osal_c_high_resolution_deadline_after_us(1000);
+    if (osal_c_clock_high_resolution_resolution_ns() <= 0)
+        return 102;
+    if (osal_c_high_resolution_deadline_remaining_us(hi_res_deadline) <= 0)
+        return 103;
 
     /* ---- Mutex ---- */
     osal_mutex_handle mtx;

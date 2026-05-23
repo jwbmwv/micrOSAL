@@ -139,16 +139,14 @@ public:
     template<wait_predicate Predicate>
     bool wait_for(mutex& m, milliseconds timeout, Predicate pred) noexcept(noexcept(pred()))
     {
-        const auto deadline = monotonic_clock::now() + timeout;
+        const monotonic_deadline wait_deadline = monotonic_deadline::after(timeout);
         while (!pred())
         {
-            const auto now = monotonic_clock::now();
-            if (now >= deadline)
+            if (wait_deadline.expired())
             {
                 return pred();
             }
-            const auto remaining = std::chrono::duration_cast<milliseconds>(deadline - now);
-            if (!wait_for(m, remaining))
+            if (!wait_for(m, wait_deadline.remaining()))
             {
                 return pred();
             }
@@ -164,15 +162,14 @@ public:
     ///          large deadlines) does not cause premature false-timeout returns.
     bool wait_until(mutex& m, monotonic_clock::time_point deadline) noexcept
     {
+        const monotonic_deadline wait_deadline = monotonic_deadline::at(deadline);
         for (;;)
         {
-            const auto now = monotonic_clock::now();
-            if (deadline <= now)
+            if (wait_deadline.expired())
             {
                 return false;
             }
-            const auto remaining = std::chrono::duration_cast<milliseconds>(deadline - now);
-            if (wait_for(m, remaining))
+            if (wait_for(m, wait_deadline.remaining()))
             {
                 return true;  // notified
             }
@@ -191,10 +188,7 @@ public:
     bool wait_until(mutex& m, monotonic_clock::time_point deadline, Predicate pred) noexcept(noexcept(pred()))
     {
         // Delegate to the timed predicate wait_for, which already loops.
-        const auto         now = monotonic_clock::now();
-        const milliseconds remaining =
-            (deadline > now) ? std::chrono::duration_cast<milliseconds>(deadline - now) : milliseconds{0};
-        return wait_for(m, remaining, pred);
+        return wait_for(m, monotonic_deadline::at(deadline).remaining(), pred);
     }
 
     // ---- notify ------------------------------------------------------------

@@ -379,6 +379,142 @@ typedef uint32_t osal_tick_t;
     /** @brief Returns the duration of one RTOS tick in microseconds. */
     uint32_t osal_c_clock_tick_period_us(void);
 
+    /** @brief Returns the best available high-resolution time source in nanoseconds. */
+    int64_t osal_c_clock_high_resolution_ns(void);
+
+    /** @brief Returns the nominal resolution of the high-resolution source in nanoseconds. */
+    int64_t osal_c_clock_high_resolution_resolution_ns(void);
+
+    /** @brief Returns non-zero when the active backend provides a native high-resolution source. */
+    int osal_c_clock_high_resolution_supported(void);
+
+    /** @brief Absolute monotonic deadline helper for live timeout checks in C. */
+    typedef struct
+    {
+        int64_t expiry_ms;
+    } osal_monotonic_deadline;
+
+    /** @brief Absolute high-resolution deadline helper for live timeout checks in C. */
+    typedef struct
+    {
+        int64_t expiry_ns;
+    } osal_high_resolution_deadline;
+
+    static inline int64_t osal_c_detail_saturating_add_i64(int64_t base, int64_t delta)
+    {
+        if (delta <= 0)
+        {
+            return base;
+        }
+        return (base >= (INT64_MAX - delta)) ? INT64_MAX : (base + delta);
+    }
+
+    static inline int64_t osal_c_detail_remaining_i64(int64_t expiry, int64_t now)
+    {
+        return (now >= expiry) ? 0 : (expiry - now);
+    }
+
+    static inline int64_t osal_c_detail_us_to_ns_saturating(int64_t timeout_us)
+    {
+        if (timeout_us <= 0)
+        {
+            return 0;
+        }
+        return (timeout_us >= (INT64_MAX / 1000)) ? INT64_MAX : (timeout_us * 1000);
+    }
+
+    static inline int64_t osal_c_detail_ns_to_us_ceil(int64_t duration_ns)
+    {
+        if (duration_ns <= 0)
+        {
+            return 0;
+        }
+        if (duration_ns > (INT64_MAX - 999))
+        {
+            return (INT64_MAX / 1000) + ((INT64_MAX % 1000) != 0);
+        }
+        return (duration_ns + 999) / 1000;
+    }
+
+    /** @brief Create a monotonic deadline relative to now using milliseconds. */
+    static inline osal_monotonic_deadline osal_c_monotonic_deadline_after_ms(int64_t timeout_ms)
+    {
+        const int64_t           now_ms = osal_c_clock_monotonic_ms();
+        osal_monotonic_deadline deadline;
+        deadline.expiry_ms = (timeout_ms <= 0) ? now_ms : osal_c_detail_saturating_add_i64(now_ms, timeout_ms);
+        return deadline;
+    }
+
+    /** @brief Create a monotonic deadline from an absolute monotonic millisecond timestamp. */
+    static inline osal_monotonic_deadline osal_c_monotonic_deadline_at_ms(int64_t deadline_ms)
+    {
+        osal_monotonic_deadline deadline;
+        deadline.expiry_ms = deadline_ms;
+        return deadline;
+    }
+
+    /** @brief Return non-zero when the monotonic deadline has expired. */
+    static inline int osal_c_monotonic_deadline_expired(osal_monotonic_deadline deadline)
+    {
+        return osal_c_clock_monotonic_ms() >= deadline.expiry_ms;
+    }
+
+    /** @brief Return the remaining monotonic time in milliseconds, saturating at zero. */
+    static inline int64_t osal_c_monotonic_deadline_remaining_ms(osal_monotonic_deadline deadline)
+    {
+        return osal_c_detail_remaining_i64(deadline.expiry_ms, osal_c_clock_monotonic_ms());
+    }
+
+    /** @brief Restart a monotonic deadline relative to now using milliseconds. */
+    static inline void osal_c_monotonic_deadline_restart_ms(osal_monotonic_deadline* deadline, int64_t timeout_ms)
+    {
+        *deadline = osal_c_monotonic_deadline_after_ms(timeout_ms);
+    }
+
+    /** @brief Create a high-resolution deadline relative to now using microseconds. */
+    static inline osal_high_resolution_deadline osal_c_high_resolution_deadline_after_us(int64_t timeout_us)
+    {
+        const int64_t                 now_ns = osal_c_clock_high_resolution_ns();
+        osal_high_resolution_deadline deadline;
+        deadline.expiry_ns =
+            (timeout_us <= 0) ? now_ns
+                              : osal_c_detail_saturating_add_i64(now_ns, osal_c_detail_us_to_ns_saturating(timeout_us));
+        return deadline;
+    }
+
+    /** @brief Create a high-resolution deadline from an absolute nanosecond timestamp. */
+    static inline osal_high_resolution_deadline osal_c_high_resolution_deadline_at_ns(int64_t deadline_ns)
+    {
+        osal_high_resolution_deadline deadline;
+        deadline.expiry_ns = deadline_ns;
+        return deadline;
+    }
+
+    /** @brief Return non-zero when the high-resolution deadline has expired. */
+    static inline int osal_c_high_resolution_deadline_expired(osal_high_resolution_deadline deadline)
+    {
+        return osal_c_clock_high_resolution_ns() >= deadline.expiry_ns;
+    }
+
+    /** @brief Return the remaining high-resolution time in nanoseconds, saturating at zero. */
+    static inline int64_t osal_c_high_resolution_deadline_remaining_ns(osal_high_resolution_deadline deadline)
+    {
+        return osal_c_detail_remaining_i64(deadline.expiry_ns, osal_c_clock_high_resolution_ns());
+    }
+
+    /** @brief Return the remaining high-resolution time in microseconds, rounded up and saturating at zero. */
+    static inline int64_t osal_c_high_resolution_deadline_remaining_us(osal_high_resolution_deadline deadline)
+    {
+        return osal_c_detail_ns_to_us_ceil(osal_c_high_resolution_deadline_remaining_ns(deadline));
+    }
+
+    /** @brief Restart a high-resolution deadline relative to now using microseconds. */
+    static inline void osal_c_high_resolution_deadline_restart_us(osal_high_resolution_deadline* deadline,
+                                                                  int64_t                        timeout_us)
+    {
+        *deadline = osal_c_high_resolution_deadline_after_us(timeout_us);
+    }
+
     /* ======================================================================== */
     /* Mutex                                                                    */
     /* ======================================================================== */

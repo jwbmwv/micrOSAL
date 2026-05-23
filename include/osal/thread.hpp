@@ -284,15 +284,14 @@ public:
     ///          large deadlines) does not cause premature timeout returns.
     result join_until(monotonic_clock::time_point deadline) noexcept
     {
+        const monotonic_deadline join_deadline = monotonic_deadline::at(deadline);
         for (;;)
         {
-            const auto now = monotonic_clock::now();
-            if (deadline <= now)
+            if (join_deadline.expired())
             {
                 return error_code::timeout;
             }
-            const auto   diff = std::chrono::duration_cast<milliseconds>(deadline - now);
-            const result r    = join_for(diff);
+            const result r = join_for(join_deadline.remaining());
             // Joined (ok), unsupported backend, or any non-timeout error: propagate.
             if (r != error_code::timeout)
             {

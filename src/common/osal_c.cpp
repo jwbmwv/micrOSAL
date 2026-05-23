@@ -270,14 +270,13 @@ osal_result_t delayable_arm_locked(osal_delayable_work_handle* handle, osal_tick
 /// @return Remaining ticks, or `OSAL_NO_WAIT` once expired.
 [[nodiscard]] osal_tick_t remaining_ticks_until(osal::monotonic_clock::time_point deadline) noexcept
 {
-    const auto now = osal::monotonic_clock::now();
-    if (deadline <= now)
+    const osal::monotonic_deadline wait_deadline = osal::monotonic_deadline::at(deadline);
+    if (wait_deadline.expired())
     {
         return OSAL_NO_WAIT;
     }
 
-    const auto remaining = std::chrono::duration_cast<osal::milliseconds>(deadline - now);
-    return static_cast<osal_tick_t>(osal::clock_utils::ms_to_ticks(remaining));
+    return static_cast<osal_tick_t>(osal::clock_utils::ms_to_ticks(wait_deadline.remaining()));
 }
 
 /// @brief Unlock a composite notification handle's mutex.
@@ -377,6 +376,27 @@ extern "C" osal_tick_t osal_c_clock_ticks(void)
 extern "C" uint32_t osal_c_clock_tick_period_us(void)
 {
     return osal_clock_tick_period_us();
+}
+
+/// @brief Return the best available high-resolution time source in nanoseconds.
+/// @return Nanoseconds from the active high-resolution source or its supported fallback.
+extern "C" int64_t osal_c_clock_high_resolution_ns(void)
+{
+    return osal_clock_high_resolution_ns();
+}
+
+/// @brief Return the nominal resolution of the high-resolution source.
+/// @return Nanoseconds per observable step of the high-resolution clock.
+extern "C" int64_t osal_c_clock_high_resolution_resolution_ns(void)
+{
+    return osal_clock_high_resolution_resolution_ns();
+}
+
+/// @brief Report whether the active backend provides a native high-resolution source.
+/// @return 1 when high-resolution clock support is native; otherwise 0.
+extern "C" int osal_c_clock_high_resolution_supported(void)
+{
+    return osal::high_resolution_clock::is_supported ? 1 : 0;
 }
 
 // ============================================================================

@@ -78,6 +78,100 @@ struct high_resolution_clock
     static duration resolution() noexcept;
 };
 
+namespace detail
+{
+
+template<typename ToDuration, typename Rep, typename Period>
+inline ToDuration ceil_duration(std::chrono::duration<Rep, Period> value) noexcept
+{
+    const ToDuration casted = std::chrono::duration_cast<ToDuration>(value);
+    if (casted < value)
+    {
+        return casted + ToDuration{1};
+    }
+    return casted;
+}
+
+template<typename TimePoint>
+inline TimePoint saturating_add(TimePoint base, typename TimePoint::duration delta) noexcept
+{
+    const auto max_delta = TimePoint::max() - base;
+    return (delta >= max_delta) ? TimePoint::max() : (base + delta);
+}
+
+}  // namespace detail
+
+/// @brief Absolute deadline helper for polling loops and cooperative work slices.
+/// @details Stores an absolute expiry on a steady clock and exposes wrap-safe
+///          expiry and remaining-time queries. The default public alias is
+///          @c osal::monotonic_deadline; @c high_resolution_deadline uses
+///          @c high_resolution_clock and inherits its support/fallback semantics.
+template<typename Clock>
+class basic_deadline
+{
+    static_assert(Clock::is_steady, "osal::basic_deadline requires a steady clock");
+
+public:
+    using clock      = Clock;
+    using duration   = typename clock::duration;
+    using time_point = typename clock::time_point;
+
+    constexpr basic_deadline() noexcept = default;
+
+    /// @brief Creates a deadline relative to @c clock::now().
+    /// @details Positive durations are rounded up to the clock resolution so a
+    ///          non-zero timeout never expires early due to truncation.
+    template<typename Rep, typename Period>
+    static basic_deadline after(std::chrono::duration<Rep, Period> timeout) noexcept
+    {
+        const time_point now = clock::now();
+        if (timeout <= timeout.zero())
+        {
+            return at(now);
+        }
+        return at(detail::saturating_add(now, detail::ceil_duration<duration>(timeout)));
+    }
+
+    /// @brief Creates a deadline that expires at an absolute time point.
+    static constexpr basic_deadline at(time_point when) noexcept { return basic_deadline{when}; }
+
+    /// @brief Returns true when the deadline has expired.
+    bool expired() const noexcept { return expired(clock::now()); }
+
+    /// @brief Returns true when the provided time point reaches or exceeds the deadline.
+    constexpr bool expired(time_point now) const noexcept { return now >= expiry_; }
+
+    /// @brief Returns the remaining time until expiry, saturating at zero.
+    duration remaining() const noexcept { return remaining(clock::now()); }
+
+    /// @brief Returns the remaining time from a supplied time point.
+    constexpr duration remaining(time_point now) const noexcept
+    {
+        return expired(now) ? duration::zero() : (expiry_ - now);
+    }
+
+    /// @brief Returns the absolute expiry time.
+    constexpr time_point expires_at() const noexcept { return expiry_; }
+
+    /// @brief Restarts the deadline relative to @c clock::now().
+    template<typename Rep, typename Period>
+    void restart(std::chrono::duration<Rep, Period> timeout) noexcept
+    {
+        expiry_ = after(timeout).expiry_;
+    }
+
+private:
+    explicit constexpr basic_deadline(time_point when) noexcept : expiry_{when} {}
+
+    time_point expiry_{time_point::min()};
+};
+
+/// @brief Explicit steady deadline alias bound to @c monotonic_clock.
+using monotonic_deadline = basic_deadline<monotonic_clock>;
+
+/// @brief Deadline alias bound to the draft high-resolution clock.
+using high_resolution_deadline = basic_deadline<high_resolution_clock>;
+
 // ---------------------------------------------------------------------------
 // monotonic_clock::now() implementation
 // ---------------------------------------------------------------------------
