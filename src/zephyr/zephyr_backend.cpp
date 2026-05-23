@@ -321,19 +321,25 @@ extern "C"
     /// @brief Returns the current Zephyr hardware-cycle clock in nanoseconds.
     std::int64_t osal_clock_high_resolution_ns() noexcept
     {
+#if defined(CONFIG_TIMER_HAS_64BIT_CYCLE_COUNTER) && (CONFIG_TIMER_HAS_64BIT_CYCLE_COUNTER == 1)
         const std::int64_t ns = zephyr_cycles_to_nanoseconds(k_cycle_get_64());
         if (ns > 0)
         {
             return ns;
         }
+#endif
         return osal_clock_monotonic_ms() * 1'000'000LL;
     }
 
     /// @brief Returns the nominal Zephyr hardware-cycle resolution in nanoseconds.
     std::int64_t osal_clock_high_resolution_resolution_ns() noexcept
     {
+#if defined(CONFIG_TIMER_HAS_64BIT_CYCLE_COUNTER) && (CONFIG_TIMER_HAS_64BIT_CYCLE_COUNTER == 1)
         const std::int64_t resolution_ns = zephyr_cycle_resolution_ns();
         return (resolution_ns > 0) ? resolution_ns : 1'000'000LL;
+#else
+        return static_cast<std::int64_t>(osal_clock_tick_period_us()) * 1'000LL;
+#endif
     }
 
     // ---------------------------------------------------------------------------

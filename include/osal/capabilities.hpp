@@ -356,7 +356,11 @@ struct thread_priority_query_capability<backend_freertos>
 template<>
 struct high_resolution_clock_capability<backend_zephyr>
 {
+#if defined(CONFIG_TIMER_HAS_64BIT_CYCLE_COUNTER) && (CONFIG_TIMER_HAS_64BIT_CYCLE_COUNTER == 1)
     static constexpr bool value = true;
+#else
+    static constexpr bool value = false;
+#endif
 };
 
 template<>

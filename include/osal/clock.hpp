@@ -119,7 +119,7 @@ inline high_resolution_clock::duration high_resolution_clock::resolution() noexc
     {
         return duration{osal_clock_high_resolution_resolution_ns()};
     }
-    return std::chrono::duration_cast<high_resolution_clock::duration>(monotonic_clock::duration{1});
+    return std::chrono::duration_cast<high_resolution_clock::duration>(microseconds{osal_clock_tick_period_us()});
 }
 
 // ---------------------------------------------------------------------------
