@@ -8,6 +8,20 @@
 
 // Stack for the work queue's internal worker thread.
 alignas(16) static std::uint8_t wq_stack[65536];
+alignas(16) static std::uint8_t wq_flush_stack1[65536];
+alignas(16) static std::uint8_t wq_flush_stack2[65536];
+
+static osal::thread_config make_wq_cfg(void (*entry)(void*), void* arg, void* stack, std::size_t stack_sz,
+                                       const char* name)
+{
+    osal::thread_config cfg{};
+    cfg.entry       = entry;
+    cfg.arg         = arg;
+    cfg.stack       = stack;
+    cfg.stack_bytes = stack_sz;
+    cfg.name        = name;
+    return cfg;
+}
 
 // ---------------------------------------------------------------------------
 // Construction
@@ -17,6 +31,12 @@ TEST_CASE("work_queue: construction succeeds")
 {
     osal::work_queue wq{wq_stack, sizeof(wq_stack), 8, "test_wq"};
     CHECK(wq.valid());
+}
+
+TEST_CASE("work_queue: zero-depth construction fails")
+{
+    osal::work_queue wq{wq_stack, sizeof(wq_stack), 0, "test_wq"};
+    CHECK_FALSE(wq.valid());
 }
 
 // ---------------------------------------------------------------------------
@@ -71,6 +91,95 @@ TEST_CASE("work_queue: submit multiple items in order")
     CHECK(order[1] == 2);
     CHECK(order[2] == 3);
     CHECK(order[3] == 4);
+}
+
+TEST_CASE("work_queue: concurrent flush callers wait for their own frontiers")
+{
+    osal::work_queue wq{wq_stack, sizeof(wq_stack), 8, "test_wq"};
+    REQUIRE(wq.valid());
+
+    static osal::semaphore gate{osal::semaphore_type::binary, 0U};
+    REQUIRE(gate.valid());
+    while (gate.try_take())
+    {
+    }
+
+    static osal::work_queue* active_wq = nullptr;
+    active_wq                          = &wq;
+
+    static std::atomic<int>  flush1_code{-1};
+    static std::atomic<int>  flush2_code{-1};
+    static std::atomic<bool> post_flush1_task_ran{false};
+    static std::atomic<bool> flush2_saw_post_flush1_task{false};
+
+    flush1_code.store(-1);
+    flush2_code.store(-1);
+    post_flush1_task_ran.store(false);
+    flush2_saw_post_flush1_task.store(false);
+
+    auto blocker          = [](void*) { gate.take_for(osal::milliseconds{2000}); };
+    auto post_flush1_task = [](void*) { post_flush1_task_ran.store(true); };
+    auto flush1_fn        = [](void*)
+    { flush1_code.store(static_cast<int>(active_wq->flush(osal::milliseconds{2000}).code())); };
+    auto flush2_fn = [](void*)
+    {
+        const auto r = active_wq->flush(osal::milliseconds{2000});
+        flush2_saw_post_flush1_task.store(post_flush1_task_ran.load());
+        flush2_code.store(static_cast<int>(r.code()));
+    };
+
+    const auto wait_until_pending = [&](std::size_t expected) -> bool
+    {
+        for (int i = 0; i < 200; ++i)
+        {
+            if (wq.pending() >= expected)
+            {
+                return true;
+            }
+            osal::thread::sleep_for(osal::milliseconds{1});
+        }
+        return false;
+    };
+
+    REQUIRE(wq.submit(blocker).ok());
+    osal::thread::sleep_for(osal::milliseconds{20});
+
+    osal::thread flush1_thread;
+    REQUIRE(flush1_thread.create(make_wq_cfg(flush1_fn, nullptr, wq_flush_stack1, sizeof(wq_flush_stack1), "wq_flush1"))
+                .ok());
+
+    if (!wait_until_pending(1U))
+    {
+        gate.give();
+        REQUIRE(flush1_thread.join().ok());
+        FAIL_CHECK("flush1 sentinel was not enqueued");
+        return;
+    }
+
+    REQUIRE(wq.submit(post_flush1_task).ok());
+
+    osal::thread flush2_thread;
+    REQUIRE(flush2_thread.create(make_wq_cfg(flush2_fn, nullptr, wq_flush_stack2, sizeof(wq_flush_stack2), "wq_flush2"))
+                .ok());
+
+    if (!wait_until_pending(3U))
+    {
+        gate.give();
+        REQUIRE(flush1_thread.join().ok());
+        REQUIRE(flush2_thread.join().ok());
+        FAIL_CHECK("concurrent flush sentinels were not both enqueued");
+        return;
+    }
+
+    gate.give();
+
+    REQUIRE(flush1_thread.join().ok());
+    REQUIRE(flush2_thread.join().ok());
+
+    CHECK(flush1_code.load() == static_cast<int>(osal::error_code::ok));
+    CHECK(flush2_code.load() == static_cast<int>(osal::error_code::ok));
+    CHECK(post_flush1_task_ran.load());
+    CHECK(flush2_saw_post_flush1_task.load());
 }
 
 // ---------------------------------------------------------------------------

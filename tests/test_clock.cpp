@@ -53,3 +53,28 @@ TEST_CASE("system_clock::now returns a value")
     (void)t;
     CHECK(true);
 }
+
+TEST_CASE("high_resolution_clock reflects backend support")
+{
+    static_assert(osal::high_resolution_clock::is_supported ==
+                  osal::supports_requirement<osal::support_requirement::high_resolution_clock>);
+
+    const auto before = osal::high_resolution_clock::now();
+    osal::thread::sleep_for(osal::milliseconds{5});
+    const auto after = osal::high_resolution_clock::now();
+    CHECK(after >= before);
+
+    const auto resolution = osal::high_resolution_clock::resolution();
+    CHECK(resolution.count() > 0);
+
+    const auto tick_resolution =
+        std::chrono::duration_cast<osal::nanoseconds>(osal::microseconds{osal_clock_tick_period_us()});
+    if constexpr (osal::high_resolution_clock::is_supported)
+    {
+        CHECK(resolution <= tick_resolution);
+    }
+    else
+    {
+        CHECK(resolution == tick_resolution);
+    }
+}

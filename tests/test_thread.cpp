@@ -11,6 +11,14 @@ static_assert(osal::thread::supports_affinity == osal::active_capabilities::has_
 static_assert(osal::thread::supports_dynamic_priority == osal::active_capabilities::has_dynamic_thread_priority);
 static_assert(osal::thread::supports_task_notification == osal::active_capabilities::has_task_notification);
 static_assert(osal::thread::supports_suspend_resume == osal::active_capabilities::has_thread_suspend_resume);
+static_assert(osal::thread::supports_stack_watermark ==
+              osal::supports_requirement<osal::support_requirement::thread_stack_watermark>);
+static_assert(osal::thread::supports_execution_time ==
+              osal::supports_requirement<osal::support_requirement::thread_execution_time>);
+static_assert(osal::thread::supports_cpu_load_stats ==
+              osal::supports_requirement<osal::support_requirement::thread_cpu_load_stats>);
+static_assert(osal::thread::supports_current_cpu ==
+              osal::supports_requirement<osal::support_requirement::current_cpu_query>);
 
 TEST_CASE("thread: default construction is not valid")
 {
@@ -242,6 +250,190 @@ TEST_CASE("this_thread: sleep_until wakes at/after deadline")
     const auto deadline = osal::monotonic_clock::now() + osal::milliseconds{20};
     osal::this_thread::sleep_until(deadline);
     CHECK(osal::monotonic_clock::now() >= deadline);
+}
+
+TEST_CASE("thread: id mirrors the running thread when supported")
+{
+    if constexpr (!osal::thread_identity_query_capability<osal::active_backend>::value)
+    {
+        CHECK(osal::this_thread::get_id() == osal::INVALID_THREAD_ID);
+        return;
+    }
+
+    CHECK(osal::this_thread::get_id() != osal::INVALID_THREAD_ID);
+
+    osal::semaphore ready{osal::semaphore_type::binary, 0U};
+    osal::semaphore release{osal::semaphore_type::binary, 0U};
+    REQUIRE(ready.valid());
+    REQUIRE(release.valid());
+
+    struct ctx_t
+    {
+        osal::semaphore*   ready;
+        osal::semaphore*   release;
+        osal::thread_id_t* worker_id;
+    };
+
+    osal::thread_id_t worker_id = osal::INVALID_THREAD_ID;
+    ctx_t             ctx{&ready, &release, &worker_id};
+
+    auto entry = [](void* arg)
+    {
+        auto* c       = static_cast<ctx_t*>(arg);
+        *c->worker_id = osal::this_thread::get_id();
+        c->ready->give();
+        (void)c->release->take_for(osal::milliseconds{2000});
+    };
+
+    alignas(16) static std::uint8_t stack[65536];
+    osal::thread                    t;
+    osal::thread_config             cfg{};
+    cfg.entry       = entry;
+    cfg.arg         = &ctx;
+    cfg.stack       = stack;
+    cfg.stack_bytes = sizeof(stack);
+    cfg.name        = "thread_id";
+    REQUIRE(t.create(cfg).ok());
+    REQUIRE(ready.take_for(osal::milliseconds{2000}));
+
+    CHECK(t.id() != osal::INVALID_THREAD_ID);
+    CHECK(t.id() == worker_id);
+
+    release.give();
+    REQUIRE(t.join().ok());
+    CHECK(t.id() == osal::INVALID_THREAD_ID);
+}
+
+TEST_CASE("thread: priority query follows backend support")
+{
+    osal::priority_t priority = osal::PRIORITY_LOWEST;
+
+    if constexpr (!osal::thread_priority_query_capability<osal::active_backend>::value)
+    {
+        CHECK(osal::this_thread::get_priority(priority) == osal::error_code::not_supported);
+        return;
+    }
+
+    REQUIRE(osal::this_thread::get_priority(priority).ok());
+    CHECK(priority >= osal::PRIORITY_LOWEST);
+    CHECK(priority <= osal::PRIORITY_HIGHEST);
+}
+
+TEST_CASE("thread: affinity query follows backend support")
+{
+    osal::affinity_t affinity = osal::AFFINITY_ANY;
+
+    if constexpr (!osal::thread_affinity_query_capability<osal::active_backend>::value)
+    {
+        CHECK(osal::this_thread::get_affinity(affinity) == osal::error_code::not_supported);
+        return;
+    }
+
+    CHECK(osal::this_thread::get_affinity(affinity).ok());
+}
+
+TEST_CASE("thread: current cpu follows capability")
+{
+    std::uint32_t cpu = 0U;
+
+    if constexpr (osal::thread::supports_current_cpu)
+    {
+        CHECK(osal::this_thread::get_cpu(cpu).ok());
+    }
+    else
+    {
+        CHECK(osal::this_thread::get_cpu(cpu) == osal::error_code::not_supported);
+    }
+}
+
+TEST_CASE("thread: stack watermark follows capability")
+{
+    std::size_t unused = 0U;
+
+    if constexpr (osal::thread::supports_stack_watermark)
+    {
+        CHECK(osal::this_thread::stack_low_watermark_bytes(unused).ok());
+        CHECK(unused > 0U);
+    }
+    else
+    {
+        CHECK(osal::this_thread::stack_low_watermark_bytes(unused) == osal::error_code::not_supported);
+    }
+}
+
+TEST_CASE("thread: current execution_time follows capability")
+{
+    osal::microseconds before{0};
+
+    if constexpr (!osal::thread::supports_execution_time)
+    {
+        CHECK(osal::this_thread::execution_time(before) == osal::error_code::not_supported);
+        return;
+    }
+
+    REQUIRE(osal::this_thread::execution_time(before).ok());
+
+    volatile std::uint64_t sink = 0U;
+    for (std::uint64_t i = 0U; i < 4'000'000U; ++i)
+    {
+        sink += i;
+    }
+    CHECK(sink > 0U);
+
+    osal::microseconds after{0};
+    REQUIRE(osal::this_thread::execution_time(after).ok());
+    CHECK(after >= before);
+}
+
+TEST_CASE("thread: target execution_time follows capability")
+{
+    if constexpr (!osal::thread::supports_execution_time)
+    {
+        osal::thread       t;
+        osal::microseconds exec{0};
+        CHECK(t.execution_time(exec) == osal::error_code::not_supported);
+        return;
+    }
+
+    osal::semaphore ready{osal::semaphore_type::binary, 0U};
+    REQUIRE(ready.valid());
+
+    static std::atomic<bool> keep_running{true};
+    keep_running.store(true);
+
+    struct ctx_t
+    {
+        osal::semaphore*   ready;
+        std::atomic<bool>* keep_running;
+    } ctx{&ready, &keep_running};
+
+    auto entry = [](void* arg)
+    {
+        auto* c = static_cast<ctx_t*>(arg);
+        c->ready->give();
+        while (c->keep_running->load())
+        {
+            osal::thread::yield();
+        }
+    };
+
+    alignas(16) static std::uint8_t stack[65536];
+    osal::thread                    t;
+    osal::thread_config             cfg{};
+    cfg.entry       = entry;
+    cfg.arg         = &ctx;
+    cfg.stack       = stack;
+    cfg.stack_bytes = sizeof(stack);
+    cfg.name        = "exec_time";
+    REQUIRE(t.create(cfg).ok());
+    REQUIRE(ready.take_for(osal::milliseconds{2000}));
+
+    osal::microseconds exec{0};
+    CHECK(t.execution_time(exec).ok());
+    CHECK(exec.count() >= 0);
+
+    keep_running.store(false);
+    REQUIRE(t.join().ok());
 }
 
 TEST_CASE("thread_local_data: set/get in current thread")

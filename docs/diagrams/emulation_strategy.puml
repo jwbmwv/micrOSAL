@@ -340,7 +340,7 @@ package "Event Flags (osal::event_flags)" as ef_pkg #FFF3E0 {
           • OSAL mutex guards bits + waiter array
           • Each waiter gets a binary semaphore slot
           • set() : OR bits, give all waiter semas
-          • set_isr() : volatile OR + give_isr
+                    • set_isr() : atomic OR + give_isr on ISR-capable backends
           • wait : claim slot → sem_take → re-check
           • Static pool, zero heap allocation
         end note

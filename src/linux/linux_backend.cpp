@@ -46,6 +46,7 @@
 #include <cstdint>
 #include <atomic>
 #include <new>
+#include <algorithm>
 
 // ---------------------------------------------------------------------------
 // Internal helpers
@@ -62,6 +63,70 @@ template<typename Handle>
 
 constexpr int          kLinuxMaxAffinityCpus      = 64;
 constexpr std::int64_t kNanosecondsPerMillisecond = 1'000'000LL;
+constexpr std::int64_t kNanosecondsPerSecond      = 1'000'000'000LL;
+
+[[nodiscard]] std::int64_t timespec_to_nanoseconds(const timespec& ts) noexcept
+{
+    return (static_cast<std::int64_t>(ts.tv_sec) * kNanosecondsPerSecond) + static_cast<std::int64_t>(ts.tv_nsec);
+}
+
+template<typename NativeThreadId>
+[[nodiscard]] osal::thread_id_t native_thread_id_token(const NativeThreadId& native_id) noexcept
+{
+    constexpr std::uint64_t kFnvOffset = 1469598103934665603ULL;
+    constexpr std::uint64_t kFnvPrime  = 1099511628211ULL;
+
+    std::uint64_t              hash  = kFnvOffset;
+    const unsigned char* const bytes = reinterpret_cast<const unsigned char*>(&native_id);
+    for (std::size_t i = 0; i < sizeof(native_id); ++i)
+    {
+        hash ^= static_cast<std::uint64_t>(bytes[i]);
+        hash *= kFnvPrime;
+    }
+
+    if constexpr (sizeof(osal::thread_id_t) >= sizeof(hash))
+    {
+        return static_cast<osal::thread_id_t>(hash);
+    }
+    else
+    {
+        return static_cast<osal::thread_id_t>(hash ^ (hash >> 32U));
+    }
+}
+
+[[nodiscard]] osal::priority_t native_priority_to_osal(int policy, int native_priority) noexcept
+{
+    const int max_p = sched_get_priority_max(policy);
+    const int min_p = sched_get_priority_min(policy);
+    if (max_p <= min_p)
+    {
+        return osal::PRIORITY_NORMAL;
+    }
+
+    const int clamped_priority = std::clamp(native_priority, min_p, max_p);
+    return static_cast<osal::priority_t>(((clamped_priority - min_p) * osal::PRIORITY_HIGHEST) / (max_p - min_p));
+}
+
+[[nodiscard]] osal::affinity_t cpu_set_to_affinity_mask(const cpu_set_t& cpuset) noexcept
+{
+    constexpr int kRepresentableAffinityCpus = 32;
+
+    osal::affinity_t affinity = 0U;
+    bool             all_set  = true;
+    for (int cpu = 0; cpu < kRepresentableAffinityCpus; ++cpu)
+    {
+        if (CPU_ISSET(cpu, &cpuset))
+        {
+            affinity |= (1U << static_cast<unsigned>(cpu));
+        }
+        else
+        {
+            all_set = false;
+        }
+    }
+
+    return all_set ? osal::AFFINITY_ANY : affinity;
+}
 
 /// @brief Compute an absolute timespec on CLOCK_MONOTONIC, offset by @p t ticks
 ///        (1 tick = 1 ms on the Linux backend).
@@ -199,6 +264,29 @@ extern "C"
         return 1'000U;
     }
 
+    /// @brief Return the current CLOCK_MONOTONIC time in nanoseconds.
+    std::int64_t osal_clock_high_resolution_ns() noexcept
+    {
+        timespec ts{};
+        if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0)
+        {
+            return osal_clock_monotonic_ms() * kNanosecondsPerMillisecond;
+        }
+        return timespec_to_nanoseconds(ts);
+    }
+
+    /// @brief Return the nominal CLOCK_MONOTONIC resolution in nanoseconds.
+    std::int64_t osal_clock_high_resolution_resolution_ns() noexcept
+    {
+        timespec ts{};
+        if (clock_getres(CLOCK_MONOTONIC, &ts) != 0)
+        {
+            return kNanosecondsPerMillisecond;
+        }
+        const std::int64_t resolution_ns = timespec_to_nanoseconds(ts);
+        return (resolution_ns > 0) ? resolution_ns : 1LL;
+    }
+
     // ---------------------------------------------------------------------------
     // Thread (identical to POSIX, plus affinity via sched_setaffinity)
     // ---------------------------------------------------------------------------
@@ -242,10 +330,8 @@ extern "C"
 
         if (priority != osal::PRIORITY_NORMAL)
         {
-            const int policy = SCHED_FIFO;
-            struct sched_param sp
-            {
-            };
+            const int          policy = SCHED_FIFO;
+            struct sched_param sp{};
             sp.sched_priority = sched_get_priority_min(policy) +
                                 static_cast<int>((static_cast<std::uint32_t>(priority) *
                                                   static_cast<std::uint32_t>(sched_get_priority_max(policy) -
@@ -336,6 +422,155 @@ extern "C"
         return osal::ok();
     }
 
+    /// @brief Return a comparable opaque identifier for a thread.
+    osal::result osal_thread_get_id(const osal::active_traits::thread_handle_t* handle,
+                                    osal::thread_id_t*                          out_id) noexcept
+    {
+        if (out_id == nullptr)
+        {
+            return osal::error_code::invalid_argument;
+        }
+
+        pthread_t thread_id = pthread_self();
+        if (handle != nullptr)
+        {
+            if (handle->native == nullptr)
+            {
+                return osal::error_code::not_initialized;
+            }
+            thread_id = *static_cast<const pthread_t*>(handle->native);
+        }
+
+        *out_id = native_thread_id_token(thread_id);
+        return osal::ok();
+    }
+
+    /// @brief Query the current scheduler priority of a thread.
+    osal::result osal_thread_get_priority(const osal::active_traits::thread_handle_t* handle,
+                                          osal::priority_t*                           out_priority) noexcept
+    {
+        if (out_priority == nullptr)
+        {
+            return osal::error_code::invalid_argument;
+        }
+
+        pthread_t thread_id = pthread_self();
+        if (handle != nullptr)
+        {
+            if (handle->native == nullptr)
+            {
+                return osal::error_code::not_initialized;
+            }
+            thread_id = *static_cast<const pthread_t*>(handle->native);
+        }
+
+        struct sched_param sp{};
+        int                policy = 0;
+        if (pthread_getschedparam(thread_id, &policy, &sp) != 0)
+        {
+            return osal::error_code::unknown;
+        }
+
+        *out_priority = native_priority_to_osal(policy, sp.sched_priority);
+        return osal::ok();
+    }
+
+    /// @brief Query the current CPU-affinity mask of a thread.
+    osal::result osal_thread_get_affinity(const osal::active_traits::thread_handle_t* handle,
+                                          osal::affinity_t*                           out_affinity) noexcept
+    {
+        if (out_affinity == nullptr)
+        {
+            return osal::error_code::invalid_argument;
+        }
+
+        pthread_t thread_id = pthread_self();
+        if (handle != nullptr)
+        {
+            if (handle->native == nullptr)
+            {
+                return osal::error_code::not_initialized;
+            }
+            thread_id = *static_cast<const pthread_t*>(handle->native);
+        }
+
+        cpu_set_t cpuset{};
+        if (pthread_getaffinity_np(thread_id, sizeof(cpuset), &cpuset) != 0)
+        {
+            return osal::error_code::unknown;
+        }
+
+        *out_affinity = cpu_set_to_affinity_mask(cpuset);
+        return osal::ok();
+    }
+
+    /// @brief Query the current CPU/core index of the caller.
+    osal::result osal_thread_current_cpu(std::uint32_t* out_cpu) noexcept
+    {
+        if (out_cpu == nullptr)
+        {
+            return osal::error_code::invalid_argument;
+        }
+
+        const int cpu = sched_getcpu();
+        if (cpu < 0)
+        {
+            return osal::error_code::unknown;
+        }
+
+        *out_cpu = static_cast<std::uint32_t>(cpu);
+        return osal::ok();
+    }
+
+    /// @brief Draft thread stack-watermark query for Linux.
+    /// @details Linux pthreads do not expose a portable low-watermark metric,
+    ///          so the draft API remains unsupported on this backend.
+    osal::result osal_thread_stack_low_watermark_bytes(const osal::active_traits::thread_handle_t* /*handle*/,
+                                                       std::size_t* out_bytes) noexcept
+    {
+        if (out_bytes != nullptr)
+        {
+            *out_bytes = 0U;
+        }
+        return osal::error_code::not_supported;
+    }
+
+    /// @brief Returns the accumulated CPU time for a thread in microseconds.
+    /// @details Uses @c CLOCK_THREAD_CPUTIME_ID for the current thread and
+    ///          @c pthread_getcpuclockid() for an arbitrary joinable thread.
+    osal::result osal_thread_execution_time_us(const osal::active_traits::thread_handle_t* handle,
+                                               std::int64_t*                               out_us) noexcept
+    {
+        if (out_us == nullptr)
+        {
+            return osal::error_code::invalid_argument;
+        }
+
+        clockid_t clock_id = CLOCK_THREAD_CPUTIME_ID;
+        if (handle != nullptr)
+        {
+            if (handle->native == nullptr)
+            {
+                return osal::error_code::not_initialized;
+            }
+            auto* const thread_id = static_cast<const pthread_t*>(handle->native);
+            if (pthread_getcpuclockid(*thread_id, &clock_id) != 0)
+            {
+                return osal::error_code::unknown;
+            }
+        }
+
+        timespec ts{};
+        if (clock_gettime(clock_id, &ts) != 0)
+        {
+            return osal::error_code::unknown;
+        }
+
+        *out_us =
+            (static_cast<std::int64_t>(ts.tv_sec) * 1'000'000LL) + (static_cast<std::int64_t>(ts.tv_nsec) / 1'000LL);
+        return osal::ok();
+    }
+
     /// @brief Change the thread's scheduler priority using its current policy.
     /// @param handle   Thread handle.
     /// @param priority New OSAL priority mapped to the policy's range.
@@ -347,11 +582,9 @@ extern "C"
         {
             return osal::error_code::not_initialized;
         }
-        auto* const thread_id = static_cast<pthread_t*>(handle->native);
-        struct sched_param sp
-        {
-        };
-        int policy{0};
+        auto* const        thread_id = static_cast<pthread_t*>(handle->native);
+        struct sched_param sp{};
+        int                policy{0};
         pthread_getschedparam(*thread_id, &policy, &sp);
         sp.sched_priority = sched_get_priority_min(policy) +
                             static_cast<int>((static_cast<std::uint32_t>(priority) *
@@ -411,10 +644,10 @@ extern "C"
     /// @param ms Delay in milliseconds.
     void osal_thread_sleep_ms(std::uint32_t ms) noexcept
     {
-        const auto nanoseconds = static_cast<std::int64_t>(ms % 1000U) * kNanosecondsPerMillisecond;
-        const struct timespec ts
-        {
-            static_cast<time_t>(ms / 1000U), static_cast<decltype(timespec{}.tv_nsec)>(nanoseconds),
+        const auto            nanoseconds = static_cast<std::int64_t>(ms % 1000U) * kNanosecondsPerMillisecond;
+        const struct timespec ts{
+            static_cast<time_t>(ms / 1000U),
+            static_cast<decltype(timespec{}.tv_nsec)>(nanoseconds),
         };
         nanosleep(&ts, nullptr);
     }
@@ -901,10 +1134,8 @@ extern "C"
         {
             return osal::error_code::not_initialized;
         }
-        auto* const ctx = static_cast<linux_timer_ctx*>(handle->native);
-        struct itimerspec dis
-        {
-        };
+        auto* const       ctx = static_cast<linux_timer_ctx*>(handle->native);
+        struct itimerspec dis{};
         timerfd_settime(ctx->timerfd, 0, &dis, nullptr);
         return osal::ok();
     }
@@ -972,10 +1203,8 @@ extern "C"
         {
             return false;
         }
-        const auto* ctx = static_cast<const linux_timer_ctx*>(handle->native);
-        struct itimerspec cur
-        {
-        };
+        const auto*       ctx = static_cast<const linux_timer_ctx*>(handle->native);
+        struct itimerspec cur{};
         timerfd_gettime(ctx->timerfd, &cur);
         return (cur.it_value.tv_sec != 0 || cur.it_value.tv_nsec != 0);
     }
@@ -1037,10 +1266,8 @@ extern "C"
         {
             return osal::error_code::not_initialized;
         }
-        auto* ws = static_cast<linux_wait_set_obj*>(handle->native);
-        struct epoll_event ev
-        {
-        };
+        auto*              ws = static_cast<linux_wait_set_obj*>(handle->native);
+        struct epoll_event ev{};
         ev.events  = events;
         ev.data.fd = fd;
         return (epoll_ctl(ws->epfd, EPOLL_CTL_ADD, fd, &ev) == 0) ? osal::ok() : osal::error_code::invalid_argument;

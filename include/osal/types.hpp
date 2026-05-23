@@ -141,6 +141,16 @@ using affinity_t = std::uint32_t;
 /// @brief Special affinity value: no affinity constraint (any core).
 inline constexpr affinity_t AFFINITY_ANY = affinity_t{0};
 
+/// @brief Opaque thread identity token used for comparisons and diagnostics.
+using thread_id_t = std::uintptr_t;
+/// @brief Invalid / unavailable thread identity token.
+inline constexpr thread_id_t INVALID_THREAD_ID = thread_id_t{0};
+
+/// @brief Fixed-point CPU-load unit in permille (0..1000).
+using load_permille_t = std::uint16_t;
+/// @brief Maximum valid CPU-load reading expressed in permille.
+inline constexpr load_permille_t LOAD_PERMILLE_MAX = load_permille_t{1000U};
+
 // ---------------------------------------------------------------------------
 // Clock / time-point types
 // ---------------------------------------------------------------------------
@@ -149,6 +159,8 @@ inline constexpr affinity_t AFFINITY_ANY = affinity_t{0};
 using milliseconds = std::chrono::milliseconds;
 /// @brief Monotonic clock resolution — microseconds (where supported).
 using microseconds = std::chrono::microseconds;
+/// @brief Monotonic clock resolution — nanoseconds (where supported).
+using nanoseconds = std::chrono::nanoseconds;
 
 /// @brief Portable monotonic clock used across all OSAL time APIs.
 struct monotonic_clock

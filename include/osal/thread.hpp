@@ -68,6 +68,17 @@ extern "C"
     osal::result osal_task_notify_isr(osal::active_traits::thread_handle_t* handle, std::uint32_t value) noexcept;
     osal::result osal_task_notify_wait(std::uint32_t clear_on_entry, std::uint32_t clear_on_exit,
                                        std::uint32_t* value_out, osal::tick_t timeout_ticks) noexcept;
+    osal::result osal_thread_get_id(const osal::active_traits::thread_handle_t* handle,
+                                    osal::thread_id_t*                          out_id) noexcept;
+    osal::result osal_thread_get_priority(const osal::active_traits::thread_handle_t* handle,
+                                          osal::priority_t*                           out_priority) noexcept;
+    osal::result osal_thread_get_affinity(const osal::active_traits::thread_handle_t* handle,
+                                          osal::affinity_t*                           out_affinity) noexcept;
+    osal::result osal_thread_current_cpu(std::uint32_t* out_cpu) noexcept;
+    osal::result osal_thread_stack_low_watermark_bytes(const osal::active_traits::thread_handle_t* handle,
+                                                       std::size_t*                                out_bytes) noexcept;
+    osal::result osal_thread_execution_time_us(const osal::active_traits::thread_handle_t* handle,
+                                               std::int64_t*                               out_us) noexcept;
 
 }  // extern "C"
 
@@ -124,6 +135,14 @@ public:
     static constexpr bool supports_task_notification = supports_requirement<support_requirement::task_notification>;
     /// @brief True when the active backend supports suspend/resume.
     static constexpr bool supports_suspend_resume = supports_requirement<support_requirement::thread_suspend_resume>;
+    /// @brief True when the active backend reports per-thread stack watermark information.
+    static constexpr bool supports_stack_watermark = supports_requirement<support_requirement::thread_stack_watermark>;
+    /// @brief True when the active backend reports per-thread execution time.
+    static constexpr bool supports_execution_time = supports_requirement<support_requirement::thread_execution_time>;
+    /// @brief True when the active backend reports per-thread CPU-load statistics.
+    static constexpr bool supports_cpu_load_stats = supports_requirement<support_requirement::thread_cpu_load_stats>;
+    /// @brief True when the active backend reports the current running CPU/core.
+    static constexpr bool supports_current_cpu = supports_requirement<support_requirement::current_cpu_query>;
 
     /// @brief Enforce timed-join support at compile time.
     template<typename Backend = active_backend>
@@ -158,6 +177,34 @@ public:
     static consteval void require_suspend_resume_support()
     {
         require_backend_support<support_requirement::thread_suspend_resume, Backend>();
+    }
+
+    /// @brief Enforce stack-watermark query support at compile time.
+    template<typename Backend = active_backend>
+    static consteval void require_stack_watermark_support()
+    {
+        require_backend_support<support_requirement::thread_stack_watermark, Backend>();
+    }
+
+    /// @brief Enforce execution-time query support at compile time.
+    template<typename Backend = active_backend>
+    static consteval void require_execution_time_support()
+    {
+        require_backend_support<support_requirement::thread_execution_time, Backend>();
+    }
+
+    /// @brief Enforce CPU-load query support at compile time.
+    template<typename Backend = active_backend>
+    static consteval void require_cpu_load_stats_support()
+    {
+        require_backend_support<support_requirement::thread_cpu_load_stats, Backend>();
+    }
+
+    /// @brief Enforce current-CPU query support at compile time.
+    template<typename Backend = active_backend>
+    static consteval void require_current_cpu_support()
+    {
+        require_backend_support<support_requirement::current_cpu_query, Backend>();
     }
 
     // ---- construction / destruction ----------------------------------------
@@ -369,10 +416,171 @@ public:
 
     // ---- query -------------------------------------------------------------
 
+    /// @brief Returns an opaque identity token for this thread object.
+    [[nodiscard]] thread_id_t id() const noexcept
+    {
+        if (!valid_)
+        {
+            return INVALID_THREAD_ID;
+        }
+        if constexpr (thread_identity_query_capability<active_backend>::value)
+        {
+            thread_id_t out = INVALID_THREAD_ID;
+            if (osal_thread_get_id(&handle_, &out).ok())
+            {
+                return out;
+            }
+        }
+        return INVALID_THREAD_ID;
+    }
+
+    /// @brief Queries the current priority of this thread.
+    /// @param[out] out  Receives the priority on success.
+    /// @return result::ok() on success; error_code::not_supported in the draft API.
+    [[nodiscard]] result get_priority(priority_t& out) const noexcept
+    {
+        if constexpr (thread_priority_query_capability<active_backend>::value)
+        {
+            return osal_thread_get_priority(&handle_, &out);
+        }
+        out = PRIORITY_NORMAL;
+        return error_code::not_supported;
+    }
+
+    /// @brief Queries the current affinity mask of this thread.
+    /// @param[out] out  Receives the affinity mask on success.
+    /// @return result::ok() on success; error_code::not_supported in the draft API.
+    [[nodiscard]] result get_affinity(affinity_t& out) const noexcept
+    {
+        if constexpr (thread_affinity_query_capability<active_backend>::value)
+        {
+            return osal_thread_get_affinity(&handle_, &out);
+        }
+        out = AFFINITY_ANY;
+        return error_code::not_supported;
+    }
+
+    /// @brief Queries the stack low-watermark for this thread.
+    /// @param[out] out  Receives the minimum free stack observed in bytes.
+    /// @return result::ok() on success; error_code::not_supported in the draft API.
+    [[nodiscard]] result stack_low_watermark_bytes(std::size_t& out) const noexcept
+    {
+        if constexpr (supports_stack_watermark)
+        {
+            return osal_thread_stack_low_watermark_bytes(&handle_, &out);
+        }
+        out = 0U;
+        return error_code::not_supported;
+    }
+
+    /// @brief Queries the accumulated execution time for this thread.
+    /// @param[out] out  Receives the execution time on success.
+    /// @return result::ok() on success; error_code::not_supported in the draft API.
+    [[nodiscard]] result execution_time(microseconds& out) const noexcept
+    {
+        if constexpr (supports_execution_time)
+        {
+            std::int64_t us = 0;
+            const result r  = osal_thread_execution_time_us(&handle_, &us);
+            out             = microseconds{us};
+            return r;
+        }
+        out = microseconds{0};
+        return error_code::not_supported;
+    }
+
+    /// @brief Queries the CPU-load share for this thread.
+    /// @param[out] out  Receives the load in permille on success.
+    /// @return result::ok() on success; error_code::not_supported in the draft API.
+    [[nodiscard]] result cpu_load_permille(load_permille_t& out) const noexcept
+    {
+        out = load_permille_t{0};
+        return error_code::not_supported;
+    }
+
     /// @brief Returns true if the thread was successfully created.
     [[nodiscard]] bool valid() const noexcept { return valid_; }
 
     // ---- static helpers (current thread) -----------------------------------
+
+    /// @brief Returns the opaque identity token for the current thread.
+    [[nodiscard]] static thread_id_t current_id() noexcept
+    {
+        if constexpr (thread_identity_query_capability<active_backend>::value)
+        {
+            thread_id_t out = INVALID_THREAD_ID;
+            if (osal_thread_get_id(nullptr, &out).ok())
+            {
+                return out;
+            }
+        }
+        return INVALID_THREAD_ID;
+    }
+
+    /// @brief Queries the current thread priority.
+    [[nodiscard]] static result current_priority(priority_t& out) noexcept
+    {
+        if constexpr (thread_priority_query_capability<active_backend>::value)
+        {
+            return osal_thread_get_priority(nullptr, &out);
+        }
+        out = PRIORITY_NORMAL;
+        return error_code::not_supported;
+    }
+
+    /// @brief Queries the current thread affinity mask.
+    [[nodiscard]] static result current_affinity(affinity_t& out) noexcept
+    {
+        if constexpr (thread_affinity_query_capability<active_backend>::value)
+        {
+            return osal_thread_get_affinity(nullptr, &out);
+        }
+        out = AFFINITY_ANY;
+        return error_code::not_supported;
+    }
+
+    /// @brief Queries the current CPU/core index for the calling thread.
+    [[nodiscard]] static result current_cpu(std::uint32_t& out) noexcept
+    {
+        if constexpr (supports_current_cpu)
+        {
+            return osal_thread_current_cpu(&out);
+        }
+        out = 0U;
+        return error_code::not_supported;
+    }
+
+    /// @brief Queries the stack low-watermark of the current thread.
+    [[nodiscard]] static result current_stack_low_watermark_bytes(std::size_t& out) noexcept
+    {
+        if constexpr (supports_stack_watermark)
+        {
+            return osal_thread_stack_low_watermark_bytes(nullptr, &out);
+        }
+        out = 0U;
+        return error_code::not_supported;
+    }
+
+    /// @brief Queries the accumulated execution time of the current thread.
+    [[nodiscard]] static result current_execution_time(microseconds& out) noexcept
+    {
+        if constexpr (supports_execution_time)
+        {
+            std::int64_t us = 0;
+            const result r  = osal_thread_execution_time_us(nullptr, &us);
+            out             = microseconds{us};
+            return r;
+        }
+        out = microseconds{0};
+        return error_code::not_supported;
+    }
+
+    /// @brief Queries the CPU-load share of the current thread.
+    [[nodiscard]] static result current_cpu_load_permille(load_permille_t& out) noexcept
+    {
+        out = load_permille_t{0};
+        return error_code::not_supported;
+    }
 
     /// @brief Yields the current thread's time-slice.
     /// @complexity O(1)
@@ -439,6 +647,48 @@ private:
 /// @ingroup osal_thread
 namespace this_thread
 {
+
+/// @brief Returns the opaque identity token of the current thread.
+[[nodiscard]] inline thread_id_t get_id() noexcept
+{
+    return thread::current_id();
+}
+
+/// @brief Queries the priority of the current thread.
+[[nodiscard]] inline result get_priority(priority_t& out) noexcept
+{
+    return thread::current_priority(out);
+}
+
+/// @brief Queries the affinity mask of the current thread.
+[[nodiscard]] inline result get_affinity(affinity_t& out) noexcept
+{
+    return thread::current_affinity(out);
+}
+
+/// @brief Queries the current CPU/core index of the calling thread.
+[[nodiscard]] inline result get_cpu(std::uint32_t& out) noexcept
+{
+    return thread::current_cpu(out);
+}
+
+/// @brief Queries the stack low-watermark of the current thread.
+[[nodiscard]] inline result stack_low_watermark_bytes(std::size_t& out) noexcept
+{
+    return thread::current_stack_low_watermark_bytes(out);
+}
+
+/// @brief Queries the execution time of the current thread.
+[[nodiscard]] inline result execution_time(microseconds& out) noexcept
+{
+    return thread::current_execution_time(out);
+}
+
+/// @brief Queries the CPU-load share of the current thread.
+[[nodiscard]] inline result cpu_load_permille(load_permille_t& out) noexcept
+{
+    return thread::current_cpu_load_permille(out);
+}
 
 /// @brief Yields the current thread's time-slice to the scheduler.
 inline void yield() noexcept

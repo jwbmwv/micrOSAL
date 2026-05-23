@@ -103,7 +103,9 @@ public:
 
     /// @brief Sets bits from ISR context.
     /// @param bits  Bitmask to set.
-    /// @warning Only safe when capabilities<active_backend>::has_isr_event_flags.
+    /// @return `error_code::not_supported` when the active backend lacks ISR-safe
+    ///         event-flag support.
+    /// @warning Only call from an ISR when capabilities<active_backend>::has_isr_event_flags.
     [[nodiscard]] result set_isr(event_bits_t bits) noexcept { return osal_event_flags_set_isr(&handle_, bits); }
 
     /// @brief Clears one or more bits.

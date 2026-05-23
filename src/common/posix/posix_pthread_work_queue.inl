@@ -31,14 +31,15 @@ struct posix_wq_obj
     std::size_t      head;
     std::size_t      tail;
     std::size_t      count;
+    std::size_t      completed_flush_ticket;
+    std::size_t      next_flush_ticket;
 
     pthread_mutex_t mutex;
     pthread_cond_t  not_empty;  ///< signalled when an item is enqueued
     pthread_cond_t  flushed;    ///< signalled when a flush sentinel executes
     pthread_t       worker;
 
-    volatile bool stop;
-    volatile bool flush_done;
+    bool stop;
 };
 
 static void* posix_wq_worker(void* arg) noexcept
@@ -67,10 +68,14 @@ static void* posix_wq_worker(void* arg) noexcept
         }
         else
         {
-            // Sentinel item — signal flush completion.
+            const std::size_t ticket = static_cast<std::size_t>(reinterpret_cast<std::uintptr_t>(item.arg));
+
             pthread_mutex_lock(&wq->mutex);
-            wq->flush_done = true;
-            pthread_cond_signal(&wq->flushed);
+            if (ticket > wq->completed_flush_ticket)
+            {
+                wq->completed_flush_ticket = ticket;
+            }
+            pthread_cond_broadcast(&wq->flushed);
             pthread_mutex_unlock(&wq->mutex);
         }
     }
@@ -95,7 +100,7 @@ static void* posix_wq_worker(void* arg) noexcept
 osal::result osal_work_queue_create(osal::active_traits::work_queue_handle_t* handle, void* /*stack*/,
                                     std::size_t /*stack_bytes*/, std::size_t depth, const char* /*name*/) noexcept
 {
-    if (!handle)
+    if (!handle || depth == 0U)
     {
         return osal::error_code::invalid_argument;
     }
@@ -110,12 +115,13 @@ osal::result osal_work_queue_create(osal::active_traits::work_queue_handle_t* ha
         delete wq;
         return osal::error_code::out_of_resources;
     }
-    wq->capacity   = depth;
-    wq->head       = 0U;
-    wq->tail       = 0U;
-    wq->count      = 0U;
-    wq->stop       = false;
-    wq->flush_done = false;
+    wq->capacity               = depth;
+    wq->head                   = 0U;
+    wq->tail                   = 0U;
+    wq->count                  = 0U;
+    wq->completed_flush_ticket = 0U;
+    wq->next_flush_ticket      = 0U;
+    wq->stop                   = false;
 
     pthread_mutex_init(&wq->mutex, nullptr);
     cond_init_monotonic(&wq->not_empty);
@@ -222,15 +228,15 @@ osal::result osal_work_queue_flush(osal::active_traits::work_queue_handle_t* han
         pthread_mutex_unlock(&wq->mutex);
         return osal::error_code::overflow;
     }
-    wq->flush_done     = false;
-    wq->ring[wq->tail] = osal::work_item{nullptr, nullptr};
-    wq->tail           = (wq->tail + 1U) % wq->capacity;
+    const std::size_t ticket = ++wq->next_flush_ticket;
+    wq->ring[wq->tail]       = osal::work_item{nullptr, reinterpret_cast<void*>(static_cast<std::uintptr_t>(ticket))};
+    wq->tail                 = (wq->tail + 1U) % wq->capacity;
     ++wq->count;
     pthread_cond_signal(&wq->not_empty);
 
     if (timeout == osal::WAIT_FOREVER)
     {
-        while (!wq->flush_done)
+        while (wq->completed_flush_ticket < ticket)
         {
             pthread_cond_wait(&wq->flushed, &wq->mutex);
         }
@@ -238,10 +244,10 @@ osal::result osal_work_queue_flush(osal::active_traits::work_queue_handle_t* han
     else
     {
         const struct timespec ts = OSAL_POSIX_COND_ABS(timeout);
-        while (!wq->flush_done)
+        while (wq->completed_flush_ticket < ticket)
         {
             const int rc = pthread_cond_timedwait(&wq->flushed, &wq->mutex, &ts);
-            if (rc != 0 && !wq->flush_done)
+            if (rc != 0 && wq->completed_flush_ticket < ticket)
             {
                 pthread_mutex_unlock(&wq->mutex);
                 return osal::error_code::timeout;
@@ -279,5 +285,9 @@ std::size_t osal_work_queue_pending(const osal::active_traits::work_queue_handle
     {
         return 0U;
     }
-    return static_cast<const posix_wq_obj*>(handle->native)->count;
+    auto* wq = static_cast<posix_wq_obj*>(handle->native);
+    pthread_mutex_lock(&wq->mutex);
+    const std::size_t pending = wq->count;
+    pthread_mutex_unlock(&wq->mutex);
+    return pending;
 }

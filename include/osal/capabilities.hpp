@@ -165,6 +165,209 @@ template<typename Backend>
 inline constexpr bool has_native_thread_local_data = native_thread_local_data_capability<Backend>::value;
 
 // ---------------------------------------------------------------------------
+// Optional draft APIs — disabled until backends opt in
+// ---------------------------------------------------------------------------
+
+/// @brief Backend reports per-thread stack low-watermark information.
+template<typename Backend>
+struct thread_stack_watermark_capability
+{
+    static constexpr bool value = false;
+};
+
+/// @brief Backend reports accumulated execution time per thread.
+template<typename Backend>
+struct thread_execution_time_capability
+{
+    static constexpr bool value = false;
+};
+
+/// @brief Backend reports per-thread CPU load / runtime-share information.
+template<typename Backend>
+struct thread_cpu_load_stats_capability
+{
+    static constexpr bool value = false;
+};
+
+/// @brief Backend can provide a comparable opaque thread identity token.
+template<typename Backend>
+struct thread_identity_query_capability
+{
+    static constexpr bool value = false;
+};
+
+/// @brief Backend can query a thread's current priority.
+template<typename Backend>
+struct thread_priority_query_capability
+{
+    static constexpr bool value = false;
+};
+
+/// @brief Backend can query a thread's current affinity mask.
+template<typename Backend>
+struct thread_affinity_query_capability
+{
+    static constexpr bool value = false;
+};
+
+/// @brief Backend exposes a dedicated high-resolution clock API path.
+template<typename Backend>
+struct high_resolution_clock_capability
+{
+    static constexpr bool value = false;
+};
+
+/// @brief Backend can report the current CPU/core for the running thread.
+template<typename Backend>
+struct current_cpu_query_capability
+{
+    static constexpr bool value = false;
+};
+
+/// @brief Backend provides an interrupt-mask guard suitable for very short sections.
+template<typename Backend>
+struct irq_mask_guard_capability
+{
+    static constexpr bool value = false;
+};
+
+template<>
+struct thread_stack_watermark_capability<backend_zephyr>
+{
+#if defined(CONFIG_THREAD_STACK_INFO) && (CONFIG_THREAD_STACK_INFO == 1) && defined(CONFIG_INIT_STACKS) && \
+    (CONFIG_INIT_STACKS == 1)
+    static constexpr bool value = true;
+#else
+    static constexpr bool value = false;
+#endif
+};
+
+template<>
+struct thread_identity_query_capability<backend_zephyr>
+{
+    static constexpr bool value = true;
+};
+
+template<>
+struct thread_priority_query_capability<backend_zephyr>
+{
+    static constexpr bool value = true;
+};
+
+template<>
+struct thread_affinity_query_capability<backend_zephyr>
+{
+#if defined(CONFIG_SCHED_CPU_MASK)
+    static constexpr bool value = true;
+#else
+    static constexpr bool value = false;
+#endif
+};
+
+template<>
+struct current_cpu_query_capability<backend_zephyr>
+{
+    static constexpr bool value = true;
+};
+
+template<>
+struct thread_execution_time_capability<backend_posix>
+{
+    static constexpr bool value = true;
+};
+
+template<>
+struct thread_identity_query_capability<backend_posix>
+{
+    static constexpr bool value = true;
+};
+
+template<>
+struct thread_priority_query_capability<backend_posix>
+{
+    static constexpr bool value = true;
+};
+
+template<>
+struct thread_execution_time_capability<backend_linux>
+{
+    static constexpr bool value = true;
+};
+
+template<>
+struct thread_identity_query_capability<backend_linux>
+{
+    static constexpr bool value = true;
+};
+
+template<>
+struct thread_priority_query_capability<backend_linux>
+{
+    static constexpr bool value = true;
+};
+
+template<>
+struct thread_affinity_query_capability<backend_linux>
+{
+    static constexpr bool value = true;
+};
+
+template<>
+struct current_cpu_query_capability<backend_linux>
+{
+    static constexpr bool value = true;
+};
+
+template<>
+struct thread_stack_watermark_capability<backend_freertos>
+{
+#if (defined(INCLUDE_uxTaskGetStackHighWaterMark2) && (INCLUDE_uxTaskGetStackHighWaterMark2 == 1)) || \
+    (defined(INCLUDE_uxTaskGetStackHighWaterMark) && (INCLUDE_uxTaskGetStackHighWaterMark == 1))
+    static constexpr bool value = true;
+#else
+    static constexpr bool value = false;
+#endif
+};
+
+template<>
+struct thread_identity_query_capability<backend_freertos>
+{
+#if defined(INCLUDE_xTaskGetCurrentTaskHandle) && (INCLUDE_xTaskGetCurrentTaskHandle == 1)
+    static constexpr bool value = true;
+#else
+    static constexpr bool value = false;
+#endif
+};
+
+template<>
+struct thread_priority_query_capability<backend_freertos>
+{
+#if defined(INCLUDE_uxTaskPriorityGet) && (INCLUDE_uxTaskPriorityGet == 1)
+    static constexpr bool value = true;
+#else
+    static constexpr bool value = false;
+#endif
+};
+
+template<>
+struct high_resolution_clock_capability<backend_zephyr>
+{
+    static constexpr bool value = true;
+};
+
+template<>
+struct high_resolution_clock_capability<backend_posix>
+{
+    static constexpr bool value = true;
+};
+
+template<>
+struct high_resolution_clock_capability<backend_linux>
+{
+    static constexpr bool value = true;
+};
+
+// ---------------------------------------------------------------------------
 // capabilities primary template — all features disabled by default
 // ---------------------------------------------------------------------------
 

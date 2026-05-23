@@ -46,7 +46,10 @@ struct emulated_wq_obj
     osal::active_traits::thread_handle_t    worker;
     osal::active_traits::mutex_handle_t     mtx;
     osal::active_traits::semaphore_handle_t not_empty;  ///< Counting sem — items available.
-    osal::active_traits::semaphore_handle_t flush_sem;  ///< Binary sem — flush complete.
+    osal::active_traits::condvar_handle_t   flush_cv;   ///< Broadcast when a flush ticket completes.
+
+    std::size_t completed_flush_ticket;  ///< Last sentinel ticket processed by the worker.
+    std::size_t next_flush_ticket;       ///< Monotonic ticket assigned to the next flush request.
 
     std::atomic<bool> stop;
 };
@@ -114,8 +117,15 @@ static void wq_worker_entry(void* arg) noexcept
         }
         else
         {
-            // Sentinel — signal flush completion.
-            osal_semaphore_give(&wq->flush_sem);
+            const std::size_t ticket = static_cast<std::size_t>(reinterpret_cast<std::uintptr_t>(item.arg));
+
+            osal_mutex_lock(&wq->mtx, osal::WAIT_FOREVER);
+            if (ticket > wq->completed_flush_ticket)
+            {
+                wq->completed_flush_ticket = ticket;
+            }
+            osal_condvar_notify_all(&wq->flush_cv);
+            osal_mutex_unlock(&wq->mtx);
         }
     }
 }
@@ -138,7 +148,7 @@ static void wq_worker_entry(void* arg) noexcept
 osal::result osal_work_queue_create(osal::active_traits::work_queue_handle_t* handle, void* stack,
                                     std::size_t stack_bytes, std::size_t depth, const char* name) noexcept
 {
-    if (!handle)
+    if (!handle || depth == 0U)
     {
         return osal::error_code::invalid_argument;
     }
@@ -155,11 +165,13 @@ osal::result osal_work_queue_create(osal::active_traits::work_queue_handle_t* ha
         return osal::error_code::invalid_argument;
     }
 
-    wq->capacity = depth;
-    wq->head     = 0U;
-    wq->tail     = 0U;
-    wq->count    = 0U;
-    wq->stop     = false;
+    wq->capacity               = depth;
+    wq->head                   = 0U;
+    wq->tail                   = 0U;
+    wq->count                  = 0U;
+    wq->completed_flush_ticket = 0U;
+    wq->next_flush_ticket      = 0U;
+    wq->stop                   = false;
 
     // Create the mutex (non-recursive).
     if (!osal_mutex_create(&wq->mtx, false).ok())
@@ -176,8 +188,7 @@ osal::result osal_work_queue_create(osal::active_traits::work_queue_handle_t* ha
         return osal::error_code::out_of_resources;
     }
 
-    // Binary semaphore for flush signalling (initial count = 0).
-    if (!osal_semaphore_create(&wq->flush_sem, 0U, 1U).ok())
+    if (!osal_condvar_create(&wq->flush_cv).ok())
     {
         osal_semaphore_destroy(&wq->not_empty);
         osal_mutex_destroy(&wq->mtx);
@@ -190,7 +201,7 @@ osal::result osal_work_queue_create(osal::active_traits::work_queue_handle_t* ha
                             osal::AFFINITY_ANY, stack, static_cast<osal::stack_size_t>(stack_bytes), name)
              .ok())
     {
-        osal_semaphore_destroy(&wq->flush_sem);
+        osal_condvar_destroy(&wq->flush_cv);
         osal_semaphore_destroy(&wq->not_empty);
         osal_mutex_destroy(&wq->mtx);
         emu_wq_release(wq);
@@ -223,7 +234,7 @@ osal::result osal_work_queue_destroy(osal::active_traits::work_queue_handle_t* h
     // Wait for worker to finish.
     osal_thread_join(&wq->worker, osal::WAIT_FOREVER);
 
-    osal_semaphore_destroy(&wq->flush_sem);
+    osal_condvar_destroy(&wq->flush_cv);
     osal_semaphore_destroy(&wq->not_empty);
     osal_mutex_destroy(&wq->mtx);
     emu_wq_release(wq);
@@ -292,7 +303,8 @@ osal::result osal_work_queue_flush(osal::active_traits::work_queue_handle_t* han
     {
         return osal::error_code::not_initialized;
     }
-    auto* wq = static_cast<emulated_wq_obj*>(handle->native);
+    auto*              wq    = static_cast<emulated_wq_obj*>(handle->native);
+    const osal::tick_t start = (timeout == osal::WAIT_FOREVER) ? 0U : osal_clock_ticks();
 
     // Enqueue a sentinel (func=nullptr) and wait for it to be processed.
     osal_mutex_lock(&wq->mtx, osal::WAIT_FOREVER);
@@ -301,16 +313,36 @@ osal::result osal_work_queue_flush(osal::active_traits::work_queue_handle_t* han
         osal_mutex_unlock(&wq->mtx);
         return osal::error_code::overflow;
     }
-    wq->ring[wq->tail] = osal::work_item{nullptr, nullptr};
-    wq->tail           = (wq->tail + 1U) % wq->capacity;
+    const std::size_t ticket = ++wq->next_flush_ticket;
+    wq->ring[wq->tail]       = osal::work_item{nullptr, reinterpret_cast<void*>(static_cast<std::uintptr_t>(ticket))};
+    wq->tail                 = (wq->tail + 1U) % wq->capacity;
     ++wq->count;
-    osal_mutex_unlock(&wq->mtx);
-
     osal_semaphore_give(&wq->not_empty);
 
-    // Wait for the worker to hit the sentinel and signal the flush sem.
-    osal::result r = osal_semaphore_take(&wq->flush_sem, timeout);
-    return r;
+    while (wq->completed_flush_ticket < ticket)
+    {
+        osal::tick_t remaining = osal::WAIT_FOREVER;
+        if (timeout != osal::WAIT_FOREVER)
+        {
+            const osal::tick_t elapsed = osal_clock_ticks() - start;
+            if (elapsed >= timeout)
+            {
+                osal_mutex_unlock(&wq->mtx);
+                return osal::error_code::timeout;
+            }
+            remaining = timeout - elapsed;
+        }
+
+        const osal::result r = osal_condvar_wait(&wq->flush_cv, &wq->mtx, remaining);
+        if (!r.ok() && r != osal::error_code::timeout)
+        {
+            osal_mutex_unlock(&wq->mtx);
+            return r;
+        }
+    }
+
+    osal_mutex_unlock(&wq->mtx);
+    return osal::ok();
 }
 
 /// @brief Discard all pending (not yet started) work items.
@@ -348,6 +380,9 @@ std::size_t osal_work_queue_pending(const osal::active_traits::work_queue_handle
     {
         return 0U;
     }
-    auto* wq = static_cast<const emulated_wq_obj*>(handle->native);
-    return wq->count;
+    auto* wq = static_cast<emulated_wq_obj*>(handle->native);
+    osal_mutex_lock(&wq->mtx, osal::WAIT_FOREVER);
+    const std::size_t pending = wq->count;
+    osal_mutex_unlock(&wq->mtx);
+    return pending;
 }

@@ -58,6 +58,30 @@ ZTEST(osal_clock, test_ticks_nonzero)
     zassert_true(t >= 0, "ticks should be >= 0 on a running kernel");
 }
 
+ZTEST(osal_clock, test_high_resolution_clock)
+{
+    auto before = osal::high_resolution_clock::now();
+    osal::thread::sleep_for(osal::milliseconds{5});
+    auto after = osal::high_resolution_clock::now();
+    zassert_true(after >= before, "high-resolution clock should be monotonic");
+
+    const auto resolution = osal::high_resolution_clock::resolution();
+    zassert_true(resolution.count() > 0, "high-resolution resolution should be positive");
+
+    const auto tick_resolution =
+        std::chrono::duration_cast<osal::nanoseconds>(osal::microseconds{osal_clock_tick_period_us()});
+    if constexpr (osal::high_resolution_clock::is_supported)
+    {
+        zassert_true(resolution <= tick_resolution,
+                     "native high-resolution source should not report a coarser resolution than the OSAL tick");
+    }
+    else
+    {
+        zassert_equal(resolution.count(), tick_resolution.count(),
+                      "fallback high-resolution clock should report tick resolution");
+    }
+}
+
 ZTEST_SUITE(osal_clock, NULL, NULL, NULL, NULL, NULL);
 
 // =========================================================================
@@ -369,6 +393,124 @@ ZTEST(osal_thread, test_sleep_for)
     auto t2      = osal::monotonic_clock::now();
     auto elapsed = std::chrono::duration_cast<osal::milliseconds>(t2 - t1);
     zassert_true(elapsed.count() >= 20, "sleep_for should have waited >= 20 ms");
+}
+
+ZTEST(osal_thread, test_stack_low_watermark)
+{
+    if constexpr (!osal::thread::supports_stack_watermark)
+    {
+        std::size_t unused = 0U;
+        zassert_equal(static_cast<int>(osal::this_thread::stack_low_watermark_bytes(unused).code()),
+                      static_cast<int>(osal::error_code::not_supported),
+                      "stack watermark should report not_supported when unavailable");
+        return;
+    }
+
+    osal::semaphore ready{osal::semaphore_type::binary, 0U};
+    osal::semaphore release{osal::semaphore_type::binary, 0U};
+    zassert_true(ready.valid(), NULL);
+    zassert_true(release.valid(), NULL);
+
+    struct ctx_t
+    {
+        osal::semaphore* ready;
+        osal::semaphore* release;
+    } ctx{&ready, &release};
+
+    osal::thread        t;
+    osal::thread_config cfg{};
+    cfg.entry = [](void* arg)
+    {
+        auto* c = static_cast<ctx_t*>(arg);
+        c->ready->give();
+        (void)c->release->take();
+    };
+    cfg.arg         = &ctx;
+    cfg.stack       = z_xthread_stack;
+    cfg.stack_bytes = K_THREAD_STACK_SIZEOF(z_xthread_stack);
+    cfg.name        = "z_stackdiag";
+    zassert_true(t.create(cfg).ok(), "thread create should succeed");
+    zassert_true(ready.take_for(osal::milliseconds{2000}), "worker should signal readiness");
+
+    std::size_t current_unused = 0U;
+    std::size_t worker_unused  = 0U;
+    zassert_true(osal::this_thread::stack_low_watermark_bytes(current_unused).ok(),
+                 "current thread stack query should succeed");
+    zassert_true(t.stack_low_watermark_bytes(worker_unused).ok(), "worker stack query should succeed");
+    zassert_true(current_unused > 0U, "current thread should report free stack bytes");
+    zassert_true(worker_unused > 0U, "worker thread should report free stack bytes");
+
+    release.give();
+    zassert_true(t.join().ok(), "join should succeed");
+}
+
+ZTEST(osal_thread, test_introspection)
+{
+    zassert_true(osal::this_thread::get_id() != osal::INVALID_THREAD_ID,
+                 "current thread id should be available on Zephyr");
+
+    osal::priority_t current_priority = osal::PRIORITY_LOWEST;
+    zassert_true(osal::this_thread::get_priority(current_priority).ok(),
+                 "current thread priority query should succeed");
+    zassert_true(current_priority >= osal::PRIORITY_LOWEST, NULL);
+    zassert_true(current_priority <= osal::PRIORITY_HIGHEST, NULL);
+
+    if constexpr (osal::thread::supports_current_cpu)
+    {
+        std::uint32_t cpu = 0U;
+        zassert_true(osal::this_thread::get_cpu(cpu).ok(), "current cpu query should succeed");
+    }
+
+    osal::semaphore ready{osal::semaphore_type::binary, 0U};
+    osal::semaphore release{osal::semaphore_type::binary, 0U};
+    zassert_true(ready.valid(), NULL);
+    zassert_true(release.valid(), NULL);
+
+    struct ctx_t
+    {
+        osal::semaphore*   ready;
+        osal::semaphore*   release;
+        osal::thread_id_t* worker_id;
+    };
+
+    osal::thread_id_t worker_id = osal::INVALID_THREAD_ID;
+    ctx_t             ctx{&ready, &release, &worker_id};
+
+    osal::thread        t;
+    osal::thread_config cfg{};
+    cfg.entry = [](void* arg)
+    {
+        auto* c       = static_cast<ctx_t*>(arg);
+        *c->worker_id = osal::this_thread::get_id();
+        c->ready->give();
+        (void)c->release->take();
+    };
+    cfg.arg         = &ctx;
+    cfg.priority    = osal::PRIORITY_NORMAL;
+    cfg.stack       = z_xthread_stack;
+    cfg.stack_bytes = K_THREAD_STACK_SIZEOF(z_xthread_stack);
+    cfg.name        = "z_introspect";
+    zassert_true(t.create(cfg).ok(), "thread create should succeed");
+    zassert_true(ready.take_for(osal::milliseconds{2000}), "worker should signal readiness");
+
+    zassert_true(t.id() != osal::INVALID_THREAD_ID, "worker id should be available");
+    zassert_equal(t.id(), worker_id, "worker thread id should match the running thread token");
+
+    osal::priority_t worker_priority = osal::PRIORITY_LOWEST;
+    zassert_true(t.get_priority(worker_priority).ok(), "worker priority query should succeed");
+    zassert_true(worker_priority >= osal::PRIORITY_LOWEST, NULL);
+    zassert_true(worker_priority <= osal::PRIORITY_HIGHEST, NULL);
+
+    if constexpr (osal::thread_affinity_query_capability<osal::active_backend>::value)
+    {
+        osal::affinity_t current_affinity = osal::AFFINITY_ANY;
+        osal::affinity_t worker_affinity  = osal::AFFINITY_ANY;
+        zassert_true(osal::this_thread::get_affinity(current_affinity).ok(), "current affinity query should succeed");
+        zassert_true(t.get_affinity(worker_affinity).ok(), "worker affinity query should succeed");
+    }
+
+    release.give();
+    zassert_true(t.join().ok(), "join should succeed");
 }
 
 ZTEST_SUITE(osal_thread, NULL, NULL, NULL, NULL, NULL);

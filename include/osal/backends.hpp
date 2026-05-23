@@ -265,6 +265,12 @@ enum class support_requirement
     dynamic_thread_priority,
     task_notification,
     thread_suspend_resume,
+    thread_stack_watermark,
+    thread_execution_time,
+    thread_cpu_load_stats,
+    high_resolution_clock,
+    current_cpu_query,
+    irq_mask_guard,
 };
 
 /// @brief True when the selected backend satisfies the requested requirement.
@@ -302,6 +308,30 @@ inline constexpr bool supports_requirement = []() constexpr
     else if constexpr (Requirement == support_requirement::task_notification)
     {
         return task_notification_backend<Backend>;
+    }
+    else if constexpr (Requirement == support_requirement::thread_stack_watermark)
+    {
+        return thread_stack_watermark_capability<Backend>::value;
+    }
+    else if constexpr (Requirement == support_requirement::thread_execution_time)
+    {
+        return thread_execution_time_capability<Backend>::value;
+    }
+    else if constexpr (Requirement == support_requirement::thread_cpu_load_stats)
+    {
+        return thread_cpu_load_stats_capability<Backend>::value;
+    }
+    else if constexpr (Requirement == support_requirement::high_resolution_clock)
+    {
+        return high_resolution_clock_capability<Backend>::value;
+    }
+    else if constexpr (Requirement == support_requirement::current_cpu_query)
+    {
+        return current_cpu_query_capability<Backend>::value;
+    }
+    else if constexpr (Requirement == support_requirement::irq_mask_guard)
+    {
+        return irq_mask_guard_capability<Backend>::value;
     }
     else
     {
@@ -355,6 +385,38 @@ consteval void require_backend_support() noexcept
         static_assert(task_notification_backend<Backend>,
                       "osal::thread task notifications require backend-native task-notification support. Use "
                       "osal::notification<Slots> for a portable alternative.");
+    }
+    else if constexpr (Requirement == support_requirement::thread_stack_watermark)
+    {
+        static_assert(thread_stack_watermark_capability<Backend>::value,
+                      "osal::thread stack watermark queries require backend support for per-thread stack usage "
+                      "reporting.");
+    }
+    else if constexpr (Requirement == support_requirement::thread_execution_time)
+    {
+        static_assert(thread_execution_time_capability<Backend>::value,
+                      "osal::thread execution-time queries require backend support for per-thread runtime "
+                      "accounting.");
+    }
+    else if constexpr (Requirement == support_requirement::thread_cpu_load_stats)
+    {
+        static_assert(thread_cpu_load_stats_capability<Backend>::value,
+                      "osal::thread CPU-load queries require backend support for per-thread load statistics.");
+    }
+    else if constexpr (Requirement == support_requirement::high_resolution_clock)
+    {
+        static_assert(high_resolution_clock_capability<Backend>::value,
+                      "osal::high_resolution_clock requires a backend-provided high-resolution timing source.");
+    }
+    else if constexpr (Requirement == support_requirement::current_cpu_query)
+    {
+        static_assert(current_cpu_query_capability<Backend>::value,
+                      "osal::thread current-CPU queries require backend support for reporting the running core.");
+    }
+    else if constexpr (Requirement == support_requirement::irq_mask_guard)
+    {
+        static_assert(irq_mask_guard_capability<Backend>::value,
+                      "osal::irq_mask_guard requires backend support for short-duration interrupt masking.");
     }
     else
     {

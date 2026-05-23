@@ -109,6 +109,23 @@ constexpr TickType_t to_freertos_ticks(osal::tick_t t) noexcept
     return static_cast<TickType_t>(
         t);  // NOLINT(bugprone-narrowing-conversions,cppcoreguidelines-narrowing-conversions)
 }
+
+/// @brief Converts a FreeRTOS priority back into the OSAL 0..255 range.
+constexpr osal::priority_t freertos_to_osal_priority(UBaseType_t priority) noexcept
+{
+    constexpr UBaseType_t fr_max = static_cast<UBaseType_t>(configMAX_PRIORITIES - 1U);
+    if (fr_max == 0U)
+    {
+        return osal::PRIORITY_NORMAL;
+    }
+
+    if (priority > fr_max)
+    {
+        priority = fr_max;
+    }
+
+    return static_cast<osal::priority_t>((static_cast<std::uint32_t>(priority) * osal::PRIORITY_HIGHEST) / fr_max);
+}
 }  // namespace
 
 // ---------------------------------------------------------------------------
@@ -303,7 +320,26 @@ fr_thread_ctx_t* fr_thread_ctx_from_handle(osal::active_traits::thread_handle_t*
     return static_cast<fr_thread_ctx_t*>(handle->native);
 }
 
+const fr_thread_ctx_t* fr_thread_ctx_from_handle(const osal::active_traits::thread_handle_t* handle) noexcept
+{
+    if (handle == nullptr || handle->native == nullptr)
+    {
+        return nullptr;
+    }
+    return static_cast<const fr_thread_ctx_t*>(handle->native);
+}
+
 TaskHandle_t fr_task_from_handle(osal::active_traits::thread_handle_t* handle) noexcept
+{
+    auto* ctx = fr_thread_ctx_from_handle(handle);
+    if (ctx == nullptr || ctx->finished.load(std::memory_order_acquire))
+    {
+        return nullptr;
+    }
+    return ctx->task;
+}
+
+TaskHandle_t fr_task_from_handle(const osal::active_traits::thread_handle_t* handle) noexcept
 {
     auto* ctx = fr_thread_ctx_from_handle(handle);
     if (ctx == nullptr || ctx->finished.load(std::memory_order_acquire))
@@ -555,6 +591,119 @@ extern "C"
     osal::result osal_thread_set_affinity(osal::active_traits::thread_handle_t* /* handle */,
                                           osal::affinity_t /* affinity */) noexcept
     {
+        return osal::error_code::not_supported;
+    }
+
+    /// @brief Return a comparable opaque identifier for a FreeRTOS task.
+    osal::result osal_thread_get_id(const osal::active_traits::thread_handle_t* handle,
+                                    osal::thread_id_t*                          out_id) noexcept
+    {
+        if (out_id == nullptr)
+        {
+            return osal::error_code::invalid_argument;
+        }
+
+#if defined(INCLUDE_xTaskGetCurrentTaskHandle) && (INCLUDE_xTaskGetCurrentTaskHandle == 1)
+        TaskHandle_t task = xTaskGetCurrentTaskHandle();
+        if (handle != nullptr)
+        {
+            task = fr_task_from_handle(handle);
+            if (task == nullptr)
+            {
+                return osal::error_code::not_initialized;
+            }
+        }
+
+        *out_id = reinterpret_cast<osal::thread_id_t>(task);
+        return osal::ok();
+#else
+        (void)handle;
+        *out_id = osal::INVALID_THREAD_ID;
+        return osal::error_code::not_supported;
+#endif
+    }
+
+    /// @brief Query the current priority of a FreeRTOS task.
+    osal::result osal_thread_get_priority(const osal::active_traits::thread_handle_t* handle,
+                                          osal::priority_t*                           out_priority) noexcept
+    {
+        if (out_priority == nullptr)
+        {
+            return osal::error_code::invalid_argument;
+        }
+
+#if defined(INCLUDE_uxTaskPriorityGet) && (INCLUDE_uxTaskPriorityGet == 1)
+        TaskHandle_t task = nullptr;
+        if (handle != nullptr)
+        {
+            task = fr_task_from_handle(handle);
+            if (task == nullptr)
+            {
+                return osal::error_code::not_initialized;
+            }
+        }
+
+        *out_priority = freertos_to_osal_priority(uxTaskPriorityGet(task));
+        return osal::ok();
+#else
+        (void)handle;
+        *out_priority = osal::PRIORITY_NORMAL;
+        return osal::error_code::not_supported;
+#endif
+    }
+
+    /// @brief Returns the stack low-watermark for a FreeRTOS task.
+    /// @details Uses the best available FreeRTOS high-water-mark API and
+    ///          converts the returned word count to bytes.
+    osal::result osal_thread_stack_low_watermark_bytes(const osal::active_traits::thread_handle_t* handle,
+                                                       std::size_t*                                out_bytes) noexcept
+    {
+        if (out_bytes == nullptr)
+        {
+            return osal::error_code::invalid_argument;
+        }
+
+#if (defined(INCLUDE_uxTaskGetStackHighWaterMark2) && (INCLUDE_uxTaskGetStackHighWaterMark2 == 1)) || \
+    (defined(INCLUDE_uxTaskGetStackHighWaterMark) && (INCLUDE_uxTaskGetStackHighWaterMark == 1))
+        TaskHandle_t task = nullptr;
+        if (handle != nullptr)
+        {
+            if (handle->native == nullptr)
+            {
+                return osal::error_code::not_initialized;
+            }
+
+            auto* const ctx = static_cast<const fr_thread_ctx_t*>(handle->native);
+            if (ctx->finished.load(std::memory_order_acquire) || ctx->task == nullptr)
+            {
+                return osal::error_code::not_initialized;
+            }
+            task = ctx->task;
+        }
+
+#if defined(INCLUDE_uxTaskGetStackHighWaterMark2) && (INCLUDE_uxTaskGetStackHighWaterMark2 == 1)
+        const auto watermark_words = uxTaskGetStackHighWaterMark2(task);
+#else
+        const auto watermark_words = uxTaskGetStackHighWaterMark(task);
+#endif
+        *out_bytes = static_cast<std::size_t>(watermark_words) * sizeof(StackType_t);
+        return osal::ok();
+#else
+        (void)handle;
+        *out_bytes = 0U;
+        return osal::error_code::not_supported;
+#endif
+    }
+
+    /// @brief Returns the execution time for a FreeRTOS task.
+    /// @details Runtime-stat collection is disabled in the current test config.
+    osal::result osal_thread_execution_time_us(const osal::active_traits::thread_handle_t* /*handle*/,
+                                               std::int64_t* out_us) noexcept
+    {
+        if (out_us != nullptr)
+        {
+            *out_us = 0;
+        }
         return osal::error_code::not_supported;
     }
 

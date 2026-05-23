@@ -5,6 +5,8 @@
 #include <doctest/doctest.h>
 #include <osal/osal.hpp>
 
+alignas(16) static std::uint8_t ef_stack[65536];
+
 TEST_CASE("event_flags: construction succeeds")
 {
     osal::event_flags ef;
@@ -98,6 +100,25 @@ TEST_CASE("event_flags: clear_on_exit")
     CHECK((ef.get() & 0x04) == 0U);
 }
 
+TEST_CASE("event_flags: set_isr reflects backend support")
+{
+    osal::event_flags ef;
+    REQUIRE(ef.valid());
+
+    const auto r = ef.set_isr(0x20);
+
+    if constexpr (osal::active_capabilities::has_isr_event_flags)
+    {
+        CHECK(r.ok());
+        CHECK((ef.get() & 0x20U) != 0U);
+    }
+    else
+    {
+        CHECK(r.code() == osal::error_code::not_supported);
+        CHECK((ef.get() & 0x20U) == 0U);
+    }
+}
+
 TEST_CASE("event_flags: cross-thread signalling")
 {
     static osal::event_flags ef;
@@ -128,4 +149,47 @@ TEST_CASE("event_flags: cross-thread signalling")
     CHECK((actual & 0x10) != 0U);
 
     REQUIRE(t.join().ok());
+}
+
+TEST_CASE("event_flags: repeated timeout then signal cycles")
+{
+    osal::event_flags ef;
+    REQUIRE(ef.valid());
+
+    static osal::event_flags* active_ef = nullptr;
+    active_ef                           = &ef;
+
+    constexpr osal::event_bits_t kBit        = 0x40U;
+    constexpr int                kIterations = 128;
+
+    auto setter = [](void*)
+    {
+        osal::thread::sleep_for(osal::milliseconds{1});
+        (void)active_ef->set(kBit);
+    };
+
+    for (int iter = 0; iter < kIterations; ++iter)
+    {
+        CAPTURE(iter);
+
+        REQUIRE(ef.clear(0xFFFFFFFFU).ok());
+        CHECK(ef.wait_any(kBit, nullptr, false, osal::milliseconds{1}).code() == osal::error_code::timeout);
+
+        osal::thread        t;
+        osal::thread_config cfg{};
+        cfg.entry       = setter;
+        cfg.arg         = nullptr;
+        cfg.stack       = ef_stack;
+        cfg.stack_bytes = sizeof(ef_stack);
+        cfg.name        = "ef_race";
+        REQUIRE(t.create(cfg).ok());
+
+        osal::event_bits_t actual = 0U;
+        const auto         r      = ef.wait_any(kBit, &actual, true, osal::milliseconds{2000});
+
+        REQUIRE(t.join().ok());
+        CHECK(r.ok());
+        CHECK((actual & kBit) != 0U);
+        CHECK((ef.get() & kBit) == 0U);
+    }
 }

@@ -83,6 +83,7 @@
 #include "memory_pool.hpp"
 #include "rwlock.hpp"
 #include "spinlock.hpp"
+#include "irq_mask_guard.hpp"
 #include "barrier.hpp"
 #include "ring_buffer.hpp"
 #include "stream_buffer.hpp"

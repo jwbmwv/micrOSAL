@@ -283,12 +283,23 @@ support helpers:
 - `osal::wait_set::is_supported` / `require_support()`
 - `osal::timer::is_supported` / `require_support()`
 - `osal::delayable_work::is_supported` / `require_support()`
+- `osal::high_resolution_clock::is_supported` / `require_support()`
 - `osal::thread::supports_timed_join`, `supports_affinity`,
     `supports_dynamic_priority`, `supports_task_notification`,
-    `supports_suspend_resume`, plus matching `require_*_support()` helpers
+    `supports_suspend_resume`, `supports_stack_watermark`,
+    `supports_execution_time`, `supports_cpu_load_stats`,
+    `supports_current_cpu`, plus matching `require_*_support()` helpers
 
 Use these when a code path must fail the build on unsupported backends instead
 of falling back to the runtime `error_code::not_supported` path.
+
+`osal::thread` also now exposes capability-gated execution-context queries for
+thread identity and scheduling state: `id()`, `get_priority()`,
+`get_affinity()`, `current_id()`, `current_priority()`,
+`current_affinity()`, `current_cpu()`, and the matching
+`osal::this_thread::get_*` wrappers. Unsupported backends return
+`error_code::not_supported` for value queries and `INVALID_THREAD_ID` for
+identity queries.
 
 Two practical rules follow from the current architecture:
 

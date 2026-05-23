@@ -661,6 +661,140 @@ TEST_CASE("freertos/thread: task notification round-trip")
     REQUIRE(t.join().ok());
 }
 
+TEST_CASE("freertos/thread: stack watermark")
+{
+    std::size_t unsupported_bytes = 0U;
+    if constexpr (!osal::thread::supports_stack_watermark)
+    {
+        CHECK(osal::this_thread::stack_low_watermark_bytes(unsupported_bytes) == osal::error_code::not_supported);
+        return;
+    }
+
+    osal::semaphore ready{osal::semaphore_type::binary, 0U};
+    osal::semaphore release{osal::semaphore_type::binary, 0U};
+    REQUIRE(ready.valid());
+    REQUIRE(release.valid());
+
+    struct ctx_t
+    {
+        osal::semaphore* ready;
+        osal::semaphore* release;
+    } ctx{&ready, &release};
+
+    constexpr std::size_t           kStack = 65536U;
+    alignas(16) static std::uint8_t stack[kStack];
+    osal::thread_config             cfg{};
+    cfg.entry = [](void* arg)
+    {
+        auto* c = static_cast<ctx_t*>(arg);
+        c->ready->give();
+        (void)c->release->take_for(osal::milliseconds{2000});
+    };
+    cfg.arg         = &ctx;
+    cfg.priority    = osal::PRIORITY_NORMAL;
+    cfg.stack       = stack;
+    cfg.stack_bytes = kStack;
+    cfg.name        = "fr_stackdiag";
+
+    osal::thread t;
+    REQUIRE(t.create(cfg).ok());
+    REQUIRE(ready.take_for(osal::milliseconds{2000}));
+
+    std::size_t current_unused = 0U;
+    std::size_t worker_unused  = 0U;
+    CHECK(osal::this_thread::stack_low_watermark_bytes(current_unused).ok());
+    CHECK(t.stack_low_watermark_bytes(worker_unused).ok());
+    CHECK(current_unused > 0U);
+    CHECK(worker_unused > 0U);
+
+    release.give();
+    REQUIRE(t.join().ok());
+}
+
+TEST_CASE("freertos/thread: introspection")
+{
+    if constexpr (osal::thread_identity_query_capability<osal::active_backend>::value)
+    {
+        CHECK(osal::this_thread::get_id() != osal::INVALID_THREAD_ID);
+    }
+    else
+    {
+        CHECK(osal::this_thread::get_id() == osal::INVALID_THREAD_ID);
+    }
+
+    if constexpr (osal::thread_priority_query_capability<osal::active_backend>::value)
+    {
+        osal::priority_t current_priority = osal::PRIORITY_LOWEST;
+        CHECK(osal::this_thread::get_priority(current_priority).ok());
+        CHECK(current_priority >= osal::PRIORITY_LOWEST);
+        CHECK(current_priority <= osal::PRIORITY_HIGHEST);
+    }
+    else
+    {
+        osal::priority_t current_priority = osal::PRIORITY_LOWEST;
+        CHECK(osal::this_thread::get_priority(current_priority) == osal::error_code::not_supported);
+    }
+
+    std::uint32_t current_cpu = 0U;
+    CHECK(osal::this_thread::get_cpu(current_cpu) == osal::error_code::not_supported);
+
+    osal::semaphore ready{osal::semaphore_type::binary, 0U};
+    osal::semaphore release{osal::semaphore_type::binary, 0U};
+    REQUIRE(ready.valid());
+    REQUIRE(release.valid());
+
+    struct ctx_t
+    {
+        osal::semaphore*   ready;
+        osal::semaphore*   release;
+        osal::thread_id_t* worker_id;
+    };
+
+    osal::thread_id_t worker_id = osal::INVALID_THREAD_ID;
+    ctx_t             ctx{&ready, &release, &worker_id};
+
+    constexpr std::size_t           kStack = 65536U;
+    alignas(16) static std::uint8_t stack[kStack];
+    osal::thread_config             cfg{};
+    cfg.entry = [](void* arg)
+    {
+        auto* c       = static_cast<ctx_t*>(arg);
+        *c->worker_id = osal::this_thread::get_id();
+        c->ready->give();
+        (void)c->release->take_for(osal::milliseconds{2000});
+    };
+    cfg.arg         = &ctx;
+    cfg.priority    = osal::PRIORITY_NORMAL;
+    cfg.stack       = stack;
+    cfg.stack_bytes = kStack;
+    cfg.name        = "fr_introspect";
+
+    osal::thread t;
+    REQUIRE(t.create(cfg).ok());
+    REQUIRE(ready.take_for(osal::milliseconds{2000}));
+
+    if constexpr (osal::thread_identity_query_capability<osal::active_backend>::value)
+    {
+        CHECK(t.id() != osal::INVALID_THREAD_ID);
+        CHECK(t.id() == worker_id);
+    }
+    else
+    {
+        CHECK(t.id() == osal::INVALID_THREAD_ID);
+    }
+
+    if constexpr (osal::thread_priority_query_capability<osal::active_backend>::value)
+    {
+        osal::priority_t worker_priority = osal::PRIORITY_LOWEST;
+        CHECK(t.get_priority(worker_priority).ok());
+        CHECK(worker_priority >= osal::PRIORITY_LOWEST);
+        CHECK(worker_priority <= osal::PRIORITY_HIGHEST);
+    }
+
+    release.give();
+    REQUIRE(t.join().ok());
+}
+
 // --------------------------------------------------------------------------
 // osal::condvar
 // --------------------------------------------------------------------------

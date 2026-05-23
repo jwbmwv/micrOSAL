@@ -565,9 +565,6 @@ The following always return `error_code::not_supported` on bare-metal:
 | --- | --- |
 | `osal::wait_set` | Requires OS-level event demultiplexing (e.g. epoll); use `osal::object_wait_set` for portable OSAL-object multiplexing |
 | `osal::spinlock` | No native SMP spinlock primitive; use `osal::mutex` or a target-specific IRQ-masked critical section instead |
-| `osal_semaphore_give_isr` | ISR-safe semaphore requires IRQ-level context tracking |
-| `osal_queue_send_isr` / `receive_isr` | Same |
-| `osal_event_flags_set_isr` | Same |
 | `osal_work_queue_submit_from_isr` | Same |
 
 If a bare-metal code path must refuse those native-only features at compile

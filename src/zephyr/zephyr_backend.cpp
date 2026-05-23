@@ -25,10 +25,12 @@
 #include <osal/osal.hpp>
 
 #include <zephyr/kernel.h>
+#include <zephyr/kernel_structs.h>
 #include <zephyr/sys/util.h>
 #include <cassert>
 #include <cstring>
 #include <cerrno>
+#include <limits>
 
 // ---------------------------------------------------------------------------
 // Internal helpers
@@ -36,6 +38,76 @@
 
 namespace
 {
+
+constexpr std::uint64_t kNanosecondsPerSecond = 1'000'000'000ULL;
+
+[[nodiscard]] std::int64_t zephyr_cycles_to_nanoseconds(std::uint64_t cycles) noexcept
+{
+    const std::uint64_t frequency_hz = static_cast<std::uint64_t>(sys_clock_hw_cycles_per_sec());
+    if (frequency_hz == 0U)
+    {
+        return 0;
+    }
+
+    const std::uint64_t whole_seconds = cycles / frequency_hz;
+    const std::uint64_t remainder     = cycles % frequency_hz;
+    if (whole_seconds > (static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max()) / kNanosecondsPerSecond))
+    {
+        return std::numeric_limits<std::int64_t>::max();
+    }
+
+    const std::uint64_t nanoseconds =
+        (whole_seconds * kNanosecondsPerSecond) + ((remainder * kNanosecondsPerSecond) / frequency_hz);
+    if (nanoseconds > static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max()))
+    {
+        return std::numeric_limits<std::int64_t>::max();
+    }
+    return static_cast<std::int64_t>(nanoseconds);
+}
+
+[[nodiscard]] std::int64_t zephyr_cycle_resolution_ns() noexcept
+{
+    const std::uint64_t frequency_hz = static_cast<std::uint64_t>(sys_clock_hw_cycles_per_sec());
+    if (frequency_hz == 0U)
+    {
+        return 0;
+    }
+    return static_cast<std::int64_t>((kNanosecondsPerSecond + frequency_hz - 1U) / frequency_hz);
+}
+
+[[nodiscard]] osal::priority_t zephyr_to_osal_priority(int priority) noexcept
+{
+    const int zmax = CONFIG_NUM_PREEMPT_PRIORITIES - 1;
+    if (zmax <= 0)
+    {
+        return osal::PRIORITY_NORMAL;
+    }
+
+    if (priority < 0)
+    {
+        priority = 0;
+    }
+    else if (priority > zmax)
+    {
+        priority = zmax;
+    }
+
+    return static_cast<osal::priority_t>(((zmax - priority) * osal::PRIORITY_HIGHEST) / zmax);
+}
+
+// Zephyr exposes the live CPU mask through k_thread internals when SMP masks are enabled.
+#if defined(CONFIG_SCHED_CPU_MASK)
+[[nodiscard]] osal::affinity_t zephyr_thread_affinity_mask(k_tid_t tid) noexcept
+{
+    using cpu_mask_t          = decltype(tid->base.cpu_mask);
+    const cpu_mask_t cpu_mask = tid->base.cpu_mask;
+    if (cpu_mask == std::numeric_limits<cpu_mask_t>::max())
+    {
+        return osal::AFFINITY_ANY;
+    }
+    return static_cast<osal::affinity_t>(cpu_mask);
+}
+#endif
 
 /// @brief Converts an OSAL priority to Zephyr thread priority.
 /// Zephyr: lower integer = higher priority (0 = highest cooperative).
@@ -246,6 +318,24 @@ extern "C"
         return static_cast<std::uint32_t>(1'000'000U / CONFIG_SYS_CLOCK_TICKS_PER_SEC);
     }
 
+    /// @brief Returns the current Zephyr hardware-cycle clock in nanoseconds.
+    std::int64_t osal_clock_high_resolution_ns() noexcept
+    {
+        const std::int64_t ns = zephyr_cycles_to_nanoseconds(k_cycle_get_64());
+        if (ns > 0)
+        {
+            return ns;
+        }
+        return osal_clock_monotonic_ms() * 1'000'000LL;
+    }
+
+    /// @brief Returns the nominal Zephyr hardware-cycle resolution in nanoseconds.
+    std::int64_t osal_clock_high_resolution_resolution_ns() noexcept
+    {
+        const std::int64_t resolution_ns = zephyr_cycle_resolution_ns();
+        return (resolution_ns > 0) ? resolution_ns : 1'000'000LL;
+    }
+
     // ---------------------------------------------------------------------------
     // Thread
     // ---------------------------------------------------------------------------
@@ -432,6 +522,150 @@ extern "C"
         }
         k_thread_resume(ZK_THREAD(handle));
         return osal::ok();
+    }
+
+    /// @brief Return a comparable opaque identifier for a Zephyr thread.
+    osal::result osal_thread_get_id(const osal::active_traits::thread_handle_t* handle,
+                                    osal::thread_id_t*                          out_id) noexcept
+    {
+        if (out_id == nullptr)
+        {
+            return osal::error_code::invalid_argument;
+        }
+
+        k_tid_t tid = k_current_get();
+        if (handle != nullptr)
+        {
+            if (handle->native == nullptr)
+            {
+                return osal::error_code::not_initialized;
+            }
+            tid = ZK_THREAD(handle);
+        }
+
+        *out_id = reinterpret_cast<osal::thread_id_t>(tid);
+        return osal::ok();
+    }
+
+    /// @brief Query the current scheduler priority of a Zephyr thread.
+    osal::result osal_thread_get_priority(const osal::active_traits::thread_handle_t* handle,
+                                          osal::priority_t*                           out_priority) noexcept
+    {
+        if (out_priority == nullptr)
+        {
+            return osal::error_code::invalid_argument;
+        }
+
+        k_tid_t tid = k_current_get();
+        if (handle != nullptr)
+        {
+            if (handle->native == nullptr)
+            {
+                return osal::error_code::not_initialized;
+            }
+            tid = ZK_THREAD(handle);
+        }
+
+        *out_priority = zephyr_to_osal_priority(k_thread_priority_get(tid));
+        return osal::ok();
+    }
+
+    /// @brief Query the CPU-affinity mask of a Zephyr thread.
+    osal::result osal_thread_get_affinity(const osal::active_traits::thread_handle_t* handle,
+                                          osal::affinity_t*                           out_affinity) noexcept
+    {
+#if defined(CONFIG_SCHED_CPU_MASK)
+        if (out_affinity == nullptr)
+        {
+            return osal::error_code::invalid_argument;
+        }
+
+        k_tid_t tid = k_current_get();
+        if (handle != nullptr)
+        {
+            if (handle->native == nullptr)
+            {
+                return osal::error_code::not_initialized;
+            }
+            tid = ZK_THREAD(handle);
+        }
+
+        *out_affinity = zephyr_thread_affinity_mask(tid);
+        return osal::ok();
+#else
+        (void)handle;
+        (void)out_affinity;
+        return osal::error_code::not_supported;
+#endif
+    }
+
+    /// @brief Query the current CPU/core index for the running thread.
+    osal::result osal_thread_current_cpu(std::uint32_t* out_cpu) noexcept
+    {
+        if (out_cpu == nullptr)
+        {
+            return osal::error_code::invalid_argument;
+        }
+
+        *out_cpu = static_cast<std::uint32_t>(CPU_ID);
+        return osal::ok();
+    }
+
+    /// @brief Returns the stack low-watermark for a Zephyr thread.
+    /// @details Uses @c k_thread_stack_space_get() for the target thread, or
+    ///          the current thread when @p handle is null.
+    osal::result osal_thread_stack_low_watermark_bytes(const osal::active_traits::thread_handle_t* handle,
+                                                       std::size_t*                                out_bytes) noexcept
+    {
+#if defined(CONFIG_THREAD_STACK_INFO) && (CONFIG_THREAD_STACK_INFO == 1) && defined(CONFIG_INIT_STACKS) && \
+    (CONFIG_INIT_STACKS == 1)
+        if (out_bytes == nullptr)
+        {
+            return osal::error_code::invalid_argument;
+        }
+
+        k_tid_t tid = k_current_get();
+        if (handle != nullptr)
+        {
+            if (handle->native == nullptr)
+            {
+                return osal::error_code::not_initialized;
+            }
+            tid = ZK_THREAD(handle);
+        }
+
+        std::size_t unused = 0U;
+        const int   rc     = k_thread_stack_space_get(tid, &unused);
+        if (rc == 0)
+        {
+            *out_bytes = unused;
+            return osal::ok();
+        }
+        if (rc == -ENOTSUP)
+        {
+            return osal::error_code::not_supported;
+        }
+        return osal::error_code::unknown;
+#else
+        (void)handle;
+        if (out_bytes != nullptr)
+        {
+            *out_bytes = 0U;
+        }
+        return osal::error_code::not_supported;
+#endif
+    }
+
+    /// @brief Returns the execution time for a Zephyr thread.
+    /// @details Runtime-stat collection is not enabled in this first Zephyr slice.
+    osal::result osal_thread_execution_time_us(const osal::active_traits::thread_handle_t* /*handle*/,
+                                               std::int64_t* out_us) noexcept
+    {
+        if (out_us != nullptr)
+        {
+            *out_us = 0;
+        }
+        return osal::error_code::not_supported;
     }
 
     /// @brief Yields the CPU to other threads of the same or higher priority.

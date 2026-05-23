@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 /// @file clock.hpp
-/// @brief OSAL clock API — monotonic and system clocks
-/// @details Exposes osal::monotonic_clock and osal::system_clock.
+/// @brief OSAL clock API — monotonic, system, and high-resolution clocks
+/// @details Exposes osal::monotonic_clock, osal::system_clock, and the draft
+///          osal::high_resolution_clock API.
 ///          The monotonic clock is always available and guaranteed non-decreasing.
 ///          The system (wall) clock is available on backends with has_system_clock.
 ///
@@ -21,6 +22,7 @@
 /// @ingroup osal_clock
 #pragma once
 
+#include "backends.hpp"
 #include "types.hpp"
 #include <cstdint>
 
@@ -34,6 +36,10 @@ extern "C"
     osal::tick_t osal_clock_ticks() noexcept;
     /// @brief Returns the duration of one RTOS tick in microseconds.
     std::uint32_t osal_clock_tick_period_us() noexcept;
+    /// @brief Returns the backend high-resolution time source in nanoseconds.
+    std::int64_t osal_clock_high_resolution_ns() noexcept;
+    /// @brief Returns the nominal resolution of the backend high-resolution source in nanoseconds.
+    std::int64_t osal_clock_high_resolution_resolution_ns() noexcept;
 }  // extern "C"
 
 namespace osal
@@ -42,6 +48,35 @@ namespace osal
 /// @defgroup osal_clock OSAL Clock
 /// @brief Monotonic and system clocks with chrono integration.
 /// @{
+
+/// @brief Draft high-resolution clock API.
+/// @details Backends that opt into @c support_requirement::high_resolution_clock
+///          provide a native nanosecond-resolution source. Unsupported backends
+///          fall back to promoted monotonic-clock values. Use require_support()
+///          when a true high-resolution source is mandatory.
+struct high_resolution_clock
+{
+    using rep        = std::int64_t;
+    using period     = std::nano;
+    using duration   = nanoseconds;
+    using time_point = std::chrono::time_point<high_resolution_clock>;
+
+    static constexpr bool is_steady    = true;
+    static constexpr bool is_supported = supports_requirement<support_requirement::high_resolution_clock>;
+
+    /// @brief Enforce high-resolution clock support at compile time.
+    template<typename Backend = active_backend>
+    static consteval void require_support()
+    {
+        require_backend_support<support_requirement::high_resolution_clock, Backend>();
+    }
+
+    /// @brief Returns the current timestamp using the best available draft source.
+    static time_point now() noexcept;
+
+    /// @brief Returns the nominal resolution of the draft source.
+    static duration resolution() noexcept;
+};
 
 // ---------------------------------------------------------------------------
 // monotonic_clock::now() implementation
@@ -62,6 +97,29 @@ inline system_clock::time_point system_clock::now() noexcept
     // osal_clock_system_ms() returns monotonic ms on backends that lack a
     // wall clock, so no capability check is needed here.
     return time_point{duration{osal_clock_system_ms()}};
+}
+
+// ---------------------------------------------------------------------------
+// high_resolution_clock draft implementation
+// ---------------------------------------------------------------------------
+
+inline high_resolution_clock::time_point high_resolution_clock::now() noexcept
+{
+    if constexpr (is_supported)
+    {
+        return time_point{duration{osal_clock_high_resolution_ns()}};
+    }
+    const auto since_epoch = monotonic_clock::now().time_since_epoch();
+    return time_point{std::chrono::duration_cast<high_resolution_clock::duration>(since_epoch)};
+}
+
+inline high_resolution_clock::duration high_resolution_clock::resolution() noexcept
+{
+    if constexpr (is_supported)
+    {
+        return duration{osal_clock_high_resolution_resolution_ns()};
+    }
+    return std::chrono::duration_cast<high_resolution_clock::duration>(monotonic_clock::duration{1});
 }
 
 // ---------------------------------------------------------------------------

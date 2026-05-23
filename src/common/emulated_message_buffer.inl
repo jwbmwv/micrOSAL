@@ -93,16 +93,15 @@ extern "C"
         osal::active_traits::semaphore_handle_t space_sem;
     };
 
-    static emu_mb_obj emu_mb_pool[OSAL_EMULATED_MESSAGE_BUFFER_POOL_SIZE];
-    static bool       emu_mb_used[OSAL_EMULATED_MESSAGE_BUFFER_POOL_SIZE];
+    static emu_mb_obj       emu_mb_pool[OSAL_EMULATED_MESSAGE_BUFFER_POOL_SIZE];
+    static std::atomic_bool emu_mb_used[OSAL_EMULATED_MESSAGE_BUFFER_POOL_SIZE];
 
     static emu_mb_obj* emu_mb_acquire() noexcept
     {
         for (std::size_t i = 0U; i < OSAL_EMULATED_MESSAGE_BUFFER_POOL_SIZE; ++i)
         {
-            if (!emu_mb_used[i])
+            if (!emu_mb_used[i].exchange(true, std::memory_order_acq_rel))
             {
-                emu_mb_used[i] = true;
                 return &emu_mb_pool[i];
             }
         }
@@ -115,7 +114,7 @@ extern "C"
         {
             if (&emu_mb_pool[i] == p)
             {
-                emu_mb_used[i] = false;
+                emu_mb_used[i].store(false, std::memory_order_release);
                 return;
             }
         }

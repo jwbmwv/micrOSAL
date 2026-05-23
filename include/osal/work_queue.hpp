@@ -116,7 +116,7 @@ public:
     /// @brief Constructs and starts the work queue.
     /// @param stack        Caller-supplied stack for the worker thread.
     /// @param stack_bytes  Size of the stack in bytes.
-    /// @param depth        Maximum number of queued work items (capped at
+    /// @param depth        Maximum number of queued work items; must be > 0 and is capped at
     ///                     OSAL_WORK_QUEUE_MAX_DEPTH).
     /// @param name         Human-readable name (for debugging).
     work_queue(void* stack, std::size_t stack_bytes, std::size_t depth = 16, const char* name = "wq") noexcept
@@ -135,8 +135,9 @@ public:
         valid_                   = osal_work_queue_create(&handle_, cfg.stack, cfg.stack_bytes, capped, cfg.name).ok();
     }
 
-    /// @brief Destroys the work queue.  Pending items are cancelled and the
-    ///        worker thread is joined.
+    /// @brief Destroys the work queue after draining any already-queued items.
+    /// @details The worker thread is signalled to stop once the queue becomes empty,
+    ///          then joined before resources are released.
     ~work_queue() noexcept
     {
         if (valid_)

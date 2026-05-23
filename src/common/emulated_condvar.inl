@@ -186,6 +186,7 @@ osal::result osal_condvar_wait(osal::active_traits::condvar_handle_t* handle,
     {
         if (!w.in_use)
         {
+            (void)osal_semaphore_try_take(&w.sem);
             w.in_use = true;
             my_slot  = &w;
             break;

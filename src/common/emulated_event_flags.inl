@@ -12,18 +12,18 @@
 ///          • Each waiting thread occupies a slot with a binary semaphore.
 ///          • set() : lock guard, OR bits, give EVERY in‑use waiter semaphore,
 ///                    unlock guard.
-///          • set_isr() : volatile OR on bits (ISR‑safe on single-core),
+///          • set_isr() : atomic OR on bits,
 ///                        give_isr every in‑use waiter semaphore.
 ///          • clear() : lock guard, AND‑invert bits, unlock guard.
-///          • get() : volatile read.
+///          • get() : atomic read.
 ///          • wait_any/all() : lock guard → quick-check → if not matched,
 ///                  claim waiter slot → unlock guard → loop
 ///                  {semaphore_take(remaining) → lock guard → re-check → …}
 ///                  → release slot → unlock guard.
 ///
-///          ISR safety: set_isr uses volatile write + osal_semaphore_give_isr.
-///          Backends with has_isr_semaphore=true get correct ISR wakeup; others
-///          still get the bit modification (waiters notice on next timed check).
+///          ISR safety: set_isr uses atomic bit updates plus osal_semaphore_give_isr.
+///          Backends without has_isr_event_flags support reject set_isr() rather
+///          than silently degrading to a polling-only wakeup.
 ///
 ///          Prerequisites at the point of inclusion:
 ///          - <osal/osal.hpp> already included with the correct OSAL_BACKEND_*
@@ -56,14 +56,14 @@ namespace  // anonymous — internal to the including TU
 struct emu_ef_waiter
 {
     osal::active_traits::semaphore_handle_t sem;     ///< Binary semaphore for this waiter.
-    bool                                    in_use;  ///< Slot is occupied by a waiting thread.
+    std::atomic_bool                        in_use;  ///< Slot is occupied by a waiting thread.
 };
 
 struct emu_ef_obj
 {
     osal::active_traits::mutex_handle_t guard;                                  ///< Protects bits and waiter array.
     emu_ef_waiter                       waiters[OSAL_EVENT_FLAGS_MAX_WAITERS];  ///< Per-waiter semaphore slots.
-    volatile osal::event_bits_t         bits;                                   ///< The flag bits.
+    std::atomic<osal::event_bits_t>     bits;                                   ///< The flag bits.
 };
 
 static emu_ef_obj       emu_ef_pool[OSAL_EMULATED_EVENT_FLAGS_POOL_SIZE];
@@ -98,7 +98,7 @@ static void emu_ef_wake_all(emu_ef_obj* ef) noexcept
 {
     for (auto& w : ef->waiters)
     {
-        if (w.in_use)
+        if (w.in_use.load(std::memory_order_acquire))
         {
             osal_semaphore_give(&w.sem);
         }
@@ -109,20 +109,25 @@ static void emu_ef_wake_all(emu_ef_obj* ef) noexcept
 static osal::result emu_ef_wait(emu_ef_obj* ef, osal::event_bits_t wait_bits, osal::event_bits_t* actual,
                                 bool clear_on_exit, bool all, osal::tick_t timeout) noexcept
 {
-    auto matched = [&]() -> bool
-    { return all ? ((ef->bits & wait_bits) == wait_bits) : ((ef->bits & wait_bits) != 0U); };
+    auto load_bits = [&]() noexcept -> osal::event_bits_t { return ef->bits.load(std::memory_order_acquire); };
+    auto matched   = [&]() -> bool
+    {
+        const osal::event_bits_t bits = load_bits();
+        return all ? ((bits & wait_bits) == wait_bits) : ((bits & wait_bits) != 0U);
+    };
 
     // ------- Quick check under lock ---------------------------------------
     osal_mutex_lock(&ef->guard, osal::WAIT_FOREVER);
     if (matched())
     {
+        const osal::event_bits_t bits = load_bits();
         if (actual != nullptr)
         {
-            *actual = ef->bits;
+            *actual = bits;
         }
         if (clear_on_exit)
         {
-            ef->bits &= ~wait_bits;
+            (void)ef->bits.fetch_and(~wait_bits, std::memory_order_acq_rel);
         }
         osal_mutex_unlock(&ef->guard);
         return osal::ok();
@@ -132,7 +137,7 @@ static osal::result emu_ef_wait(emu_ef_obj* ef, osal::event_bits_t wait_bits, os
     {
         if (actual != nullptr)
         {
-            *actual = ef->bits;
+            *actual = load_bits();
         }
         osal_mutex_unlock(&ef->guard);
         return osal::error_code::would_block;
@@ -142,10 +147,11 @@ static osal::result emu_ef_wait(emu_ef_obj* ef, osal::event_bits_t wait_bits, os
     emu_ef_waiter* my_slot = nullptr;
     for (auto& w : ef->waiters)
     {
-        if (!w.in_use)
+        if (!w.in_use.load(std::memory_order_acquire))
         {
-            w.in_use = true;
-            my_slot  = &w;
+            (void)osal_semaphore_try_take(&w.sem);
+            w.in_use.store(true, std::memory_order_release);
+            my_slot = &w;
             break;
         }
     }
@@ -176,9 +182,9 @@ static osal::result emu_ef_wait(emu_ef_obj* ef, osal::event_bits_t wait_bits, os
                 osal_mutex_lock(&ef->guard, osal::WAIT_FOREVER);
                 if (actual != nullptr)
                 {
-                    *actual = ef->bits;
+                    *actual = load_bits();
                 }
-                my_slot->in_use = false;
+                my_slot->in_use.store(false, std::memory_order_release);
                 osal_mutex_unlock(&ef->guard);
                 return osal::error_code::timeout;
             }
@@ -192,15 +198,16 @@ static osal::result emu_ef_wait(emu_ef_obj* ef, osal::event_bits_t wait_bits, os
         osal_mutex_lock(&ef->guard, osal::WAIT_FOREVER);
         if (matched())
         {
+            const osal::event_bits_t bits = load_bits();
             if (actual != nullptr)
             {
-                *actual = ef->bits;
+                *actual = bits;
             }
             if (clear_on_exit)
             {
-                ef->bits &= ~wait_bits;
+                (void)ef->bits.fetch_and(~wait_bits, std::memory_order_acq_rel);
             }
-            my_slot->in_use = false;
+            my_slot->in_use.store(false, std::memory_order_release);
             osal_mutex_unlock(&ef->guard);
             return osal::ok();
         }
@@ -231,10 +238,10 @@ osal::result osal_event_flags_create(osal::active_traits::event_flags_handle_t* 
         return osal::error_code::out_of_resources;
     }
 
-    ef->bits = 0U;
+    ef->bits.store(0U, std::memory_order_relaxed);
     for (auto& w : ef->waiters)
     {
-        w.in_use = false;
+        w.in_use.store(false, std::memory_order_relaxed);
     }
 
     // Create the internal guard mutex (non-recursive).
@@ -299,7 +306,7 @@ osal::result osal_event_flags_set(osal::active_traits::event_flags_handle_t* han
     }
     auto* ef = static_cast<emu_ef_obj*>(handle->native);
     osal_mutex_lock(&ef->guard, osal::WAIT_FOREVER);
-    ef->bits |= bits;
+    (void)ef->bits.fetch_or(bits, std::memory_order_acq_rel);
     emu_ef_wake_all(ef);
     osal_mutex_unlock(&ef->guard);
     return osal::ok();
@@ -317,12 +324,12 @@ osal::result osal_event_flags_clear(osal::active_traits::event_flags_handle_t* h
     }
     auto* ef = static_cast<emu_ef_obj*>(handle->native);
     osal_mutex_lock(&ef->guard, osal::WAIT_FOREVER);
-    ef->bits &= ~bits;
+    (void)ef->bits.fetch_and(~bits, std::memory_order_acq_rel);
     osal_mutex_unlock(&ef->guard);
     return osal::ok();
 }
 
-/// @brief Read the current flag bits without blocking (volatile read).
+/// @brief Read the current flag bits without blocking (atomic read).
 /// @param handle Event-flags handle (const).
 /// @return Current bit pattern, or 0 if @p handle is null.
 osal::event_bits_t osal_event_flags_get(const osal::active_traits::event_flags_handle_t* handle) noexcept
@@ -331,7 +338,7 @@ osal::event_bits_t osal_event_flags_get(const osal::active_traits::event_flags_h
     {
         return 0U;
     }
-    return static_cast<const emu_ef_obj*>(handle->native)->bits;  // volatile read
+    return static_cast<const emu_ef_obj*>(handle->native)->bits.load(std::memory_order_acquire);
 }
 
 /// @brief Wait until any of the specified bits are set (OR-wait).
@@ -370,13 +377,13 @@ osal::result osal_event_flags_wait_all(osal::active_traits::event_flags_handle_t
     return emu_ef_wait(static_cast<emu_ef_obj*>(handle->native), wait_bits, actual, clear_on_exit, true, timeout);
 }
 
-/// @brief Set bits from ISR context (volatile OR + ISR-safe semaphore give).
-/// @details On backends with `has_isr_semaphore == true` this path is genuinely
-///          interrupt-safe.  On others the bits are still updated and waiters will
-///          see them on the next timed check.
+/// @brief Set bits from ISR context (atomic OR + ISR-safe semaphore give).
+/// @details Backends without `has_isr_event_flags == true` reject this call with
+///          `error_code::not_supported` rather than silently degrading the wakeup semantics.
 /// @param handle Event-flags handle.
 /// @param bits   Bit mask to OR into the current flags.
-/// @return `osal::ok()` on success, `error_code::not_initialized` if null.
+/// @return `osal::ok()` on success, `error_code::not_supported` when ISR event flags
+///         are unavailable, or `error_code::not_initialized` if null.
 osal::result osal_event_flags_set_isr(osal::active_traits::event_flags_handle_t* handle,
                                       osal::event_bits_t                         bits) noexcept
 {
@@ -384,17 +391,19 @@ osal::result osal_event_flags_set_isr(osal::active_traits::event_flags_handle_t*
     {
         return osal::error_code::not_initialized;
     }
+
+    if constexpr (!osal::capabilities<osal::active_backend>::has_isr_event_flags)
+    {
+        return osal::error_code::not_supported;
+    }
+
     auto* ef = static_cast<emu_ef_obj*>(handle->native);
 
-    // ISR-safe bit modification: volatile write (safe on single-core ARM).
-    ef->bits |= bits;
+    (void)ef->bits.fetch_or(bits, std::memory_order_acq_rel);
 
-    // Best-effort ISR-safe wakeup: give each waiter's semaphore via the
-    // ISR-safe path.  On backends without ISR semaphore support, the bits
-    // are still set and waiters will see them on the next timed check.
     for (auto& w : ef->waiters)
     {
-        if (w.in_use)
+        if (w.in_use.load(std::memory_order_acquire))
         {
             osal_semaphore_give_isr(&w.sem);
         }

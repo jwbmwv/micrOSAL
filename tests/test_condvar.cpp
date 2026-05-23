@@ -169,6 +169,56 @@ TEST_CASE("condvar: wait_for succeeds on notify before timeout")
     CHECK(result_ok.load());
 }
 
+TEST_CASE("condvar: repeated late notifications do not wake a later waiter")
+{
+    osal::mutex   mtx;
+    osal::condvar cv;
+    REQUIRE(mtx.valid());
+    REQUIRE(cv.valid());
+
+    static osal::condvar* active_cv = nullptr;
+    active_cv                       = &cv;
+
+    constexpr int kIterations = 128;
+    int           timed_out   = 0;
+
+    auto notifier = [](void*)
+    {
+        osal::thread::sleep_for(osal::milliseconds{1});
+        for (int i = 0; i < 8; ++i)
+        {
+            active_cv->notify_one();
+        }
+    };
+
+    for (int iter = 0; iter < kIterations; ++iter)
+    {
+        CAPTURE(iter);
+
+        osal::thread t;
+        REQUIRE(t.create(make_cfg(notifier, nullptr, t_stack, sizeof(t_stack), "cv_race")).ok());
+
+        mtx.lock();
+        const bool first = cv.wait_for(mtx, osal::milliseconds{1});
+        mtx.unlock();
+
+        REQUIRE(t.join().ok());
+
+        mtx.lock();
+        const bool second = cv.wait_for(mtx, osal::milliseconds{1});
+        mtx.unlock();
+
+        if (!first)
+        {
+            ++timed_out;
+        }
+
+        CHECK_FALSE(second);
+    }
+
+    CHECK(timed_out > 0);
+}
+
 // ---------------------------------------------------------------------------
 // Multiple signal/wait cycles
 // ---------------------------------------------------------------------------
