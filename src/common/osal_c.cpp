@@ -382,14 +382,14 @@ extern "C" uint32_t osal_c_clock_tick_period_us(void)
 /// @return Nanoseconds from the active high-resolution source or its supported fallback.
 extern "C" int64_t osal_c_clock_high_resolution_ns(void)
 {
-    return osal_clock_high_resolution_ns();
+    return osal::high_resolution_clock::now().time_since_epoch().count();
 }
 
 /// @brief Return the nominal resolution of the high-resolution source.
 /// @return Nanoseconds per observable step of the high-resolution clock.
 extern "C" int64_t osal_c_clock_high_resolution_resolution_ns(void)
 {
-    return osal_clock_high_resolution_resolution_ns();
+    return osal::high_resolution_clock::resolution().count();
 }
 
 /// @brief Report whether the active backend provides a native high-resolution source.
