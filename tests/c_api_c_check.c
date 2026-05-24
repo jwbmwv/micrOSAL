@@ -10,10 +10,25 @@
 #include <osal/osal_c.h>
 #include <stddef.h>
 
+#if !defined(OSAL_LIKELY) || !defined(OSAL_UNLIKELY)
+#error "osal_c.h must define OSAL_LIKELY and OSAL_UNLIKELY"
+#endif
+
 static void c_smoke_delayable_cb(void* arg)
 {
     int* counter = (int*)arg;
     *counter += 1;
+}
+
+static int c_branch_hint_smoke(int value)
+{
+    if (OSAL_LIKELY(value > 0))
+        return value;
+
+    if (OSAL_UNLIKELY(value < 0))
+        return -value;
+
+    return 0;
 }
 
 /* Verify a few sizeof / constant assumptions at compile time. */
@@ -33,6 +48,13 @@ typedef char static_assert_tick_size[sizeof(osal_tick_t) == 4 ? 1 : -1];
  */
 int osal_c_smoke_test(void)
 {
+    if (c_branch_hint_smoke(7) != 7)
+        return 97;
+    if (c_branch_hint_smoke(-3) != 3)
+        return 98;
+    if (c_branch_hint_smoke(0) != 0)
+        return 99;
+
     /* ---- Clock ---- */
     int64_t mono = osal_c_clock_monotonic_ms();
     (void)mono;

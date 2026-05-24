@@ -210,7 +210,7 @@ TEST_CASE("osal_signal_premium: publish_zero_copy nullptr returns false")
 
 TEST_CASE("osal_signal_premium: route_to stub returns false")
 {
-    MockTopic topic;
+    MockTopic     topic;
     std::uint32_t msg{1U};
     CHECK_FALSE(topic.route_to(1U, msg));
 }

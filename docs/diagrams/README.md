@@ -1,6 +1,6 @@
 # MicrOSAL — PlantUML Diagrams
 
-Visual documentation for the MicrOSAL architecture. Render with any
+Visual documentation for the MicrOSAL architecture and bus/signal layer. Render with any
 PlantUML-compatible tool (VS Code extension, IntelliJ, `plantuml` CLI,
 or the [online server](https://www.plantuml.com/plantuml/uml)).
 
@@ -14,6 +14,9 @@ or the [online server](https://www.plantuml.com/plantuml/uml)).
 | [capability_matrix.puml](capability_matrix.puml) | Map | Per-backend feature support matrix (25 capability flags × 17 backends) |
 | [emulation_strategy.puml](emulation_strategy.puml) | Component | Native vs emulated breakdown for condvar, work_queue, memory_pool, and rwlock, showing which backends use shared .inl emulations |
 | [build_flow.puml](build_flow.puml) | Activity | CMake build pipeline — backend selection → compile → link → test |
+| [bus_architecture.puml](bus_architecture.puml) | Component | Bus/signal layer architecture — API, generic runtime, delegated tags, test backend, and Zephyr TODO path |
+| [bus_class_diagram.puml](bus_class_diagram.puml) | Class | `osal_bus`, `osal_signal`, `osal_signal_premium`, and capability-trait relationships |
+| [bus_sequence_publish.puml](bus_sequence_publish.puml) | Sequence | Generic LCD publish fan-out and subscriber receive flow |
 | [sequence_mutex.puml](sequence_mutex.puml) | Sequence | Mutex full lifecycle: construct → lock → unlock → destroy, showing all four layers |
 | [sequence_condvar.puml](sequence_condvar.puml) | Sequence | Condition variable wait/notify pattern between producer and consumer threads |
 | [sequence_work_queue.puml](sequence_work_queue.puml) | Sequence | Work queue submit/execute/flush flow with internal worker thread |

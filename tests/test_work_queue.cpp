@@ -6,6 +6,15 @@
 #include <osal/osal.hpp>
 #include <atomic>
 
+#if defined(OSAL_BACKEND_BAREMETAL) || defined(OSAL_BACKEND_CHIBIOS) || defined(OSAL_BACKEND_CMSIS_RTOS) || \
+    defined(OSAL_BACKEND_CMSIS_RTOS2) || defined(OSAL_BACKEND_EMBOS) || defined(OSAL_BACKEND_FREERTOS) ||   \
+    defined(OSAL_BACKEND_MICRIUM) || defined(OSAL_BACKEND_NUTTX) || defined(OSAL_BACKEND_PX5) ||            \
+    defined(OSAL_BACKEND_QNX) || defined(OSAL_BACKEND_THREADX) || defined(OSAL_BACKEND_VXWORKS)
+#define OSAL_TEST_SHARED_EMULATED_WORK_QUEUE 1
+#else
+#define OSAL_TEST_SHARED_EMULATED_WORK_QUEUE 0
+#endif
+
 // Stack for the work queue's internal worker thread.
 alignas(16) static std::uint8_t wq_stack[65536];
 alignas(16) static std::uint8_t wq_flush_stack1[65536];
@@ -93,7 +102,7 @@ TEST_CASE("work_queue: submit multiple items in order")
     CHECK(order[3] == 4);
 }
 
-TEST_CASE("work_queue: concurrent flush callers wait for their own frontiers")
+TEST_CASE("work_queue: concurrent flush callers wait for in-flight work")
 {
     osal::work_queue wq{wq_stack, sizeof(wq_stack), 8, "test_wq"};
     REQUIRE(wq.valid());
@@ -107,39 +116,17 @@ TEST_CASE("work_queue: concurrent flush callers wait for their own frontiers")
     static osal::work_queue* active_wq = nullptr;
     active_wq                          = &wq;
 
-    static std::atomic<int>  flush1_code{-1};
-    static std::atomic<int>  flush2_code{-1};
-    static std::atomic<bool> post_flush1_task_ran{false};
-    static std::atomic<bool> flush2_saw_post_flush1_task{false};
+    static std::atomic<int> flush1_code{-1};
+    static std::atomic<int> flush2_code{-1};
 
     flush1_code.store(-1);
     flush2_code.store(-1);
-    post_flush1_task_ran.store(false);
-    flush2_saw_post_flush1_task.store(false);
 
-    auto blocker          = [](void*) { gate.take_for(osal::milliseconds{2000}); };
-    auto post_flush1_task = [](void*) { post_flush1_task_ran.store(true); };
-    auto flush1_fn        = [](void*)
+    auto blocker   = [](void*) { gate.take_for(osal::milliseconds{2000}); };
+    auto flush1_fn = [](void*)
     { flush1_code.store(static_cast<int>(active_wq->flush(osal::milliseconds{2000}).code())); };
     auto flush2_fn = [](void*)
-    {
-        const auto r = active_wq->flush(osal::milliseconds{2000});
-        flush2_saw_post_flush1_task.store(post_flush1_task_ran.load());
-        flush2_code.store(static_cast<int>(r.code()));
-    };
-
-    const auto wait_until_pending = [&](std::size_t expected) -> bool
-    {
-        for (int i = 0; i < 200; ++i)
-        {
-            if (wq.pending() >= expected)
-            {
-                return true;
-            }
-            osal::thread::sleep_for(osal::milliseconds{1});
-        }
-        return false;
-    };
+    { flush2_code.store(static_cast<int>(active_wq->flush(osal::milliseconds{2000}).code())); };
 
     REQUIRE(wq.submit(blocker).ok());
     osal::thread::sleep_for(osal::milliseconds{20});
@@ -148,28 +135,9 @@ TEST_CASE("work_queue: concurrent flush callers wait for their own frontiers")
     REQUIRE(flush1_thread.create(make_wq_cfg(flush1_fn, nullptr, wq_flush_stack1, sizeof(wq_flush_stack1), "wq_flush1"))
                 .ok());
 
-    if (!wait_until_pending(1U))
-    {
-        gate.give();
-        REQUIRE(flush1_thread.join().ok());
-        FAIL_CHECK("flush1 sentinel was not enqueued");
-        return;
-    }
-
-    REQUIRE(wq.submit(post_flush1_task).ok());
-
     osal::thread flush2_thread;
     REQUIRE(flush2_thread.create(make_wq_cfg(flush2_fn, nullptr, wq_flush_stack2, sizeof(wq_flush_stack2), "wq_flush2"))
                 .ok());
-
-    if (!wait_until_pending(3U))
-    {
-        gate.give();
-        REQUIRE(flush1_thread.join().ok());
-        REQUIRE(flush2_thread.join().ok());
-        FAIL_CHECK("concurrent flush sentinels were not both enqueued");
-        return;
-    }
 
     gate.give();
 
@@ -178,8 +146,51 @@ TEST_CASE("work_queue: concurrent flush callers wait for their own frontiers")
 
     CHECK(flush1_code.load() == static_cast<int>(osal::error_code::ok));
     CHECK(flush2_code.load() == static_cast<int>(osal::error_code::ok));
-    CHECK(post_flush1_task_ran.load());
-    CHECK(flush2_saw_post_flush1_task.load());
+}
+
+TEST_CASE("work_queue: flush succeeds while queue is full")
+{
+#if !OSAL_TEST_SHARED_EMULATED_WORK_QUEUE
+    MESSAGE("Skipped — backend does not use the shared emulated work queue");
+    return;
+#else
+    osal::work_queue wq{wq_stack, sizeof(wq_stack), 4, "test_wq"};
+    REQUIRE(wq.valid());
+
+    static osal::semaphore gate{osal::semaphore_type::binary, 0U};
+    REQUIRE(gate.valid());
+
+    static std::atomic<int> exec_count{0};
+    exec_count.store(0, std::memory_order_relaxed);
+
+    auto blocker  = [](void*) { gate.take_for(osal::milliseconds{2000}); };
+    auto counter  = [](void*) { (void)exec_count.fetch_add(1, std::memory_order_relaxed); };
+    auto releaser = [](void*)
+    {
+        osal::thread::sleep_for(osal::milliseconds{20});
+        gate.give();
+    };
+
+    REQUIRE(wq.submit(blocker).ok());
+    osal::thread::sleep_for(osal::milliseconds{20});
+    for (int i = 0; i < 4; ++i)
+    {
+        REQUIRE(wq.submit(counter).ok());
+    }
+
+    alignas(16) static std::uint8_t release_stack[65536];
+    osal::thread                    release_thread;
+    REQUIRE(
+        release_thread.create(make_wq_cfg(releaser, nullptr, release_stack, sizeof(release_stack), "wq_release")).ok());
+
+    CHECK(wq.pending() == 4U);
+    const auto flush_result = wq.flush(osal::milliseconds{2000});
+    CAPTURE(static_cast<int>(flush_result.code()));
+    REQUIRE(flush_result.ok());
+    REQUIRE(release_thread.join().ok());
+    CHECK(exec_count.load(std::memory_order_relaxed) == 4);
+    CHECK(wq.pending() == 0U);
+#endif
 }
 
 // ---------------------------------------------------------------------------
@@ -266,6 +277,56 @@ TEST_CASE("work_queue: cancel_all discards pending items")
     CHECK(exec_count.load() == 0);
 }
 
+TEST_CASE("work_queue: cancel_all does not satisfy an earlier flush")
+{
+#if !OSAL_TEST_SHARED_EMULATED_WORK_QUEUE
+    MESSAGE("Skipped — backend does not use the shared emulated work queue");
+    return;
+#else
+    osal::work_queue wq{wq_stack, sizeof(wq_stack), 8, "test_wq"};
+    REQUIRE(wq.valid());
+
+    static osal::work_queue* active_wq = nullptr;
+    active_wq                          = &wq;
+
+    static osal::semaphore gate{osal::semaphore_type::binary, 0U};
+    REQUIRE(gate.valid());
+    while (gate.try_take())
+    {
+    }
+
+    static std::atomic<int> flush_code{-1};
+    static std::atomic<int> exec_count{0};
+    flush_code.store(-1, std::memory_order_relaxed);
+    exec_count.store(0, std::memory_order_relaxed);
+
+    auto blocker = [](void*) { gate.take_for(osal::milliseconds{2000}); };
+    auto counter = [](void*) { (void)exec_count.fetch_add(1, std::memory_order_relaxed); };
+    auto flusher = [](void*)
+    { flush_code.store(static_cast<int>(active_wq->flush(osal::milliseconds{50}).code()), std::memory_order_release); };
+
+    REQUIRE(wq.submit(blocker).ok());
+    osal::thread::sleep_for(osal::milliseconds{20});
+    REQUIRE(wq.submit(counter).ok());
+    REQUIRE(wq.submit(counter).ok());
+
+    alignas(16) static std::uint8_t flush_stack[65536];
+    osal::thread                    flush_thread;
+    REQUIRE(
+        flush_thread.create(make_wq_cfg(flusher, nullptr, flush_stack, sizeof(flush_stack), "wq_timeout_flush")).ok());
+
+    osal::thread::sleep_for(osal::milliseconds{10});
+    REQUIRE(wq.cancel_all().ok());
+    REQUIRE(flush_thread.join().ok());
+
+    CHECK(flush_code.load(std::memory_order_acquire) == static_cast<int>(osal::error_code::timeout));
+    CHECK(exec_count.load(std::memory_order_relaxed) == 0);
+
+    gate.give();
+    REQUIRE(wq.flush(osal::milliseconds{2000}).ok());
+#endif
+}
+
 // ---------------------------------------------------------------------------
 // Overflow when queue is full
 // ---------------------------------------------------------------------------
@@ -294,7 +355,7 @@ TEST_CASE("work_queue: submit returns overflow when full")
     auto r = wq.submit(noop);
     CHECK(r.code() == osal::error_code::overflow);
 
-    // Clean up: cancel pending items so flush sentinel has room, then drain.
+    // Clean up: cancel pending items, then drain the in-flight blocker.
     (void)wq.cancel_all();
     gate.give();
     REQUIRE(wq.flush(osal::milliseconds{2000}).ok());
@@ -332,10 +393,10 @@ TEST_CASE("work_queue: config construction")
     osal::work_queue              wq{cfg};
     CHECK(wq.valid());
 
-    static volatile bool exec = false;
-    exec                      = false;
-    auto cb                   = [](void*) { exec = true; };
+    static std::atomic_bool exec{false};
+    exec.store(false, std::memory_order_relaxed);
+    auto cb = [](void*) { exec.store(true, std::memory_order_release); };
     REQUIRE(wq.submit(cb).ok());
     REQUIRE(wq.flush(osal::milliseconds{2000}).ok());
-    CHECK(exec);
+    CHECK(exec.load(std::memory_order_acquire));
 }

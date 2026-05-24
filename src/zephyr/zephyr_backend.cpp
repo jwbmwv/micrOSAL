@@ -23,6 +23,7 @@
 #define OSAL_BACKEND_ZEPHYR
 #endif
 #include <osal/osal.hpp>
+#include <osal/detail/atomic_compat.hpp>
 
 #include <zephyr/kernel.h>
 #include <zephyr/kernel_structs.h>
@@ -1574,7 +1575,7 @@ extern "C"
         osal_work_func_t        func{};
         void*                   arg{};
         struct zephyr_wq_obj_s* parent{};
-        volatile bool           in_use{};
+        std::atomic_bool        in_use{false};
     };
 
     struct zephyr_wq_obj_s
@@ -1627,7 +1628,7 @@ extern "C"
             // Sentinel — flush complete.
             k_sem_give(&e->parent->flush_sem);
         }
-        e->in_use = false;
+        e->in_use.store(false, std::memory_order_release);
     }
     }  // namespace
 
@@ -1664,7 +1665,7 @@ extern "C"
         {
             k_work_init(&wq->entries[i].work, zephyr_wq_handler);
             wq->entries[i].parent = wq;
-            wq->entries[i].in_use = false;
+            wq->entries[i].in_use.store(false, std::memory_order_relaxed);
         }
         k_sem_init(&wq->flush_sem, 0, 1);
         k_work_queue_start(&wq->workq, static_cast<k_thread_stack_t*>(stack), stack_bytes,
@@ -1716,11 +1717,12 @@ extern "C"
         auto* wq = static_cast<zephyr_wq_obj_s*>(handle->native);
         for (std::size_t i = 0U; i < wq->capacity; ++i)
         {
-            if (!wq->entries[i].in_use)
+            bool expected = false;
+            if (wq->entries[i].in_use.compare_exchange_strong(expected, true, std::memory_order_acq_rel,
+                                                              std::memory_order_relaxed))
             {
-                wq->entries[i].func   = func;
-                wq->entries[i].arg    = arg;
-                wq->entries[i].in_use = true;
+                wq->entries[i].func = func;
+                wq->entries[i].arg  = arg;
                 k_work_submit_to_queue(&wq->workq, &wq->entries[i].work);
                 return osal::ok();
             }
@@ -1761,11 +1763,12 @@ extern "C"
         // Submit a sentinel item and wait on the semaphore.
         for (std::size_t i = 0U; i < wq->capacity; ++i)
         {
-            if (!wq->entries[i].in_use)
+            bool expected = false;
+            if (wq->entries[i].in_use.compare_exchange_strong(expected, true, std::memory_order_acq_rel,
+                                                              std::memory_order_relaxed))
             {
-                wq->entries[i].func   = nullptr;
-                wq->entries[i].arg    = nullptr;
-                wq->entries[i].in_use = true;
+                wq->entries[i].func = nullptr;
+                wq->entries[i].arg  = nullptr;
                 k_work_submit_to_queue(&wq->workq, &wq->entries[i].work);
                 int rc =
                     k_sem_take(&wq->flush_sem, to_zephyr_timeout(timeout));  // NOLINT(cppcoreguidelines-init-variables)
@@ -1789,10 +1792,10 @@ extern "C"
         auto* wq = static_cast<zephyr_wq_obj_s*>(handle->native);
         for (std::size_t i = 0U; i < wq->capacity; ++i)
         {
-            if (wq->entries[i].in_use)
+            if (wq->entries[i].in_use.load(std::memory_order_acquire))
             {
                 k_work_cancel(&wq->entries[i].work);
-                wq->entries[i].in_use = false;
+                wq->entries[i].in_use.store(false, std::memory_order_release);
             }
         }
         return osal::ok();
@@ -1812,7 +1815,7 @@ extern "C"
         std::size_t n  = 0U;
         for (std::size_t i = 0U; i < wq->capacity; ++i)
         {
-            if (wq->entries[i].in_use)
+            if (wq->entries[i].in_use.load(std::memory_order_acquire))
             {
                 ++n;
             }

@@ -83,8 +83,7 @@ int main()
     (void)sensor_topic.unsubscribe(sub_a);
     (void)sensor_topic.unsubscribe(sub_b);
 
-    std::printf("[example] subscriber_count after cleanup = %zu\n",
-                sensor_topic.subscriber_count());
+    std::printf("[example] subscriber_count after cleanup = %zu\n", sensor_topic.subscriber_count());
     std::puts("[example] done.");
     return 0;
 }

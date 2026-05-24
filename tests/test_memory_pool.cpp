@@ -203,12 +203,10 @@ TEST_CASE("memory_pool: allocate_for unblocks when block is freed by another thr
 {
     alignas(32) static std::uint8_t buf[32];
     static osal::memory_pool        pool{buf, sizeof(buf), 32, 1};
-    static volatile void*           freed_block = nullptr;
 
     // Pre-allocate the only block.
     void* held = pool.allocate();
     REQUIRE(held != nullptr);
-    freed_block = nullptr;
 
     struct ctx_t
     {
@@ -221,7 +219,6 @@ TEST_CASE("memory_pool: allocate_for unblocks when block is freed by another thr
     {
         auto* c = static_cast<ctx_t*>(arg);
         osal::thread::sleep_for(osal::milliseconds{50});
-        freed_block = c->block;
         (void)pool.deallocate(c->block);
     };
 

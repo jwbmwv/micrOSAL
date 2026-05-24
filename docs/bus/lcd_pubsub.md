@@ -1,17 +1,22 @@
-# LCD Pub/Sub — `osal_signal`
+# LCD Pub/Sub — `osal::osal_signal`
 
-`osal::osal_signal<T, MaxSubscribers, PerSubCapacity, BackendTag>` provides
-**Lowest Common Denominator** pub/sub that works on any micrOSAL backend.
+`osal::osal_signal<T, MaxSubscribers, PerSubCapacity, BackendTag>` is the
+portable fixed-capacity pub/sub topic in the bus layer.
+
+The implemented LCD behavior is provided by `bus_backend_generic` and every
+delegated `bus_backend_*` tag. The current Zephyr-specific specialisation is
+still a TODO skeleton, so portable Zephyr code should request
+`osal::bus_backend_generic` explicitly for now.
 
 ## Guarantees
 
-| Property                | Value                                          |
-|-------------------------|------------------------------------------------|
-| Dynamic allocation      | **None** — all storage is compile-time static. |
-| Publish complexity      | O(MaxSubscribers) try_send calls.              |
-| Subscriber model        | Per-subscriber FIFO queue (pull model).        |
-| Thread safety           | subscribe/unsubscribe/publish mutex-protected. |
-| Missed messages         | Full subscriber queue silently drops publish.  |
+| Property | Value |
+| --- | --- |
+| Dynamic allocation | None in the implemented generic and delegated backends |
+| Publish complexity | `O(MaxSubscribers)` non-blocking sends |
+| Subscriber model | Per-subscriber FIFO queue (pull model) |
+| Thread safety | `subscribe()`, `unsubscribe()`, and `publish()` are mutex-protected |
+| Full subscriber queue | That subscriber silently drops the publish; the overall call returns `true` if any active subscriber accepted the message |
 
 ## API Reference
 
@@ -26,40 +31,41 @@ class osal_signal;
 ### Methods
 
 | Signature | Description |
-|-----------|-------------|
-| `bool subscribe(subscriber_id& out_id)` | Allocates a slot; writes ID to `out_id`. Returns `false` when at capacity. |
-| `bool unsubscribe(subscriber_id id)` | Releases the slot. Returns `false` if ID is invalid or not active. |
-| `bool publish(const T& msg)` | Fans out to all active subscriber queues (try_send). Returns `true` if at least one queue accepted the message. |
-| `bool try_receive(subscriber_id id, T& out)` | Non-blocking dequeue. Returns `true` if a message was available. |
-| `bool receive(subscriber_id id, T& out, tick_t timeout = WAIT_FOREVER)` | Blocking dequeue. Uses `osal::WAIT_FOREVER` or `osal::NO_WAIT` as timeout. |
-| `std::size_t subscriber_count() const` | Current active subscriber count. |
-| `static constexpr std::size_t max_subscribers()` | Compile-time maximum. |
-| `static constexpr std::size_t per_subscriber_capacity()` | Compile-time queue depth. |
+| --- | --- |
+| `bool subscribe(subscriber_id& out_id)` | Allocate a subscriber slot and write its ID to `out_id` |
+| `bool unsubscribe(subscriber_id id)` | Release a subscriber slot |
+| `bool publish(const T& msg)` | Fan out to all active subscriber queues using non-blocking sends |
+| `bool try_receive(subscriber_id id, T& out)` | Non-blocking dequeue from one subscriber queue |
+| `bool receive(subscriber_id id, T& out, tick_t timeout = WAIT_FOREVER)` | Blocking dequeue with an OSAL tick timeout |
+| `std::size_t subscriber_count() const` | Number of active subscribers |
+| `static constexpr std::size_t max_subscribers()` | Compile-time subscriber bound |
+| `static constexpr std::size_t per_subscriber_capacity()` | Compile-time queue depth per subscriber |
 
 ## Example
 
 ```cpp
 #include <microsal/bus/osal_signal.hpp>
 
-osal::osal_signal<SensorData, 4, 16> sensor_topic;
+using SensorTopic = osal::osal_signal<SensorData, 4, 16, osal::bus_backend_generic>;
 
-// Producer thread
+SensorTopic sensor_topic;
+
 void producer_task()
 {
     sensor_topic.publish(SensorData{42});
 }
 
-// Consumer A thread
-void consumer_a()
+void consumer_task()
 {
     osal::subscriber_id id{osal::invalid_subscriber_id};
     sensor_topic.subscribe(id);
 
     SensorData data{};
-    while (sensor_topic.receive(id, data))  // blocks until data arrives
+    while (sensor_topic.receive(id, data, osal::WAIT_FOREVER))
     {
         process(data);
     }
+
     sensor_topic.unsubscribe(id);
 }
 ```
@@ -68,23 +74,21 @@ void consumer_a()
 
 For `osal_signal<T, N, M, bus_backend_generic>`:
 
-```
+```text
 osal_signal {
-    subscribers[N] {
-        bool in_use
-        osal_bus<T, M> {      // ~= osal::queue
-            queue_handle_t handle
-            uint8_t storage[M * sizeof(T)]
-        }
+    subscriber_slot slots_[N] {
+        bool in_use_
+        osal_bus<T, M, bus_backend_generic> queue_
     }
-    mutex (osal::mutex)
-    size_t subscriber_count
+    osal::mutex mutex_
+    std::size_t subscriber_count_
 }
 ```
 
-Total static footprint ≈ N × (sizeof(osal::active_traits::queue_handle_t) + M × sizeof(T)) + sizeof(osal::mutex).
+Each `osal_bus<T, M, bus_backend_generic>` owns its queue handle and backing
+storage inline, so the topic object's footprint scales with `N` and `M`.
 
 ## See Also
 
 - [Premium Pub/Sub](premium_pubsub.md)
-- [Channel Overview](channel_overview.md)
+- [Bus Overview](bus_overview.md)

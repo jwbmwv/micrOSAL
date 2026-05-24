@@ -106,8 +106,7 @@ static void check_lcd_capabilities()
                   "delegated backend should not claim native routing");
     static_assert(!osal::osal_signal_capabilities<BackendTag>::zero_copy,
                   "delegated backend should not claim zero_copy");
-    static_assert(osal::bus_backend_tag<BackendTag>,
-                  "backend must satisfy bus_backend_tag concept");
+    static_assert(osal::bus_backend_tag<BackendTag>, "backend must satisfy bus_backend_tag concept");
 }
 
 // ===========================================================================
@@ -115,100 +114,292 @@ static void check_lcd_capabilities()
 // ===========================================================================
 
 // --- FreeRTOS ---
-TEST_CASE("bus_backend_freertos: LCD API")     { exercise_lcd_api<osal::bus_backend_freertos>(); }
-TEST_CASE("bus_backend_freertos: channel API")  { exercise_channel_api<osal::bus_backend_freertos>(); }
-TEST_CASE("bus_backend_freertos: premium API")  { exercise_premium_api<osal::bus_backend_freertos>(); }
-TEST_CASE("bus_backend_freertos: capabilities") { check_lcd_capabilities<osal::bus_backend_freertos>(); }
+TEST_CASE("bus_backend_freertos: LCD API")
+{
+    exercise_lcd_api<osal::bus_backend_freertos>();
+}
+TEST_CASE("bus_backend_freertos: channel API")
+{
+    exercise_channel_api<osal::bus_backend_freertos>();
+}
+TEST_CASE("bus_backend_freertos: premium API")
+{
+    exercise_premium_api<osal::bus_backend_freertos>();
+}
+TEST_CASE("bus_backend_freertos: capabilities")
+{
+    check_lcd_capabilities<osal::bus_backend_freertos>();
+}
 
 // --- POSIX ---
-TEST_CASE("bus_backend_posix: LCD API")         { exercise_lcd_api<osal::bus_backend_posix>(); }
-TEST_CASE("bus_backend_posix: channel API")     { exercise_channel_api<osal::bus_backend_posix>(); }
-TEST_CASE("bus_backend_posix: premium API")     { exercise_premium_api<osal::bus_backend_posix>(); }
-TEST_CASE("bus_backend_posix: capabilities")    { check_lcd_capabilities<osal::bus_backend_posix>(); }
+TEST_CASE("bus_backend_posix: LCD API")
+{
+    exercise_lcd_api<osal::bus_backend_posix>();
+}
+TEST_CASE("bus_backend_posix: channel API")
+{
+    exercise_channel_api<osal::bus_backend_posix>();
+}
+TEST_CASE("bus_backend_posix: premium API")
+{
+    exercise_premium_api<osal::bus_backend_posix>();
+}
+TEST_CASE("bus_backend_posix: capabilities")
+{
+    check_lcd_capabilities<osal::bus_backend_posix>();
+}
 
 // --- Bare Metal ---
-TEST_CASE("bus_backend_bare_metal: LCD API")        { exercise_lcd_api<osal::bus_backend_bare_metal>(); }
-TEST_CASE("bus_backend_bare_metal: channel API")    { exercise_channel_api<osal::bus_backend_bare_metal>(); }
-TEST_CASE("bus_backend_bare_metal: premium API")    { exercise_premium_api<osal::bus_backend_bare_metal>(); }
-TEST_CASE("bus_backend_bare_metal: capabilities")   { check_lcd_capabilities<osal::bus_backend_bare_metal>(); }
+TEST_CASE("bus_backend_bare_metal: LCD API")
+{
+    exercise_lcd_api<osal::bus_backend_bare_metal>();
+}
+TEST_CASE("bus_backend_bare_metal: channel API")
+{
+    exercise_channel_api<osal::bus_backend_bare_metal>();
+}
+TEST_CASE("bus_backend_bare_metal: premium API")
+{
+    exercise_premium_api<osal::bus_backend_bare_metal>();
+}
+TEST_CASE("bus_backend_bare_metal: capabilities")
+{
+    check_lcd_capabilities<osal::bus_backend_bare_metal>();
+}
 
 // --- ThreadX ---
-TEST_CASE("bus_backend_threadx: LCD API")       { exercise_lcd_api<osal::bus_backend_threadx>(); }
-TEST_CASE("bus_backend_threadx: channel API")   { exercise_channel_api<osal::bus_backend_threadx>(); }
-TEST_CASE("bus_backend_threadx: premium API")   { exercise_premium_api<osal::bus_backend_threadx>(); }
-TEST_CASE("bus_backend_threadx: capabilities")  { check_lcd_capabilities<osal::bus_backend_threadx>(); }
+TEST_CASE("bus_backend_threadx: LCD API")
+{
+    exercise_lcd_api<osal::bus_backend_threadx>();
+}
+TEST_CASE("bus_backend_threadx: channel API")
+{
+    exercise_channel_api<osal::bus_backend_threadx>();
+}
+TEST_CASE("bus_backend_threadx: premium API")
+{
+    exercise_premium_api<osal::bus_backend_threadx>();
+}
+TEST_CASE("bus_backend_threadx: capabilities")
+{
+    check_lcd_capabilities<osal::bus_backend_threadx>();
+}
 
 // --- PX5 ---
-TEST_CASE("bus_backend_px5: LCD API")           { exercise_lcd_api<osal::bus_backend_px5>(); }
-TEST_CASE("bus_backend_px5: channel API")       { exercise_channel_api<osal::bus_backend_px5>(); }
-TEST_CASE("bus_backend_px5: premium API")       { exercise_premium_api<osal::bus_backend_px5>(); }
-TEST_CASE("bus_backend_px5: capabilities")      { check_lcd_capabilities<osal::bus_backend_px5>(); }
+TEST_CASE("bus_backend_px5: LCD API")
+{
+    exercise_lcd_api<osal::bus_backend_px5>();
+}
+TEST_CASE("bus_backend_px5: channel API")
+{
+    exercise_channel_api<osal::bus_backend_px5>();
+}
+TEST_CASE("bus_backend_px5: premium API")
+{
+    exercise_premium_api<osal::bus_backend_px5>();
+}
+TEST_CASE("bus_backend_px5: capabilities")
+{
+    check_lcd_capabilities<osal::bus_backend_px5>();
+}
 
 // --- Linux ---
-TEST_CASE("bus_backend_linux: LCD API")         { exercise_lcd_api<osal::bus_backend_linux>(); }
-TEST_CASE("bus_backend_linux: channel API")     { exercise_channel_api<osal::bus_backend_linux>(); }
-TEST_CASE("bus_backend_linux: premium API")     { exercise_premium_api<osal::bus_backend_linux>(); }
-TEST_CASE("bus_backend_linux: capabilities")    { check_lcd_capabilities<osal::bus_backend_linux>(); }
+TEST_CASE("bus_backend_linux: LCD API")
+{
+    exercise_lcd_api<osal::bus_backend_linux>();
+}
+TEST_CASE("bus_backend_linux: channel API")
+{
+    exercise_channel_api<osal::bus_backend_linux>();
+}
+TEST_CASE("bus_backend_linux: premium API")
+{
+    exercise_premium_api<osal::bus_backend_linux>();
+}
+TEST_CASE("bus_backend_linux: capabilities")
+{
+    check_lcd_capabilities<osal::bus_backend_linux>();
+}
 
 // --- VxWorks ---
-TEST_CASE("bus_backend_vxworks: LCD API")       { exercise_lcd_api<osal::bus_backend_vxworks>(); }
-TEST_CASE("bus_backend_vxworks: channel API")   { exercise_channel_api<osal::bus_backend_vxworks>(); }
-TEST_CASE("bus_backend_vxworks: premium API")   { exercise_premium_api<osal::bus_backend_vxworks>(); }
-TEST_CASE("bus_backend_vxworks: capabilities")  { check_lcd_capabilities<osal::bus_backend_vxworks>(); }
+TEST_CASE("bus_backend_vxworks: LCD API")
+{
+    exercise_lcd_api<osal::bus_backend_vxworks>();
+}
+TEST_CASE("bus_backend_vxworks: channel API")
+{
+    exercise_channel_api<osal::bus_backend_vxworks>();
+}
+TEST_CASE("bus_backend_vxworks: premium API")
+{
+    exercise_premium_api<osal::bus_backend_vxworks>();
+}
+TEST_CASE("bus_backend_vxworks: capabilities")
+{
+    check_lcd_capabilities<osal::bus_backend_vxworks>();
+}
 
 // --- NuttX ---
-TEST_CASE("bus_backend_nuttx: LCD API")         { exercise_lcd_api<osal::bus_backend_nuttx>(); }
-TEST_CASE("bus_backend_nuttx: channel API")     { exercise_channel_api<osal::bus_backend_nuttx>(); }
-TEST_CASE("bus_backend_nuttx: premium API")     { exercise_premium_api<osal::bus_backend_nuttx>(); }
-TEST_CASE("bus_backend_nuttx: capabilities")    { check_lcd_capabilities<osal::bus_backend_nuttx>(); }
+TEST_CASE("bus_backend_nuttx: LCD API")
+{
+    exercise_lcd_api<osal::bus_backend_nuttx>();
+}
+TEST_CASE("bus_backend_nuttx: channel API")
+{
+    exercise_channel_api<osal::bus_backend_nuttx>();
+}
+TEST_CASE("bus_backend_nuttx: premium API")
+{
+    exercise_premium_api<osal::bus_backend_nuttx>();
+}
+TEST_CASE("bus_backend_nuttx: capabilities")
+{
+    check_lcd_capabilities<osal::bus_backend_nuttx>();
+}
 
 // --- Micrium ---
-TEST_CASE("bus_backend_micrium: LCD API")       { exercise_lcd_api<osal::bus_backend_micrium>(); }
-TEST_CASE("bus_backend_micrium: channel API")   { exercise_channel_api<osal::bus_backend_micrium>(); }
-TEST_CASE("bus_backend_micrium: premium API")   { exercise_premium_api<osal::bus_backend_micrium>(); }
-TEST_CASE("bus_backend_micrium: capabilities")  { check_lcd_capabilities<osal::bus_backend_micrium>(); }
+TEST_CASE("bus_backend_micrium: LCD API")
+{
+    exercise_lcd_api<osal::bus_backend_micrium>();
+}
+TEST_CASE("bus_backend_micrium: channel API")
+{
+    exercise_channel_api<osal::bus_backend_micrium>();
+}
+TEST_CASE("bus_backend_micrium: premium API")
+{
+    exercise_premium_api<osal::bus_backend_micrium>();
+}
+TEST_CASE("bus_backend_micrium: capabilities")
+{
+    check_lcd_capabilities<osal::bus_backend_micrium>();
+}
 
 // --- ChibiOS ---
-TEST_CASE("bus_backend_chibios: LCD API")       { exercise_lcd_api<osal::bus_backend_chibios>(); }
-TEST_CASE("bus_backend_chibios: channel API")   { exercise_channel_api<osal::bus_backend_chibios>(); }
-TEST_CASE("bus_backend_chibios: premium API")   { exercise_premium_api<osal::bus_backend_chibios>(); }
-TEST_CASE("bus_backend_chibios: capabilities")  { check_lcd_capabilities<osal::bus_backend_chibios>(); }
+TEST_CASE("bus_backend_chibios: LCD API")
+{
+    exercise_lcd_api<osal::bus_backend_chibios>();
+}
+TEST_CASE("bus_backend_chibios: channel API")
+{
+    exercise_channel_api<osal::bus_backend_chibios>();
+}
+TEST_CASE("bus_backend_chibios: premium API")
+{
+    exercise_premium_api<osal::bus_backend_chibios>();
+}
+TEST_CASE("bus_backend_chibios: capabilities")
+{
+    check_lcd_capabilities<osal::bus_backend_chibios>();
+}
 
 // --- embOS ---
-TEST_CASE("bus_backend_embos: LCD API")         { exercise_lcd_api<osal::bus_backend_embos>(); }
-TEST_CASE("bus_backend_embos: channel API")     { exercise_channel_api<osal::bus_backend_embos>(); }
-TEST_CASE("bus_backend_embos: premium API")     { exercise_premium_api<osal::bus_backend_embos>(); }
-TEST_CASE("bus_backend_embos: capabilities")    { check_lcd_capabilities<osal::bus_backend_embos>(); }
+TEST_CASE("bus_backend_embos: LCD API")
+{
+    exercise_lcd_api<osal::bus_backend_embos>();
+}
+TEST_CASE("bus_backend_embos: channel API")
+{
+    exercise_channel_api<osal::bus_backend_embos>();
+}
+TEST_CASE("bus_backend_embos: premium API")
+{
+    exercise_premium_api<osal::bus_backend_embos>();
+}
+TEST_CASE("bus_backend_embos: capabilities")
+{
+    check_lcd_capabilities<osal::bus_backend_embos>();
+}
 
 // --- QNX ---
-TEST_CASE("bus_backend_qnx: LCD API")           { exercise_lcd_api<osal::bus_backend_qnx>(); }
-TEST_CASE("bus_backend_qnx: channel API")       { exercise_channel_api<osal::bus_backend_qnx>(); }
-TEST_CASE("bus_backend_qnx: premium API")       { exercise_premium_api<osal::bus_backend_qnx>(); }
-TEST_CASE("bus_backend_qnx: capabilities")      { check_lcd_capabilities<osal::bus_backend_qnx>(); }
+TEST_CASE("bus_backend_qnx: LCD API")
+{
+    exercise_lcd_api<osal::bus_backend_qnx>();
+}
+TEST_CASE("bus_backend_qnx: channel API")
+{
+    exercise_channel_api<osal::bus_backend_qnx>();
+}
+TEST_CASE("bus_backend_qnx: premium API")
+{
+    exercise_premium_api<osal::bus_backend_qnx>();
+}
+TEST_CASE("bus_backend_qnx: capabilities")
+{
+    check_lcd_capabilities<osal::bus_backend_qnx>();
+}
 
 // --- RTEMS ---
-TEST_CASE("bus_backend_rtems: LCD API")         { exercise_lcd_api<osal::bus_backend_rtems>(); }
-TEST_CASE("bus_backend_rtems: channel API")     { exercise_channel_api<osal::bus_backend_rtems>(); }
-TEST_CASE("bus_backend_rtems: premium API")     { exercise_premium_api<osal::bus_backend_rtems>(); }
-TEST_CASE("bus_backend_rtems: capabilities")    { check_lcd_capabilities<osal::bus_backend_rtems>(); }
+TEST_CASE("bus_backend_rtems: LCD API")
+{
+    exercise_lcd_api<osal::bus_backend_rtems>();
+}
+TEST_CASE("bus_backend_rtems: channel API")
+{
+    exercise_channel_api<osal::bus_backend_rtems>();
+}
+TEST_CASE("bus_backend_rtems: premium API")
+{
+    exercise_premium_api<osal::bus_backend_rtems>();
+}
+TEST_CASE("bus_backend_rtems: capabilities")
+{
+    check_lcd_capabilities<osal::bus_backend_rtems>();
+}
 
 // --- INTEGRITY ---
-TEST_CASE("bus_backend_integrity: LCD API")         { exercise_lcd_api<osal::bus_backend_integrity>(); }
-TEST_CASE("bus_backend_integrity: channel API")     { exercise_channel_api<osal::bus_backend_integrity>(); }
-TEST_CASE("bus_backend_integrity: premium API")     { exercise_premium_api<osal::bus_backend_integrity>(); }
-TEST_CASE("bus_backend_integrity: capabilities")    { check_lcd_capabilities<osal::bus_backend_integrity>(); }
+TEST_CASE("bus_backend_integrity: LCD API")
+{
+    exercise_lcd_api<osal::bus_backend_integrity>();
+}
+TEST_CASE("bus_backend_integrity: channel API")
+{
+    exercise_channel_api<osal::bus_backend_integrity>();
+}
+TEST_CASE("bus_backend_integrity: premium API")
+{
+    exercise_premium_api<osal::bus_backend_integrity>();
+}
+TEST_CASE("bus_backend_integrity: capabilities")
+{
+    check_lcd_capabilities<osal::bus_backend_integrity>();
+}
 
 // --- CMSIS-RTOS v1 ---
-TEST_CASE("bus_backend_cmsis_rtos: LCD API")        { exercise_lcd_api<osal::bus_backend_cmsis_rtos>(); }
-TEST_CASE("bus_backend_cmsis_rtos: channel API")    { exercise_channel_api<osal::bus_backend_cmsis_rtos>(); }
-TEST_CASE("bus_backend_cmsis_rtos: premium API")    { exercise_premium_api<osal::bus_backend_cmsis_rtos>(); }
-TEST_CASE("bus_backend_cmsis_rtos: capabilities")   { check_lcd_capabilities<osal::bus_backend_cmsis_rtos>(); }
+TEST_CASE("bus_backend_cmsis_rtos: LCD API")
+{
+    exercise_lcd_api<osal::bus_backend_cmsis_rtos>();
+}
+TEST_CASE("bus_backend_cmsis_rtos: channel API")
+{
+    exercise_channel_api<osal::bus_backend_cmsis_rtos>();
+}
+TEST_CASE("bus_backend_cmsis_rtos: premium API")
+{
+    exercise_premium_api<osal::bus_backend_cmsis_rtos>();
+}
+TEST_CASE("bus_backend_cmsis_rtos: capabilities")
+{
+    check_lcd_capabilities<osal::bus_backend_cmsis_rtos>();
+}
 
 // --- CMSIS-RTOS2 v2 ---
-TEST_CASE("bus_backend_cmsis_rtos2: LCD API")       { exercise_lcd_api<osal::bus_backend_cmsis_rtos2>(); }
-TEST_CASE("bus_backend_cmsis_rtos2: channel API")   { exercise_channel_api<osal::bus_backend_cmsis_rtos2>(); }
-TEST_CASE("bus_backend_cmsis_rtos2: premium API")   { exercise_premium_api<osal::bus_backend_cmsis_rtos2>(); }
-TEST_CASE("bus_backend_cmsis_rtos2: capabilities")  { check_lcd_capabilities<osal::bus_backend_cmsis_rtos2>(); }
+TEST_CASE("bus_backend_cmsis_rtos2: LCD API")
+{
+    exercise_lcd_api<osal::bus_backend_cmsis_rtos2>();
+}
+TEST_CASE("bus_backend_cmsis_rtos2: channel API")
+{
+    exercise_channel_api<osal::bus_backend_cmsis_rtos2>();
+}
+TEST_CASE("bus_backend_cmsis_rtos2: premium API")
+{
+    exercise_premium_api<osal::bus_backend_cmsis_rtos2>();
+}
+TEST_CASE("bus_backend_cmsis_rtos2: capabilities")
+{
+    check_lcd_capabilities<osal::bus_backend_cmsis_rtos2>();
+}
 
 // ===========================================================================
 // Cross-backend: default tag resolves for the current build

@@ -55,8 +55,8 @@ to backend .cpp definitions;
 (static library);
 
 if (OSAL_BUILD_TESTS=ON?) then (yes)
-  :Build 22 test executables
-  (doctest framework);
+  :Build enabled test executables
+  (core doctest + bus/pubsub targets);
   :Register with CTest;
   :Run **ctest**;
   if (All tests pass?) then (yes)

@@ -1,45 +1,60 @@
-@startuml channel_architecture
+@startuml bus_architecture
 !include _render_profile.puml
 
-title micrOSAL Channel Layer — Architecture
+title micrOSAL Bus + Signal Layer — Architecture
+left to right direction
 
-package "User Code" {
-    [Producer]
-    [Consumer A]
-    [Consumer B]
+actor Producer
+actor Subscriber
+actor Observer
+
+package "Bus / Signal API" {
+    component "osal_bus<T, Capacity>" as BUS
+    component "osal_signal<T, N, M>" as SIGNAL
+    component "osal_signal_premium<T, N, M>" as PREMIUM
 }
 
-package "Channel API" {
-    interface "osal_signal<T,N,M>" as LCD
-    interface "osal_signal_premium<T,N,M>" as PREMIUM
-    PREMIUM -|> LCD
+package "Implemented Runtime" {
+    component "bus_backend_generic\ncanonical LCD runtime" as GEN
+    component "delegated bus_backend_* tags\n16 tags -> generic" as DEL
+    component "bus_backend_mock\ntest-only premium tag" as MOCK
 }
 
-package "osal_bus<T,Capacity>" {
-    [Generic Channel\n(queue-backed)] as GEN_CH
-    [Zephyr Channel\n(zbus-backed)] as ZEP_CH
+package "Premium Helpers" {
+    component "observer table" as OBS
+    component "publish_zero_copy()\ncopy fallback today" as ZCOPY
+    component "route_to()\nstub today" as ROUTE
 }
 
-package "micrOSAL Primitives" {
-    [osal::queue<T,N>]
-    [osal::mutex]
+package "Planned Zephyr Path" {
+    component "bus_backend_zephyr\nZbus skeleton / TODO" as ZEP
+    component "zbus_chan_pub()" as ZPUB
+    component "zbus_sub_wait()" as ZWAIT
 }
 
-package "Zephyr Zbus" {
-    [zbus_chan_pub()]
-    [zbus_sub_wait()]
+package "MicrOSAL Primitives" {
+    component "osal_queue_* C ABI" as QABI
+    component "osal::mutex" as MUTEX
 }
 
-[Producer]   --> LCD       : publish()
-[Consumer A] --> LCD       : subscribe() / try_receive()
-[Consumer B] --> PREMIUM   : subscribe_observer()
+Producer --> BUS : try_send() / send()
+Producer --> SIGNAL : publish()
+Subscriber --> SIGNAL : subscribe() / receive()
+Observer --> PREMIUM : subscribe_observer()
 
-LCD      --> GEN_CH : bus_backend_generic
-LCD      --> ZEP_CH : bus_backend_zephyr
-
-GEN_CH --> [osal::queue<T,N>]
-GEN_CH --> [osal::mutex]
-ZEP_CH --> [zbus_chan_pub()]
-ZEP_CH --> [zbus_sub_wait()]
+PREMIUM --> SIGNAL : extends API
+SIGNAL --> GEN : canonical runtime
+SIGNAL --> DEL : delegated tags
+SIGNAL ..> ZEP : Zephyr default tag\n(currently TODO)
+BUS --> QABI : transport path
+GEN --> QABI : queue path
+GEN --> MUTEX : slot guard
+DEL --> GEN : delegates
+MOCK --> GEN : reuses runtime
+PREMIUM --> OBS : local callbacks
+PREMIUM --> ZCOPY
+PREMIUM --> ROUTE
+ZEP --> ZPUB
+ZEP --> ZWAIT
 
 @enduml

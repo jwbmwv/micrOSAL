@@ -28,7 +28,7 @@ using U32Topic = osal::osal_signal<std::uint32_t, 4U, 8U, osal::bus_backend_gene
 
 TEST_CASE("osal_signal: subscribe returns valid id")
 {
-    U32Topic topic;
+    U32Topic            topic;
     osal::subscriber_id id{osal::invalid_subscriber_id};
     REQUIRE(topic.subscribe(id));
     CHECK(id != osal::invalid_subscriber_id);
@@ -38,8 +38,8 @@ TEST_CASE("osal_signal: subscribe returns valid id")
 
 TEST_CASE("osal_signal: subscribe up to MaxSubscribers")
 {
-    U32Topic                 topic;
-    osal::subscriber_id      ids[4U]{};
+    U32Topic            topic;
+    osal::subscriber_id ids[4U]{};
     for (auto& id : ids)
     {
         REQUIRE(topic.subscribe(id));

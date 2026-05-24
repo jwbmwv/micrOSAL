@@ -53,11 +53,10 @@ int main()
     }
 
     // Register a Zbus observer callback.
-    static auto obs = [](const std::uint32_t& v) noexcept {
-        std::printf("[zephyr-example] observer callback: %u\n", static_cast<unsigned>(v));
-    };
+    static auto obs = [](const std::uint32_t& v) noexcept
+    { std::printf("[zephyr-example] observer callback: %u\n", static_cast<unsigned>(v)); };
     // Cast lambda to function pointer (stateless lambda is convertible).
-    (void)sensor_topic.subscribe_observer(static_cast<void(*)(const std::uint32_t&) noexcept>(obs));
+    (void)sensor_topic.subscribe_observer(static_cast<void (*)(const std::uint32_t&) noexcept>(obs));
 
     // Publish a sensor reading.
     (void)sensor_topic.publish(9876U);

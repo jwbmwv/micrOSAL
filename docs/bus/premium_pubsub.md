@@ -1,18 +1,22 @@
-# Premium Pub/Sub — `osal_signal_premium`
+# Premium Pub/Sub — `osal::osal_signal_premium`
 
 `osal::osal_signal_premium` extends `osal_signal` with observer callbacks,
-zero-copy publish, and routing stubs.  All methods are always compiled;
-they fall back to LCD-equivalent behaviour on non-premium backends.
+copy-avoidance hooks, and a routing API surface.
 
-## Premium Capabilities per Backend
+The methods are always present. The backend traits tell you whether the backend
+has a native implementation behind those methods or whether the premium wrapper
+is using its portable fallback behavior.
 
-| Backend                    | `native_pubsub` | `native_observers` | `zero_copy` | `native_routing` |
-|----------------------------|-----------------|--------------------|-------------|------------------|
-| `bus_backend_generic`  | ✗               | ✗                  | ✗           | ✗                |
-| `bus_backend_zephyr`   | ✓               | ✓                  | ✓           | ✓                |
-| `bus_backend_mock`     | ✓               | ✓                  | ✓           | ✓                |
+## Current Runtime Status
 
-Use `osal::osal_signal_capabilities<BackendTag>` to query flags at compile time.
+| Backend family | Trait flags | Current behavior |
+| --- | --- | --- |
+| `bus_backend_generic` and delegated backends | `native_* == false`, `zero_copy == false` | Local observer table, synchronous observer callbacks, `publish_zero_copy()` falls back to `publish(*ptr)`, `route_to()` returns `false` |
+| `bus_backend_mock` | All premium flags `true` | Hosted test backend; uses the same portable observer/copy fallback behavior while exercising the premium API surface |
+| `bus_backend_zephyr` | All premium flags `true` | Intended Zbus-native path, but the current runtime specialisations are still TODO stubs |
+
+Use `osal::osal_signal_capabilities<BackendTag>` and the `native_*` concepts in
+`osal_signal_traits.hpp` when you need to branch on native backend support.
 
 ## Additional API
 
@@ -21,31 +25,33 @@ Use `osal::osal_signal_capabilities<BackendTag>` to query flags at compile time.
 ```cpp
 using observer_fn = void (*)(const T&) noexcept;
 
-bool subscribe_observer(observer_fn fn);    // register callback
-bool unsubscribe_observer(observer_fn fn);  // deregister callback
-std::size_t observer_count() const;         // number of registered observers
+bool subscribe_observer(observer_fn fn);
+bool unsubscribe_observer(observer_fn fn);
+std::size_t observer_count() const;
 ```
 
-Observers are invoked synchronously on publish (generic/mock backends).
-On Zephyr they are invoked by the Zbus listener thread.
+On the currently implemented backends, observers are invoked synchronously
+during `publish()`. The intended Zephyr-native model is a Zbus listener thread,
+but that runtime path is not wired up yet.
 
-### Zero-Copy Publish
+### `publish_zero_copy()`
 
 ```cpp
 bool publish_zero_copy(T* ptr);
 ```
 
-On capable backends, avoids copying the message into each subscriber queue.
-Falls back to `publish(*ptr)` on generic backends.
+Today, every implemented backend copies from `ptr` and then uses `publish()`.
+The API is present so a future native backend can replace that fallback with a
+true zero-copy or near-zero-copy path.
 
-### Routing (stub)
+### `route_to()`
 
 ```cpp
 bool route_to(signal_id dest, const T& msg);
 ```
 
-Routes a message to another topic identified by `signal_id`.
-**Currently a stub — returns `false`** until a topic registry is implemented.
+`route_to()` is currently a stub on every backend and returns `false` until a
+topic registry or native routing integration is added.
 
 ## Example
 
@@ -54,19 +60,15 @@ Routes a message to another topic identified by `signal_id`.
 
 osal::osal_signal_premium<std::uint32_t, 4, 8, osal::bus_backend_mock> topic;
 
-// Observer registration
-topic.subscribe_observer([](const std::uint32_t& v) noexcept {
-    log("received: %u", v);
+topic.subscribe_observer([](const std::uint32_t& value) noexcept {
+    log("received: %u", value);
 });
 
-// Queue-based subscriber
 osal::subscriber_id sub{osal::invalid_subscriber_id};
 topic.subscribe(sub);
 
-// Publish — both queue-subscribers and observers are notified
 topic.publish(42U);
 
-// Zero-copy publish
 std::uint32_t msg = 99U;
 topic.publish_zero_copy(&msg);
 ```
@@ -76,14 +78,16 @@ topic.publish_zero_copy(&msg);
 ```cpp
 if constexpr (osal::native_observer_backend<BackendTag>)
 {
-    // use topic.subscribe_observer(fn)
+    // Backend intends native observer support.
 }
 
 if constexpr (osal::zero_copy_backend<BackendTag>)
 {
-    // use topic.publish_zero_copy(&msg)
+    // Backend intends a native zero-copy path.
 }
 ```
+
+These concepts describe backend-native capability, not mere API presence.
 
 ## See Also
 

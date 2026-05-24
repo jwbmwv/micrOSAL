@@ -1,15 +1,15 @@
-@startuml channel_sequence_publish
+@startuml bus_sequence_publish
 !include _render_profile.puml
 
-title osal_signal::publish() — Generic Backend Sequence
+title osal::osal_signal::publish() — Generic LCD Backend Sequence
 
 participant "Producer\nThread" as P
-participant "osal_signal\n(generic)" as T
+participant "osal::osal_signal\n(bus_backend_generic)" as T
 participant "osal::mutex" as M
-participant "subscriber_slot[0]\n(osal_bus)" as Q0
-participant "subscriber_slot[1]\n(osal_bus)" as Q1
-participant "Consumer A\nThread" as CA
-participant "Consumer B\nThread" as CB
+participant "subscriber_slot[0]\n(osal::osal_bus)" as Q0
+participant "subscriber_slot[1]\n(osal::osal_bus)" as Q1
+participant "Subscriber A\nThread" as CA
+participant "Subscriber B\nThread" as CB
 
 == publish ==
 
@@ -20,7 +20,7 @@ T -> M : lock()
 activate M
 M --> T : ok
 
-loop for each active slot
+loop for each active subscriber slot
 
   T -> Q0 : try_send(msg)  [slot 0 in_use]
   activate Q0
@@ -39,7 +39,7 @@ end
 T -> M : unlock()
 deactivate M
 
-T --> P : true (both queues accepted)
+T --> P : true (at least one queue accepted msg)
 deactivate T
 
 == receive (independent, concurrent) ==

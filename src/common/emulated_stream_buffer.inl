@@ -209,7 +209,7 @@ extern "C"
     osal::result osal_stream_buffer_create(osal::active_traits::stream_buffer_handle_t* handle, void* buffer,
                                            std::size_t capacity, std::size_t trigger_level) noexcept
     {
-        if (!handle || !buffer || capacity == 0U)
+        if (!handle || !buffer || capacity == 0U) [[unlikely]]
         {
             return osal::error_code::invalid_argument;
         }
@@ -249,7 +249,7 @@ extern "C"
     /// @return `osal::ok()` on success, `error_code::not_initialized` if null.
     osal::result osal_stream_buffer_destroy(osal::active_traits::stream_buffer_handle_t* handle) noexcept
     {
-        if (!handle || !handle->native)
+        if (!handle || !handle->native) [[unlikely]]
         {
             return osal::error_code::not_initialized;
         }
@@ -276,11 +276,11 @@ extern "C"
     osal::result osal_stream_buffer_send(osal::active_traits::stream_buffer_handle_t* handle, const void* data,
                                          std::size_t len, osal::tick_t timeout_ticks) noexcept
     {
-        if (!handle || !handle->native)
+        if (!handle || !handle->native) [[unlikely]]
         {
             return osal::error_code::not_initialized;
         }
-        if (!data || len == 0U)
+        if (!data || len == 0U) [[unlikely]]
         {
             return osal::error_code::invalid_argument;
         }
@@ -322,11 +322,11 @@ extern "C"
     osal::result osal_stream_buffer_send_isr(osal::active_traits::stream_buffer_handle_t* handle, const void* data,
                                              std::size_t len) noexcept
     {
-        if (!handle || !handle->native)
+        if (!handle || !handle->native) [[unlikely]]
         {
             return osal::error_code::not_initialized;
         }
-        if (!data || len == 0U)
+        if (!data || len == 0U) [[unlikely]]
         {
             return osal::error_code::invalid_argument;
         }
@@ -355,7 +355,7 @@ extern "C"
     std::size_t osal_stream_buffer_receive(osal::active_traits::stream_buffer_handle_t* handle, void* buf,
                                            std::size_t max_len, osal::tick_t timeout_ticks) noexcept
     {
-        if (!handle || !handle->native || !buf || max_len == 0U)
+        if (!handle || !handle->native || !buf || max_len == 0U) [[unlikely]]
         {
             return 0U;
         }
@@ -395,7 +395,7 @@ extern "C"
     std::size_t osal_stream_buffer_receive_isr(osal::active_traits::stream_buffer_handle_t* handle, void* buf,
                                                std::size_t max_len) noexcept
     {
-        if (!handle || !handle->native || !buf || max_len == 0U)
+        if (!handle || !handle->native || !buf || max_len == 0U) [[unlikely]]
         {
             return 0U;
         }
@@ -422,7 +422,7 @@ extern "C"
     /// @return Byte count, or 0 if @p handle is null.
     std::size_t osal_stream_buffer_available(const osal::active_traits::stream_buffer_handle_t* handle) noexcept
     {
-        if (!handle || !handle->native)
+        if (!handle || !handle->native) [[unlikely]]
         {
             return 0U;
         }
@@ -434,7 +434,7 @@ extern "C"
     /// @return Free byte count, or 0 if @p handle is null.
     std::size_t osal_stream_buffer_free_space(const osal::active_traits::stream_buffer_handle_t* handle) noexcept
     {
-        if (!handle || !handle->native)
+        if (!handle || !handle->native) [[unlikely]]
         {
             return 0U;
         }
@@ -450,7 +450,7 @@ extern "C"
     /// @return `osal::ok()` on success, `error_code::not_initialized` if null.
     osal::result osal_stream_buffer_reset(osal::active_traits::stream_buffer_handle_t* handle) noexcept
     {
-        if (!handle || !handle->native)
+        if (!handle || !handle->native) [[unlikely]]
         {
             return osal::error_code::not_initialized;
         }

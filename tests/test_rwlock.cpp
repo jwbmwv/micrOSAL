@@ -103,16 +103,16 @@ TEST_CASE("rwlock: multiple readers can hold lock concurrently")
 
 TEST_CASE("rwlock: writer blocks readers")
 {
-    static osal::rwlock  rw;
-    static volatile bool reader_saw_data = false;
-    static volatile int  shared_value    = 0;
-    reader_saw_data                      = false;
-    shared_value                         = 0;
+    static osal::rwlock rw;
+    static bool         reader_saw_data = false;
+    static int          shared_value    = 0;
+    reader_saw_data                     = false;
+    shared_value                        = 0;
 
     struct ctx_t
     {
-        volatile int*  value;
-        volatile bool* saw;
+        int*  value;
+        bool* saw;
     };
 
     // Writer holds the lock, sets value, releases.
@@ -177,13 +177,13 @@ TEST_CASE("rwlock: write_lock_for succeeds on unlocked lock")
 
 TEST_CASE("rwlock: write_lock_for times out when another writer holds it")
 {
-    static osal::rwlock  rw;
-    static volatile bool writer_locked = false;
+    static osal::rwlock     rw;
+    static std::atomic_bool writer_locked{false};
 
     auto holder = [](void*)
     {
         (void)rw.write_lock();
-        writer_locked = true;
+        writer_locked.store(true, std::memory_order_release);
         osal::thread::sleep_for(osal::milliseconds{200});
         (void)rw.write_unlock();
     };
@@ -191,7 +191,7 @@ TEST_CASE("rwlock: write_lock_for times out when another writer holds it")
     osal::thread th;
     REQUIRE(th.create(make_cfg(holder, nullptr, t_stack_a, sizeof(t_stack_a), "holder")).ok());
 
-    while (!writer_locked)
+    while (!writer_locked.load(std::memory_order_acquire))
     {
         osal::thread::yield();
     }

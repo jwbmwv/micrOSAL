@@ -44,10 +44,10 @@ TEST_CASE("condvar: notify_one wakes one waiting thread")
     REQUIRE(mtx.valid());
     REQUIRE(cv.valid());
 
-    static volatile bool data_ready = false;
-    static volatile bool consumed   = false;
-    data_ready                      = false;
-    consumed                        = false;
+    static bool data_ready = false;
+    static bool consumed   = false;
+    data_ready             = false;
+    consumed               = false;
 
     // Consumer thread: wait for the flag.
     auto consumer = [](void*)
@@ -88,7 +88,7 @@ TEST_CASE("condvar: notify_all wakes all waiting threads")
     REQUIRE(mtx.valid());
     REQUIRE(cv.valid());
 
-    static volatile bool    go = false;
+    static bool             go = false;
     static std::atomic<int> woke_up{0};
     go = false;
     woke_up.store(0);
@@ -284,8 +284,8 @@ TEST_CASE("condvar: wait with predicate blocks until predicate is true")
     REQUIRE(mtx.valid());
     REQUIRE(cv.valid());
 
-    static volatile bool ready = false;
-    ready                      = false;
+    static bool ready = false;
+    ready             = false;
 
     auto setter = [](void*)
     {
@@ -338,8 +338,8 @@ TEST_CASE("condvar: wait_for with predicate succeeds before timeout")
     REQUIRE(mtx.valid());
     REQUIRE(cv.valid());
 
-    static volatile bool flag = false;
-    flag                      = false;
+    static bool flag = false;
+    flag             = false;
 
     auto setter = [](void*)
     {
@@ -396,8 +396,8 @@ TEST_CASE("condvar: wait_until with predicate succeeds before deadline")
     REQUIRE(mtx.valid());
     REQUIRE(cv.valid());
 
-    static volatile bool ready2 = false;
-    ready2                      = false;
+    static bool ready2 = false;
+    ready2             = false;
 
     auto setter = [](void*)
     {

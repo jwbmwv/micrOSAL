@@ -221,15 +221,15 @@ printf 'microsal_test\nexit\n' | timeout 120 ./nuttx/build/nuttx
 
 | Backend | Test suite | Runner | Status |
 | --- | --- | --- | --- |
-| Linux | CTest / doctest | Native process | ✅ 25/25 locally rerun |
-| POSIX | CTest / doctest | Native process | ✅ same 25 hosted binaries configured in CI |
-| Bare-metal | CTest / doctest | Native process with hosted self-tick/context helper | ✅ same 25 hosted binaries configured in CI |
-| RTEMS | CTest / doctest | Native process | ✅ same 25 hosted binaries configured in CI |
-| INTEGRITY | CTest / doctest | Native process | ✅ same 25 hosted binaries configured in CI |
-| FreeRTOS v11 | CTest / doctest | POSIX sim | ✅ 42/42 locally rerun |
+| Linux | CTest / doctest | Native process | ✅ 28/28 locally rerun |
+| POSIX | CTest / doctest | Native process | ✅ same 28 hosted binaries configured in CI |
+| Bare-metal | CTest / doctest | Native process with hosted self-tick/context helper | ✅ same 28 hosted binaries configured in CI |
+| RTEMS | CTest / doctest | Native process | ✅ same 28 hosted binaries configured in CI |
+| INTEGRITY | CTest / doctest | Native process | ✅ same 28 hosted binaries configured in CI |
+| FreeRTOS v11 | CTest / doctest | POSIX sim | ✅ 44/44 locally rerun |
 | NuttX (`sim/nsh`) | printf framework | NuttX sim on x86-64 Linux | ✅ 30/30 last recorded rerun |
-| Zephyr (`native_sim`) | west twister / ztest | Native process | ✅ 188/188 locally rerun across 2 configs |
-| Zephyr (`nrf52840dk`) | west twister / ztest | Renode v1.15.3 | ✅ 79/79 last recorded rerun |
+| Zephyr (`native_sim`) | west twister / ztest | Native process | ✅ 194/194 locally rerun across 2 configs |
+| Zephyr (`nrf52840dk`) | west twister / ztest | Renode v1.15.3 | ⚠️ 79/79 last recorded rerun on the pre-thread-introspection suite |
 | ThreadX / PX5 / VxWorks / Micrium / ChibiOS / embOS / CMSIS-RTOS{,2} / QNX | Vendor or non-hosted SDK integration | External toolchain / licensed SDK required | Documented, not GitHub-hosted CI-built |
 
 Several backends intentionally remain out of GitHub-hosted CI because their
@@ -252,6 +252,8 @@ coverage matrix and gap analysis.
 | [`docs/TestCoverage.md`](docs/TestCoverage.md) | Test suite inventory and coverage matrix |
 | [`docs/threading_model.md`](docs/threading_model.md) | Thread lifecycle, priorities, and scheduling model |
 | [`docs/c_api.md`](docs/c_api.md) | Pure-C API reference |
+| [`docs/bus/bus_overview.md`](docs/bus/bus_overview.md) | Bus/signal layer overview, backend status, and usage notes |
+| [`docs/diagrams/README.md`](docs/diagrams/README.md) | PlantUML diagram index and render instructions |
 
 API documentation can be generated with Doxygen:
 

@@ -83,28 +83,42 @@ static void emu_mpool_release(emulated_pool_obj* p) noexcept
     }
 }
 
+static std::uint32_t pool_bitmap_word_mask(const emulated_pool_obj* p, std::size_t word_index) noexcept
+{
+    const std::size_t word_base = word_index * 32U;
+    const std::size_t remaining = p->block_count - word_base;
+    return (remaining >= 32U) ? 0xFFFFFFFFU : ((std::uint32_t{1} << remaining) - 1U);
+}
+
+static unsigned pool_first_free_bit(std::uint32_t free_mask) noexcept
+{
+#if defined(__GNUC__) || defined(__clang__)
+    return static_cast<unsigned>(__builtin_ctz(free_mask));
+#else
+    unsigned bit = 0U;
+    while ((free_mask & 1U) == 0U)
+    {
+        free_mask >>= 1U;
+        ++bit;
+    }
+    return bit;
+#endif
+}
+
 /// Find the first zero bit in the bitmap and set it.  Returns the block index,
 /// or block_count if none is free (should not happen when called under sem).
 static std::size_t pool_bitmap_alloc(emulated_pool_obj* p) noexcept
 {
     for (std::size_t w = 0; w < p->bitmap_words; ++w)
     {
-        if (p->bitmap[w] != 0xFFFFFFFFU)
+        const std::uint32_t free_mask = static_cast<std::uint32_t>(~p->bitmap[w]) & pool_bitmap_word_mask(p, w);
+        if (free_mask != 0U)
         {
-            for (unsigned b = 0; b < 32U; ++b)
-            {
-                const std::size_t idx = w * 32U + b;
-                if (idx >= p->block_count)
-                {
-                    return p->block_count;
-                }
-                if ((p->bitmap[w] & (1U << b)) == 0U)
-                {
-                    p->bitmap[w] |= (1U << b);
-                    --p->available;
-                    return idx;
-                }
-            }
+            const unsigned    b   = pool_first_free_bit(free_mask);
+            const std::size_t idx = w * 32U + b;
+            p->bitmap[w] |= (std::uint32_t{1} << b);
+            --p->available;
+            return idx;
         }
     }
     return p->block_count;
@@ -138,11 +152,11 @@ osal::result osal_memory_pool_create(osal::active_traits::memory_pool_handle_t* 
                                      std::size_t buf_bytes, std::size_t block_size, std::size_t block_count,
                                      const char* /*name*/) noexcept
 {
-    if (!handle || !buffer || block_size == 0 || block_count == 0)
+    if (!handle || !buffer || block_size == 0 || block_count == 0) [[unlikely]]
     {
         return osal::error_code::invalid_argument;
     }
-    if (buf_bytes < block_size * block_count)
+    if (buf_bytes < block_size * block_count) [[unlikely]]
     {
         return osal::error_code::invalid_argument;
     }
@@ -159,7 +173,7 @@ osal::result osal_memory_pool_create(osal::active_traits::memory_pool_handle_t* 
     pool->available    = block_count;
     pool->bitmap_words = (block_count + 31U) / 32U;
 
-    if (pool->bitmap_words > kMpoolBitmapWords)
+    if (pool->bitmap_words > kMpoolBitmapWords) [[unlikely]]
     {
         emu_mpool_release(pool);
         return osal::error_code::invalid_argument;  // Too many blocks for static bitmap.
@@ -190,7 +204,7 @@ osal::result osal_memory_pool_create(osal::active_traits::memory_pool_handle_t* 
 /// @return Always `osal::ok()`.
 osal::result osal_memory_pool_destroy(osal::active_traits::memory_pool_handle_t* handle) noexcept
 {
-    if (!handle || !handle->native)
+    if (!handle || !handle->native) [[unlikely]]
     {
         return osal::ok();
     }
@@ -211,7 +225,7 @@ osal::result osal_memory_pool_destroy(osal::active_traits::memory_pool_handle_t*
 ///         exhausted or @p handle is null.
 void* osal_memory_pool_allocate(osal::active_traits::memory_pool_handle_t* handle) noexcept
 {
-    if (!handle || !handle->native)
+    if (!handle || !handle->native) [[unlikely]]
     {
         return nullptr;
     }
@@ -246,7 +260,7 @@ void* osal_memory_pool_allocate(osal::active_traits::memory_pool_handle_t* handl
 void* osal_memory_pool_allocate_timed(osal::active_traits::memory_pool_handle_t* handle,
                                       osal::tick_t                               timeout_ticks) noexcept
 {
-    if (!handle || !handle->native)
+    if (!handle || !handle->native) [[unlikely]]
     {
         return nullptr;
     }
@@ -280,7 +294,7 @@ void* osal_memory_pool_allocate_timed(osal::active_traits::memory_pool_handle_t*
 ///         or double-free, or if @p handle is null.
 osal::result osal_memory_pool_deallocate(osal::active_traits::memory_pool_handle_t* handle, void* block) noexcept
 {
-    if (!handle || !handle->native || !block)
+    if (!handle || !handle->native || !block) [[unlikely]]
     {
         return osal::error_code::invalid_argument;
     }
@@ -322,7 +336,7 @@ osal::result osal_memory_pool_deallocate(osal::active_traits::memory_pool_handle
 /// @return Number of free blocks, or 0 if @p handle is null.
 std::size_t osal_memory_pool_available(const osal::active_traits::memory_pool_handle_t* handle) noexcept
 {
-    if (!handle || !handle->native)
+    if (!handle || !handle->native) [[unlikely]]
     {
         return 0U;
     }

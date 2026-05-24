@@ -17,6 +17,7 @@
 #include <zephyr/ztest.h>
 #include <zephyr/kernel.h>
 #include <osal/osal.hpp>
+#include <atomic>
 #include <cstring>
 #include <cstdint>
 
@@ -349,11 +350,11 @@ ZTEST_SUITE(osal_mailbox, NULL, NULL, NULL, NULL, NULL);
 // Thread
 // =========================================================================
 
-static volatile bool g_thread_ran = false;
+static std::atomic_bool g_thread_ran{false};
 
 static void thread_entry_basic(void*)
 {
-    g_thread_ran = true;
+    g_thread_ran.store(true, std::memory_order_release);
 }
 
 ZTEST(osal_thread, test_default_not_valid)
@@ -364,7 +365,7 @@ ZTEST(osal_thread, test_default_not_valid)
 
 ZTEST(osal_thread, test_create_join)
 {
-    g_thread_ran = false;
+    g_thread_ran.store(false, std::memory_order_relaxed);
 
     osal::thread        t;
     osal::thread_config cfg{};
@@ -377,7 +378,7 @@ ZTEST(osal_thread, test_create_join)
     zassert_true(t.valid(), NULL);
 
     zassert_true(t.join().ok(), "join should succeed");
-    zassert_true(g_thread_ran, "thread entry should have executed");
+    zassert_true(g_thread_ran.load(std::memory_order_acquire), "thread entry should have executed");
 }
 
 ZTEST(osal_thread, test_yield_no_crash)
@@ -519,11 +520,11 @@ ZTEST_SUITE(osal_thread, NULL, NULL, NULL, NULL, NULL);
 // Timer
 // =========================================================================
 
-static volatile uint32_t g_timer_count = 0;
+static std::atomic<std::uint32_t> g_timer_count{0U};
 
 static void timer_callback_ztest(void*)
 {
-    ++g_timer_count;
+    (void)g_timer_count.fetch_add(1U, std::memory_order_relaxed);
 }
 
 ZTEST(osal_timer, test_construction)
@@ -534,7 +535,7 @@ ZTEST(osal_timer, test_construction)
 
 ZTEST(osal_timer, test_one_shot_fires)
 {
-    g_timer_count = 0;
+    g_timer_count.store(0U, std::memory_order_relaxed);
     osal::timer t{timer_callback_ztest, nullptr, osal::milliseconds{30}, osal::timer_mode::one_shot};
     zassert_true(t.valid(), NULL);
 
@@ -542,12 +543,12 @@ ZTEST(osal_timer, test_one_shot_fires)
     osal::thread::sleep_for(osal::milliseconds{200});
     (void)t.stop();
 
-    zassert_equal(g_timer_count, 1U, "one-shot timer should fire exactly once");
+    zassert_equal(g_timer_count.load(std::memory_order_relaxed), 1U, "one-shot timer should fire exactly once");
 }
 
 ZTEST(osal_timer, test_periodic_fires_multiple)
 {
-    g_timer_count = 0;
+    g_timer_count.store(0U, std::memory_order_relaxed);
     osal::timer t{timer_callback_ztest, nullptr, osal::milliseconds{25}, osal::timer_mode::periodic};
     zassert_true(t.valid(), NULL);
 
@@ -555,12 +556,13 @@ ZTEST(osal_timer, test_periodic_fires_multiple)
     osal::thread::sleep_for(osal::milliseconds{200});
     (void)t.stop();
 
-    zassert_true(g_timer_count >= 2, "periodic timer should fire >= 2 times in 200 ms");
+    zassert_true(g_timer_count.load(std::memory_order_relaxed) >= 2U,
+                 "periodic timer should fire >= 2 times in 200 ms");
 }
 
 ZTEST(osal_timer, test_config_construction)
 {
-    g_timer_count = 0;
+    g_timer_count.store(0U, std::memory_order_relaxed);
     const osal::timer_config cfg{timer_callback_ztest, nullptr, osal::milliseconds{30}, osal::timer_mode::one_shot,
                                  "cfg_tmr"};
     osal::timer              t{cfg};
@@ -569,7 +571,7 @@ ZTEST(osal_timer, test_config_construction)
     zassert_true(t.start().ok(), NULL);
     osal::thread::sleep_for(osal::milliseconds{200});
     (void)t.stop();
-    zassert_equal(g_timer_count, 1U, NULL);
+    zassert_equal(g_timer_count.load(std::memory_order_relaxed), 1U, NULL);
 }
 
 ZTEST_SUITE(osal_timer, NULL, NULL, NULL, NULL, NULL);
@@ -645,9 +647,9 @@ ZTEST_SUITE(osal_condvar, NULL, NULL, NULL, NULL, NULL);
 // Notification
 // =========================================================================
 
-static osal::notification<2>* g_z_note              = nullptr;
-static volatile std::uint32_t g_z_note_value        = 0U;
-static int                    g_z_c_delayable_count = 0;
+static osal::notification<2>*     g_z_note = nullptr;
+static std::atomic<std::uint32_t> g_z_note_value{0U};
+static int                        g_z_c_delayable_count = 0;
 
 static void zephyr_notification_waiter(void*)
 {
@@ -656,7 +658,7 @@ static void zephyr_notification_waiter(void*)
         std::uint32_t value = 0U;
         if (g_z_note->wait(1U, osal::milliseconds{2000}, &value).ok())
         {
-            g_z_note_value = value;
+            g_z_note_value.store(value, std::memory_order_release);
         }
     }
 }
@@ -671,8 +673,8 @@ ZTEST(osal_notification, test_notify_and_wait_round_trip)
 {
     osal::notification<2> note;
     zassert_true(note.valid(), NULL);
-    g_z_note       = &note;
-    g_z_note_value = 0U;
+    g_z_note = &note;
+    g_z_note_value.store(0U, std::memory_order_relaxed);
 
     osal::thread        t;
     osal::thread_config cfg{};
@@ -686,7 +688,7 @@ ZTEST(osal_notification, test_notify_and_wait_round_trip)
     osal::thread::sleep_for(osal::milliseconds{20});
     zassert_true(note.notify(0xCAFEU, osal::notification_action::overwrite, 1U).ok(), NULL);
     zassert_true(t.join().ok(), NULL);
-    zassert_equal(g_z_note_value, 0xCAFEU, NULL);
+    zassert_equal(g_z_note_value.load(std::memory_order_acquire), 0xCAFEU, NULL);
     zassert_false(note.pending(1U), NULL);
     g_z_note = nullptr;
 }
@@ -709,7 +711,7 @@ ZTEST_SUITE(osal_notification, NULL, NULL, NULL, NULL, NULL);
 // Work Queue
 // =========================================================================
 
-static volatile bool g_wq_executed = false;
+static std::atomic_bool g_wq_executed{false};
 
 ZTEST(osal_work_queue, test_construction)
 {
@@ -722,11 +724,11 @@ ZTEST(osal_work_queue, test_submit_and_flush)
     osal::work_queue wq{z_wq_stack, K_THREAD_STACK_SIZEOF(z_wq_stack), 8, "z_wq"};
     zassert_true(wq.valid(), NULL);
 
-    g_wq_executed = false;
-    auto cb       = [](void*) { g_wq_executed = true; };
+    g_wq_executed.store(false, std::memory_order_relaxed);
+    auto cb = [](void*) { g_wq_executed.store(true, std::memory_order_release); };
     zassert_true(wq.submit(cb).ok(), "submit should succeed");
     zassert_true(wq.flush(osal::milliseconds{2000}).ok(), "flush should succeed");
-    zassert_true(g_wq_executed, "work item should have executed");
+    zassert_true(g_wq_executed.load(std::memory_order_acquire), "work item should have executed");
 }
 
 ZTEST(osal_work_queue, test_config_construction)
@@ -735,11 +737,11 @@ ZTEST(osal_work_queue, test_config_construction)
     osal::work_queue              wq{cfg};
     zassert_true(wq.valid(), "config-constructed work_queue should be valid");
 
-    g_wq_executed = false;
-    auto cb       = [](void*) { g_wq_executed = true; };
+    g_wq_executed.store(false, std::memory_order_relaxed);
+    auto cb = [](void*) { g_wq_executed.store(true, std::memory_order_release); };
     zassert_true(wq.submit(cb).ok(), NULL);
     zassert_true(wq.flush(osal::milliseconds{2000}).ok(), NULL);
-    zassert_true(g_wq_executed, NULL);
+    zassert_true(g_wq_executed.load(std::memory_order_acquire), NULL);
 }
 
 ZTEST_SUITE(osal_work_queue, NULL, NULL, NULL, NULL, NULL);
@@ -748,7 +750,7 @@ ZTEST_SUITE(osal_work_queue, NULL, NULL, NULL, NULL, NULL);
 // Delayable Work
 // =========================================================================
 
-static volatile int g_delayable_count = 0;
+static std::atomic<int> g_delayable_count{0};
 
 ZTEST(osal_delayable_work, test_schedule_and_flush)
 {
@@ -760,12 +762,13 @@ ZTEST(osal_delayable_work, test_schedule_and_flush)
     osal::work_queue wq{z_wq_stack, K_THREAD_STACK_SIZEOF(z_wq_stack), 8U, "z_dwq"};
     zassert_true(wq.valid(), NULL);
 
-    g_delayable_count = 0;
-    osal::delayable_work work{wq, +[](void*) { ++g_delayable_count; }, nullptr, "z_dw"};
+    g_delayable_count.store(0, std::memory_order_relaxed);
+    osal::delayable_work work{wq, +[](void*) { (void)g_delayable_count.fetch_add(1, std::memory_order_relaxed); },
+                              nullptr, "z_dw"};
     zassert_true(work.valid(), NULL);
     zassert_true(work.schedule(osal::milliseconds{25}).ok(), NULL);
     zassert_true(work.flush(osal::milliseconds{2000}).ok(), NULL);
-    zassert_equal(g_delayable_count, 1, NULL);
+    zassert_equal(g_delayable_count.load(std::memory_order_relaxed), 1, NULL);
     zassert_false(work.pending(), NULL);
 }
 
@@ -1271,7 +1274,7 @@ ZTEST_SUITE(osal_integration, NULL, NULL, NULL, NULL, NULL);
 
 static osal::mutex*   g_cv_ext_mtx   = nullptr;
 static osal::condvar* g_cv_ext_cv    = nullptr;
-static volatile bool  g_cv_ext_ready = false;
+static bool           g_cv_ext_ready = false;
 
 static void cv_notifier_thread(void*)
 {
@@ -1328,7 +1331,7 @@ ZTEST(osal_condvar, test_wait_for_timeout)
 
 static osal::rwlock*    g_rw_ext = nullptr;
 static std::atomic<int> g_rw_readers_inside{0};
-static volatile bool    g_rw_reader_saw_overlap = false;
+static std::atomic_bool g_rw_reader_saw_overlap{false};
 
 static void rw_concurrent_reader(void*)
 {
@@ -1336,7 +1339,7 @@ static void rw_concurrent_reader(void*)
     g_rw_readers_inside.fetch_add(1, std::memory_order_relaxed);
     osal::thread::sleep_for(osal::milliseconds{40});
     if (g_rw_readers_inside.load(std::memory_order_relaxed) >= 2)
-        g_rw_reader_saw_overlap = true;
+        g_rw_reader_saw_overlap.store(true, std::memory_order_relaxed);
     g_rw_readers_inside.fetch_sub(1, std::memory_order_relaxed);
     (void)g_rw_ext->read_unlock();
 }
@@ -1347,7 +1350,7 @@ ZTEST(osal_rwlock, test_concurrent_readers)
     zassert_true(rw.valid(), NULL);
     g_rw_ext = &rw;
     g_rw_readers_inside.store(0);
-    g_rw_reader_saw_overlap = false;
+    g_rw_reader_saw_overlap.store(false, std::memory_order_relaxed);
 
     osal::thread        ta, tb;
     osal::thread_config ca{}, cb{};
@@ -1363,7 +1366,8 @@ ZTEST(osal_rwlock, test_concurrent_readers)
     zassert_true(tb.create(cb).ok(), NULL);
     zassert_true(ta.join().ok(), NULL);
     zassert_true(tb.join().ok(), NULL);
-    zassert_true(g_rw_reader_saw_overlap, "two readers should hold read_lock concurrently");
+    zassert_true(g_rw_reader_saw_overlap.load(std::memory_order_relaxed),
+                 "two readers should hold read_lock concurrently");
 }
 
 ZTEST(osal_rwlock, test_write_lock_for_success)
@@ -1465,13 +1469,11 @@ ZTEST_SUITE(osal_ring_buffer, NULL, NULL, NULL, NULL, NULL);
 
 static osal::thread_local_data* g_tld_obj       = nullptr;
 static int                      g_tld_child_val = 200;
-static volatile bool            g_tld_done      = false;
 
 static void tld_isolation_entry(void*)
 {
     g_tld_obj->set(&g_tld_child_val);
     osal::thread::sleep_for(osal::milliseconds{20});
-    g_tld_done = true;
 }
 
 ZTEST(osal_thread_local_data, test_construction)
@@ -1502,8 +1504,7 @@ ZTEST(osal_thread_local_data, test_per_thread_isolation)
     zassert_true(tld.valid(), NULL);
     int parent_val = 100;
     tld.set(&parent_val);
-    g_tld_obj  = &tld;
-    g_tld_done = false;
+    g_tld_obj = &tld;
 
     osal::thread        t;
     osal::thread_config cfg{};

@@ -25,6 +25,7 @@
 #define OSAL_BACKEND_NUTTX
 #endif
 #include <osal/osal.hpp>
+#include <osal/detail/atomic_compat.hpp>
 #include "../common/backend_timeout_adapter.hpp"
 
 #include <nuttx/config.h>
@@ -1019,8 +1020,8 @@ extern "C"
 
     struct nx_condvar_obj
     {
-        sem_t        sem{};  ///< NuttX semaphore for condvar signalling.
-        volatile int nwaiters = 0;
+        sem_t            sem{};  ///< NuttX semaphore for condvar signalling.
+        std::atomic<int> nwaiters{0};
     };
 
     /// @brief Allocate and initialise an nxsem-based condvar (sem count = 0).
@@ -1038,7 +1039,7 @@ extern "C"
             return osal::error_code::out_of_resources;
         }
         nxsem_init(&obj->sem, 0, 0);
-        obj->nwaiters  = 0;
+        obj->nwaiters.store(0, std::memory_order_relaxed);
         handle->native = static_cast<void*>(obj);
         return osal::ok();
     }
@@ -1073,7 +1074,7 @@ extern "C"
         }
         auto* obj = static_cast<nx_condvar_obj*>(handle->native);
         auto* mtx = static_cast<mutex_t*>(mutex->native);
-        obj->nwaiters++;
+        (void)obj->nwaiters.fetch_add(1, std::memory_order_relaxed);
         nxmutex_unlock(mtx);
         int rc = 0;
         if (timeout == osal::WAIT_FOREVER)
@@ -1088,7 +1089,7 @@ extern "C"
             const struct timespec abs = ms_to_abs_timespec(timeout);
             rc                        = nxsem_clockwait(&obj->sem, CLOCK_MONOTONIC, &abs);
         }
-        obj->nwaiters--;
+        (void)obj->nwaiters.fetch_sub(1, std::memory_order_relaxed);
         nxmutex_lock(mtx);
         if (rc >= 0)
         {
@@ -1111,7 +1112,7 @@ extern "C"
             return osal::error_code::not_initialized;
         }
         auto* obj = static_cast<nx_condvar_obj*>(handle->native);
-        if (obj->nwaiters > 0)
+        if (obj->nwaiters.load(std::memory_order_relaxed) > 0)
         {
             nxsem_post(&obj->sem);
         }
@@ -1128,7 +1129,7 @@ extern "C"
             return osal::error_code::not_initialized;
         }
         auto*     obj = static_cast<nx_condvar_obj*>(handle->native);
-        const int n   = obj->nwaiters;
+        const int n   = obj->nwaiters.load(std::memory_order_relaxed);
         for (int i = 0; i < n; ++i)
         {
             nxsem_post(&obj->sem);

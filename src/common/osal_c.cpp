@@ -999,7 +999,7 @@ extern "C" osal_result_t osal_c_condvar_notify_all(osal_condvar_handle* handle)
 extern "C" osal_result_t osal_c_notification_create(osal_notification_handle* handle, std::uint32_t* values,
                                                     std::uint8_t* pending, std::size_t slot_count)
 {
-    if ((handle == nullptr) || (values == nullptr) || (pending == nullptr) || (slot_count == 0U))
+    if ((handle == nullptr) || (values == nullptr) || (pending == nullptr) || (slot_count == 0U)) [[unlikely]]
     {
         return OSAL_INVALID_ARGUMENT;
     }
@@ -1038,7 +1038,7 @@ extern "C" osal_result_t osal_c_notification_create(osal_notification_handle* ha
 extern "C" osal_result_t osal_c_notification_create_with_cfg(osal_notification_handle*       handle,
                                                              const osal_notification_config* cfg)
 {
-    if (cfg == nullptr)
+    if (cfg == nullptr) [[unlikely]]
     {
         return OSAL_INVALID_ARGUMENT;
     }
@@ -1047,11 +1047,11 @@ extern "C" osal_result_t osal_c_notification_create_with_cfg(osal_notification_h
 
 extern "C" osal_result_t osal_c_notification_destroy(osal_notification_handle* handle)
 {
-    if (handle == nullptr)
+    if (handle == nullptr) [[unlikely]]
     {
         return OSAL_INVALID_ARGUMENT;
     }
-    if (!notification_valid(handle))
+    if (!notification_valid(handle)) [[unlikely]]
     {
         return OSAL_NOT_INITIALIZED;
     }
@@ -1068,7 +1068,7 @@ extern "C" osal_result_t osal_c_notification_destroy(osal_notification_handle* h
 extern "C" osal_result_t osal_c_notification_notify(osal_notification_handle* handle, std::uint32_t value,
                                                     osal_notification_action action, std::size_t index)
 {
-    if (!notification_index_valid(handle, index))
+    if (!notification_index_valid(handle, index)) [[unlikely]]
     {
         return notification_valid(handle) ? OSAL_INVALID_ARGUMENT : OSAL_NOT_INITIALIZED;
     }
@@ -1116,7 +1116,7 @@ extern "C" osal_result_t osal_c_notification_wait(osal_notification_handle* hand
                                                   std::uint32_t* value_out, std::uint32_t clear_on_entry,
                                                   std::uint32_t clear_on_exit, osal_tick_t timeout)
 {
-    if (!notification_index_valid(handle, index))
+    if (!notification_index_valid(handle, index)) [[unlikely]]
     {
         return notification_valid(handle) ? OSAL_INVALID_ARGUMENT : OSAL_NOT_INITIALIZED;
     }
@@ -1187,7 +1187,7 @@ extern "C" osal_result_t osal_c_notification_wait(osal_notification_handle* hand
 extern "C" osal_result_t osal_c_notification_clear(osal_notification_handle* handle, std::uint32_t bits,
                                                    std::size_t index)
 {
-    if (!notification_index_valid(handle, index))
+    if (!notification_index_valid(handle, index)) [[unlikely]]
     {
         return notification_valid(handle) ? OSAL_INVALID_ARGUMENT : OSAL_NOT_INITIALIZED;
     }
@@ -1205,7 +1205,7 @@ extern "C" osal_result_t osal_c_notification_clear(osal_notification_handle* han
 
 extern "C" osal_result_t osal_c_notification_reset(osal_notification_handle* handle, std::size_t index)
 {
-    if (!notification_index_valid(handle, index))
+    if (!notification_index_valid(handle, index)) [[unlikely]]
     {
         return notification_valid(handle) ? OSAL_INVALID_ARGUMENT : OSAL_NOT_INITIALIZED;
     }
@@ -1344,11 +1344,11 @@ extern "C" size_t osal_c_work_queue_pending(const osal_work_queue_handle* handle
 extern "C" osal_result_t osal_c_delayable_work_create(osal_delayable_work_handle* handle, osal_work_queue_handle* queue,
                                                       osal_c_work_func_t func, void* arg, const char* name)
 {
-    if ((handle == nullptr) || (queue == nullptr) || (func == nullptr) || (queue->native == nullptr))
+    if ((handle == nullptr) || (queue == nullptr) || (func == nullptr) || (queue->native == nullptr)) [[unlikely]]
     {
         return OSAL_INVALID_ARGUMENT;
     }
-    if (!delayable_backend_supported())
+    if (!delayable_backend_supported()) [[unlikely]]
     {
         return OSAL_NOT_SUPPORTED;
     }
@@ -1389,7 +1389,7 @@ extern "C" osal_result_t osal_c_delayable_work_create(osal_delayable_work_handle
 extern "C" osal_result_t osal_c_delayable_work_create_with_cfg(osal_delayable_work_handle*       handle,
                                                                const osal_delayable_work_config* cfg)
 {
-    if (cfg == nullptr)
+    if (cfg == nullptr) [[unlikely]]
     {
         return OSAL_INVALID_ARGUMENT;
     }
@@ -1398,11 +1398,11 @@ extern "C" osal_result_t osal_c_delayable_work_create_with_cfg(osal_delayable_wo
 
 extern "C" osal_result_t osal_c_delayable_work_destroy(osal_delayable_work_handle* handle)
 {
-    if (handle == nullptr)
+    if (handle == nullptr) [[unlikely]]
     {
         return OSAL_INVALID_ARGUMENT;
     }
-    if (!delayable_valid(handle))
+    if (!delayable_valid(handle)) [[unlikely]]
     {
         return OSAL_NOT_INITIALIZED;
     }
@@ -1442,7 +1442,7 @@ extern "C" osal_result_t osal_c_delayable_work_destroy(osal_delayable_work_handl
 
 extern "C" osal_result_t osal_c_delayable_work_schedule(osal_delayable_work_handle* handle, osal_tick_t delay_ticks)
 {
-    if (!delayable_valid(handle))
+    if (!delayable_valid(handle)) [[unlikely]]
     {
         return OSAL_NOT_INITIALIZED;
     }
@@ -1470,7 +1470,7 @@ extern "C" osal_result_t osal_c_delayable_work_schedule(osal_delayable_work_hand
 
 extern "C" osal_result_t osal_c_delayable_work_reschedule(osal_delayable_work_handle* handle, osal_tick_t delay_ticks)
 {
-    if (!delayable_valid(handle))
+    if (!delayable_valid(handle)) [[unlikely]]
     {
         return OSAL_NOT_INITIALIZED;
     }
@@ -1516,7 +1516,7 @@ extern "C" osal_result_t osal_c_delayable_work_reschedule(osal_delayable_work_ha
 
 extern "C" osal_result_t osal_c_delayable_work_cancel(osal_delayable_work_handle* handle)
 {
-    if (!delayable_valid(handle))
+    if (!delayable_valid(handle)) [[unlikely]]
     {
         return OSAL_NOT_INITIALIZED;
     }
@@ -1549,7 +1549,7 @@ extern "C" osal_result_t osal_c_delayable_work_cancel(osal_delayable_work_handle
 
 extern "C" osal_result_t osal_c_delayable_work_flush(osal_delayable_work_handle* handle, osal_tick_t timeout)
 {
-    if (!delayable_valid(handle))
+    if (!delayable_valid(handle)) [[unlikely]]
     {
         return OSAL_NOT_INITIALIZED;
     }
@@ -1580,7 +1580,7 @@ extern "C" osal_result_t osal_c_delayable_work_flush(osal_delayable_work_handle*
 
 extern "C" int osal_c_delayable_work_scheduled(const osal_delayable_work_handle* handle)
 {
-    if (!delayable_valid(handle))
+    if (!delayable_valid(handle)) [[unlikely]]
     {
         return 0;
     }
@@ -1590,7 +1590,7 @@ extern "C" int osal_c_delayable_work_scheduled(const osal_delayable_work_handle*
 
 extern "C" int osal_c_delayable_work_pending(const osal_delayable_work_handle* handle)
 {
-    if (!delayable_valid(handle))
+    if (!delayable_valid(handle)) [[unlikely]]
     {
         return 0;
     }
@@ -1604,7 +1604,7 @@ extern "C" int osal_c_delayable_work_pending(const osal_delayable_work_handle* h
 
 extern "C" int osal_c_delayable_work_running(const osal_delayable_work_handle* handle)
 {
-    if (!delayable_valid(handle))
+    if (!delayable_valid(handle)) [[unlikely]]
     {
         return 0;
     }

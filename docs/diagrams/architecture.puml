@@ -98,7 +98,7 @@ package "Shared Emulations" as shared #F3E5F5 {
     [emulated_barrier.inl\n(mutex + condvar + generation)] as emu_barrier
     [emulated_stream_buffer.inl\n(SPSC ring + binary semaphores)] as emu_sb
     [emulated_message_buffer.inl\n(length-prefixed SPSC ring)] as emu_mb
-    [emulated_event_flags.inl\n(mutex + per-waiter semaphore array)] as emu_ef
+    [emulated_event_flags.inl\n(mutex + waiter semaphores + active bitmap)] as emu_ef
 
     package "POSIX shared (src/common/posix/)" as posix_shared #EDE7F6 {
         [posix_clock.inl\n(clock_gettime MONOTONIC/REALTIME)] as posix_clock
@@ -218,6 +218,16 @@ be_vx -left-> emu_rw
 
 be_c1 -left-> emu_rw
 be_c2 -left-> emu_rw
+
+be_po -left-> emu_ef
+be_li -left-> emu_ef
+be_bm -left-> emu_ef
+be_vx -left-> emu_ef
+be_nx -left-> emu_ef
+be_qx -left-> emu_ef
+be_rt -left-> emu_ef
+be_in -left-> emu_ef
+be_c1 -left-> emu_ef
 
 be_fr -left-> emu_barrier
 be_zy -left-> emu_barrier

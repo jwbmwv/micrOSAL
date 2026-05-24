@@ -1,10 +1,11 @@
 # MicrOSAL — Test Coverage
 
-This document catalogues what is and is not tested.  It is updated manually
-whenever new tests are added.  Four independent test suites exist:
+This document catalogues what is and is not tested. It is updated manually
+whenever new tests are added. Four independent test suites exist:
 
-- **Hosted/doctest suite** — 25 test binaries built with CMake, run via CTest; used in CI for Linux,
-  POSIX, Bare-metal, RTEMS, and INTEGRITY backend validation.
+- **Hosted/doctest suite** — 28 test binaries built with CMake, run via CTest; this includes the
+  three bus/pubsub executables under `tests/bus/` and is used in CI for Linux, POSIX, Bare-metal,
+  RTEMS, and INTEGRITY backend validation.
 - **FreeRTOS/doctest suite** — single `tests/freertos/src/main.cpp`, built with CMake, run via
   CTest; uses the FreeRTOS-Kernel v11 POSIX simulation port (runs as a Linux process, no emulator
   required).
@@ -22,12 +23,12 @@ Nine build targets are covered by automated builds or runtime suites:
 
 | Backend | Test suite | Emulator / runner | Coverage |
 | --- | --- | --- | --- |
-| Linux | CMake / CTest (doctest) | None (native process) | ✅ 25 binaries, 25/25 locally rerun |
-| POSIX | CMake / CTest (doctest) | None (native process) | ✅ in CI (`OSAL_BACKEND=POSIX`); same 25 binaries |
-| Bare-metal | CMake / CTest (doctest) | Native process with hosted self-tick/context helper | ✅ in CI (`OSAL_BACKEND=BAREMETAL`); same 25 binaries |
-| RTEMS | CMake / CTest (doctest) | None (native process) | ✅ in CI (`OSAL_BACKEND=RTEMS`); same 25 binaries |
-| INTEGRITY | CMake / CTest (doctest) | None (native process) | ✅ in CI (`OSAL_BACKEND=INTEGRITY`); same 25 binaries |
-| FreeRTOS v11 | CMake / CTest (doctest) | POSIX sim port (no emulator) | ✅ in CI (`freertos-test` job); **43/43 pass** locally rerun |
+| Linux | CMake / CTest (doctest) | None (native process) | ✅ 28 binaries, 28/28 locally rerun |
+| POSIX | CMake / CTest (doctest) | None (native process) | ✅ in CI (`OSAL_BACKEND=POSIX`); same 28 binaries |
+| Bare-metal | CMake / CTest (doctest) | Native process with hosted self-tick/context helper | ✅ in CI (`OSAL_BACKEND=BAREMETAL`); same 28 binaries |
+| RTEMS | CMake / CTest (doctest) | None (native process) | ✅ in CI (`OSAL_BACKEND=RTEMS`); same 28 binaries |
+| INTEGRITY | CMake / CTest (doctest) | None (native process) | ✅ in CI (`OSAL_BACKEND=INTEGRITY`); same 28 binaries |
+| FreeRTOS v11 | CMake / CTest (doctest) | POSIX sim port (no emulator) | ✅ in CI (`freertos-test` job); **44/44 pass** locally rerun |
 | NuttX (main / sim:nsh) | NuttX builtin app (printf framework) | NuttX sim/nsh on x86-64 | ✅ in CI; **30/30 pass** last recorded rerun |
 | Zephyr (`native_sim`) | west twister (ztest) | Native Linux process | ✅ Locally rerun in an isolated Zephyr v4.4 environment; current 97-case suite passed **2/2** configurations and **194/194** test cases |
 | Zephyr (`nrf52840dk`) | west twister (ztest + Renode) | **Renode** v1.15.3 SoC simulation | ⚠️ Last published rerun was **79/79** on the pre-change suite; current 97-case suite not rerun after the stack-watermark, high-resolution-clock, and thread-introspection additions |
@@ -131,7 +132,7 @@ Legend:
 | `osal::mutex` | `test_mutex.cpp` | ✅ | `try_lock_for` timeout path not tested |
 | `osal::semaphore` | `test_semaphore.cpp` | ⚠️ | `give_isr` / `take_isr` not called |
 | `osal::thread` | `test_thread.cpp` | ✅ | Hosted suite now covers capability-gated identity, priority, affinity, current-CPU, execution-time, and stack-watermark queries; FreeRTOS backend suite covers task-notification round-trip plus stack-watermark and identity/priority introspection; Zephyr backend suite covers stack-watermark plus current/worker introspection. Native affinity mutation and embOS task events still lack CI coverage |
-| `osal::queue` | `test_queue.cpp` | ⚠️ | `send_isr` / `receive_isr` not tested; overflow behaviour not asserted |
+| `osal::queue` | `test_queue.cpp` | ⚠️ | Full detection and `try_send()` failure on a full queue are covered; true ISR-context `send_isr` / `receive_isr` coverage is still missing |
 | `osal::mailbox` | `test_mailbox.cpp` | ✅ | Hosted suite plus FreeRTOS, NuttX, and Zephyr backend suites cover single-slot send/receive, full detection, aliases, and cross-thread handoff |
 | `osal::timer` | `test_timer.cpp` | ✅ | One-shot and periodic both covered |
 | `osal::event_flags` | `test_event_flags.cpp` | ⚠️ | Hosted suite covers `wait_any`/`wait_all` timeout, `clear_on_exit`, support/unsupported `set_isr`, cross-thread signalling, and repeated timeout-then-signal reuse cycles; real ISR-context backend coverage is still limited |
@@ -153,6 +154,9 @@ Legend:
 | C API (`osal_c.h`) | `test_c_api.cpp` | ⚠️ | C11 compilation verified; hosted tests cover notification and delayable_work; Zephyr `native_sim` rerun also passes the C notification and C delayable-work round-trips; ISR variants still not called from C |
 | Integration (multi-primitive) | `test_integration.cpp` | ⚠️ | Producer/consumer with queue+semaphore; no rwlock or memory_pool integration |
 | Thread task notification | `test_thread.cpp` | ⚠️ | Unsupported path verified on Linux; native `xTaskNotify` round-trip now covered in the FreeRTOS suite; embOS task-event coverage still needs a licensed SDK environment |
+| `osal::osal_bus` | `tests/bus/test_osal_signal_backends.cpp` | ✅ | Hosted generic and delegated point-to-point channel behavior is covered; the Zephyr native specialisation is still a TODO skeleton |
+| `osal::osal_signal` | `tests/bus/test_osal_signal_lcd.cpp`, `tests/bus/test_osal_signal_backends.cpp` | ✅ | Subscribe/unsubscribe, fan-out, FIFO ordering, full-queue drop semantics, and delegated backend compilation are covered on hosted builds |
+| `osal::osal_signal_premium` | `tests/bus/test_osal_signal_premium.cpp`, `tests/bus/test_osal_signal_backends.cpp` | ⚠️ | Mock-backend observers and copy-based `publish_zero_copy()` fallback are covered; `route_to()` is still a stub and the Zephyr native runtime path is still TODO |
 
 ---
 
@@ -284,7 +288,7 @@ These paths are difficult to reach on a hosted Linux target and are
 | --- | --- |
 | `nullptr` handle arguments | Error paths tested implicitly via destructors; no explicit null-handle test exists |
 | `out_of_resources` on pool exhaustion (threads, mutexes) | Static pool sizes are large; needs a loop to exhaust |
-| `overflow` on queue / work_queue / stream_buffer | Partially covered in stream_buffer; not systematic |
+| Full-queue / overflow behaviour under native RTOS or ISR paths | Hosted coverage exists for `queue`, `work_queue`, `stream_buffer`, and LCD bus drop-on-full semantics; native ISR-context exhaustion paths are still not systematic |
 | ISR-safe variants (`give_isr`, `send_isr`, etc.) | Linux returns `not_supported`; cannot be exercised meaningfully on a hosted build |
 | `WAIT_FOREVER` combined with thread cancellation | No cancellation support in OSAL |
 | `NO_WAIT` (zero-timeout) fast-fail on every primitive | Not systematically tested |

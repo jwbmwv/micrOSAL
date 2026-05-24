@@ -1,5 +1,5 @@
 # .clang-tidy configuration for MicrOSAL
-# C++17 RTOS abstraction layer — no virtual functions, no RTTI
+# C++20 RTOS abstraction layer — no virtual functions, no RTTI
 # Targets: FreeRTOS, Zephyr, ThreadX, PX5, POSIX, Linux, bare-metal
 
 ---
@@ -69,8 +69,8 @@ Checks: >
 
 WarningsAsErrors: ''
 
-# Lint all osal/ headers
-HeaderFilterRegex: '.*\bosal\b.*\.(hpp|h)$'
+# Lint the public osal/ and microsal/ headers
+HeaderFilterRegex: '.*/include/(osal|microsal)/.*\.(hpp|h)$'
 
 CheckOptions:
   # Naming conventions

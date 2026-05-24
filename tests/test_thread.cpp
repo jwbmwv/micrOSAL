@@ -4,6 +4,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <doctest/doctest.h>
 #include <osal/osal.hpp>
+#include <atomic>
 #include <cstring>
 
 static_assert(osal::thread::supports_timed_join == osal::active_capabilities::has_timed_join);
@@ -28,17 +29,17 @@ TEST_CASE("thread: default construction is not valid")
 
 TEST_CASE("thread: create and join")
 {
-    volatile bool executed = false;
+    std::atomic_bool executed{false};
 
     struct ctx_t
     {
-        volatile bool* flag;
+        std::atomic_bool* flag;
     } ctx{&executed};
 
     auto entry = [](void* arg)
     {
-        auto* c  = static_cast<ctx_t*>(arg);
-        *c->flag = true;
+        auto* c = static_cast<ctx_t*>(arg);
+        c->flag->store(true, std::memory_order_release);
     };
 
     alignas(16) static std::uint8_t stack[65536];
@@ -53,7 +54,7 @@ TEST_CASE("thread: create and join")
     CHECK(t.valid());
 
     REQUIRE(t.join().ok());
-    CHECK(executed);
+    CHECK(executed.load(std::memory_order_acquire));
     CHECK_FALSE(t.valid());  // After join, handle is cleared.
 }
 
@@ -107,16 +108,16 @@ TEST_CASE("thread: sleep_for")
 
 TEST_CASE("thread: set_priority")
 {
-    volatile bool ran = false;
+    std::atomic_bool ran{false};
     struct ctx_t
     {
-        volatile bool* flag;
+        std::atomic_bool* flag;
     } ctx{&ran};
 
     auto entry = [](void* arg)
     {
-        auto* c  = static_cast<ctx_t*>(arg);
-        *c->flag = true;
+        auto* c = static_cast<ctx_t*>(arg);
+        c->flag->store(true, std::memory_order_release);
     };
 
     alignas(16) static std::uint8_t stack[65536];
@@ -134,22 +135,22 @@ TEST_CASE("thread: set_priority")
     (void)t.set_priority(osal::PRIORITY_NORMAL + 1);
 
     REQUIRE(t.join().ok());
-    CHECK(ran);
+    CHECK(ran.load(std::memory_order_acquire));
 }
 
 TEST_CASE("thread: suspend/resume")
 {
-    volatile bool keep_running = true;
+    std::atomic_bool keep_running{true};
 
     struct ctx_t
     {
-        volatile bool* running;
+        std::atomic_bool* running;
     } ctx{&keep_running};
 
     auto entry = [](void* arg)
     {
         auto* c = static_cast<ctx_t*>(arg);
-        while (*c->running)
+        while (c->running->load(std::memory_order_relaxed))
         {
             osal::thread::yield();
         }
@@ -176,7 +177,7 @@ TEST_CASE("thread: suspend/resume")
         CHECK(s == osal::error_code::not_supported);
     }
 
-    keep_running = false;
+    keep_running.store(false, std::memory_order_relaxed);
     REQUIRE(t.join().ok());
 }
 

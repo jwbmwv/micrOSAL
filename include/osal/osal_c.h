@@ -30,6 +30,53 @@
 #include <stddef.h>  // NOLINT(hicpp-deprecated-headers,modernize-deprecated-headers)
 #include <stdint.h>  // NOLINT(hicpp-deprecated-headers,modernize-deprecated-headers)
 
+/* ======================================================================== */
+/* Branch prediction hints                                                  */
+/* ======================================================================== */
+
+/**
+ * @brief Hint that a boolean condition is expected to evaluate true.
+ * @details This is a code-generation hint only. It never changes semantics.
+ *          Use these macros only with boolean conditions or expressions used
+ *          directly as conditions.
+ *
+ *          Apply them sparingly and only on measured or strongly justified
+ *          hot paths where the cold branch is expected to stay cold in steady
+ *          state. In C++20-only implementation files, prefer standard
+ *          `[[likely]]` / `[[unlikely]]` branch attributes when they fit.
+ */
+#if defined(__has_builtin)
+#if __has_builtin(__builtin_expect)
+#define OSAL_DETAIL_HAS_BUILTIN_EXPECT 1
+#endif
+#endif
+
+#if !defined(OSAL_DETAIL_HAS_BUILTIN_EXPECT)
+#if defined(__GNUC__) || defined(__clang__)
+#define OSAL_DETAIL_HAS_BUILTIN_EXPECT 1
+#else
+#define OSAL_DETAIL_HAS_BUILTIN_EXPECT 0
+#endif
+#endif
+
+#ifndef OSAL_LIKELY
+#if OSAL_DETAIL_HAS_BUILTIN_EXPECT
+#define OSAL_LIKELY(expr) (__builtin_expect(!!(expr), 1))
+#else
+#define OSAL_LIKELY(expr) (!!(expr))
+#endif
+#endif
+
+#ifndef OSAL_UNLIKELY
+#if OSAL_DETAIL_HAS_BUILTIN_EXPECT
+#define OSAL_UNLIKELY(expr) (__builtin_expect(!!(expr), 0))
+#else
+#define OSAL_UNLIKELY(expr) (!!(expr))
+#endif
+#endif
+
+#undef OSAL_DETAIL_HAS_BUILTIN_EXPECT
+
 #if ((defined(OSAL_CFG_TICK_TYPE_U16) ? 1 : 0) + (defined(OSAL_CFG_TICK_TYPE_U32) ? 1 : 0) + \
      (defined(OSAL_CFG_TICK_TYPE_U64) ? 1 : 0)) > 1
 #error "OSAL: only one of OSAL_CFG_TICK_TYPE_U16/U32/U64 may be defined"

@@ -4,6 +4,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <doctest/doctest.h>
 #include <osal/osal.hpp>
+#include <atomic>
 
 // ---------------------------------------------------------------------------
 // Normal mutex
@@ -36,14 +37,14 @@ TEST_CASE("mutex: try_lock fails when already locked (from another thread)")
     osal::mutex m;
     REQUIRE(m.valid());
 
-    volatile bool locked_by_child = false;
-    volatile bool child_done      = false;
+    std::atomic_bool locked_by_child{false};
+    std::atomic_bool child_done{false};
 
     struct ctx_t
     {
-        osal::mutex*   mtx;
-        volatile bool* locked;
-        volatile bool* done;
+        osal::mutex*      mtx;
+        std::atomic_bool* locked;
+        std::atomic_bool* done;
     } ctx{&m, &locked_by_child, &child_done};
 
     // Lock in a child thread, signal, then wait.
@@ -51,11 +52,11 @@ TEST_CASE("mutex: try_lock fails when already locked (from another thread)")
     {
         auto* c = static_cast<ctx_t*>(arg);
         c->mtx->lock();
-        *c->locked = true;
+        c->locked->store(true, std::memory_order_release);
         // Hold the lock for a bit.
         osal::thread::sleep_for(osal::milliseconds{100});
         c->mtx->unlock();
-        *c->done = true;
+        c->done->store(true, std::memory_order_release);
     };
 
     alignas(16) static std::uint8_t stack[65536];
@@ -69,7 +70,7 @@ TEST_CASE("mutex: try_lock fails when already locked (from another thread)")
     REQUIRE(t.create(cfg).ok());
 
     // Wait for child to acquire.
-    while (!locked_by_child)
+    while (!locked_by_child.load(std::memory_order_acquire))
     {
         osal::thread::yield();
     }
@@ -78,7 +79,7 @@ TEST_CASE("mutex: try_lock fails when already locked (from another thread)")
     CHECK_FALSE(m.try_lock());
 
     REQUIRE(t.join().ok());
-    CHECK(child_done);
+    CHECK(child_done.load(std::memory_order_acquire));
 
     // Now it should be unlocked.
     CHECK(m.try_lock());

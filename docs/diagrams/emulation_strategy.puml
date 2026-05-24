@@ -105,6 +105,8 @@ package "Work Queue (osal::work_queue)" as wq_pkg #E3F2FD {
           • Circular buffer (configurable depth)
           • Mutex + semaphore for sync
           • FIFO execution guarantee
+                    • flush() waits for execution
+                        of the captured frontier
         end note
 
         [FreeRTOS] as wq_fr
@@ -335,13 +337,13 @@ package "Event Flags (osal::event_flags)" as ef_pkg #FFF3E0 {
     package "Emulated (9 backends)" as ef_emu #FFECB3 {
         component "emulated_event_flags.inl" as ef_inl #FFE082
         note bottom of ef_inl
-          **Mutex + per-waiter semaphore array**
-          ──────────────────────────────────────
-          • OSAL mutex guards bits + waiter array
-          • Each waiter gets a binary semaphore slot
-          • set() : OR bits, give all waiter semas
-                    • set_isr() : atomic OR + give_isr on ISR-capable backends
-          • wait : claim slot → sem_take → re-check
+                    **Mutex + waiter semaphores + active bitmap**
+                    ─────────────────────────────────────────────
+                    • OSAL mutex guards bits + waiter metadata
+                    • Each waiter gets a binary semaphore slot
+                    • Active waiter bitmap skips unused slots
+                    • set()/set_isr() wake only matching waiters
+                    • wait : claim slot → sem_take → re-check
           • Static pool, zero heap allocation
         end note
 

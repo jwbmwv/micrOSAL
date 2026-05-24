@@ -61,19 +61,19 @@ if constexpr (osal::active_capabilities::has_thread_affinity) {
 
 ## ISR Safety — Rules
 
-The following functions are safe to call from interrupt context on
-**all supporting backends**:
+ISR-safe support is backend-specific and should be treated as capability-gated.
+The authoritative source is `include/osal/capabilities.hpp`.
 
-| Function | FreeRTOS | Zephyr | ThreadX | PX5 | POSIX | Linux | BM | C1 | C2 |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| `osal_semaphore_give_isr()` | ✓ | ✓ | ✓ | ✓ | ✗ | ✗ | ✓ | ✓ | ✓ |
-| `osal_queue_send_isr()` | ✓ | ✓ | ✓ | ✓ | ✗ | ✗ | ✓ | ✓ | ✓ |
-| `osal_queue_receive_isr()` | ✓ | ✓ | ✓ | ✓ | ✗ | ✗ | ✓ | ✓ | ✓ |
-| `osal_event_flags_set_isr()` | ✓ | ✓ | ✓ | ✓ | ✗ | ✗ | ✓ | ✓ | ✓ |
-| `osal_work_queue_submit_from_isr()` | ✗ | ✓ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ |
+- `osal_semaphore_give_isr()` is available when `capabilities<backend_tag>::has_isr_semaphore` is `true`.
+- `osal_queue_send_isr()` and `osal_queue_receive_isr()` are available when
+   `capabilities<backend_tag>::has_isr_queue` is `true`.
+- `osal_event_flags_set_isr()` is available when `capabilities<backend_tag>::has_isr_event_flags`
+   is `true`. On shared-emulation backends it wakes only matching waiters and uses
+   `osal_semaphore_give_isr()` where no native event-flags ISR primitive exists.
+- `osal_work_queue_submit_from_isr()` is currently supported only on Zephyr.
 
-① VxWorks, CMSIS-RTOS: emulated event flags use
-  `osal_semaphore_give_isr` to wake waiters from ISR context.
+Portable code should gate ISR paths with `if constexpr` on the capability flags
+rather than assuming a fixed backend matrix.
 
 **Thread functions** (`create`, `join`, `yield`, `sleep`) MUST NOT be called
 from ISR context.
@@ -90,7 +90,7 @@ from ISR context.
 | `osal::mailbox<T>` | Embedded `queue<T,1>` storage inside the object | Object itself |
 | `osal::thread` | Static task/context storage on embedded RTOS backends; heap-backed pthread control object on POSIX-family backends. Embedded backends use caller-managed stack storage; POSIX-family backends may use caller-supplied or native pthread-managed stacks. | Caller / backend |
 | `osal::timer` | Static pool on static-pool RTOS backends; heap-backed control object on POSIX-family backends | N/A |
-| `osal::event_flags` | Static pool (all backends) | N/A |
+| `osal::event_flags` | Static pool on native/static-pool and shared-emulation backends; CMSIS-RTOS2 stores a native `osEventFlagsNew()` handle in a fixed backend slot | N/A |
 | `osal::wait_set` | Heap-backed native wait-set object on POSIX, Linux, RTEMS, and INTEGRITY; native PX5 wait-set; unsupported elsewhere. Use `osal::object_wait_set` for portable OSAL-object waiting. | N/A |
 | `osal::barrier` | Heap-backed native pthread barrier on POSIX-family backends with native support; static-pool shared emulated barrier on other backends | N/A |
 | `osal::work_queue` | Native object or worker-thread wrapper. POSIX, Linux, RTEMS, and INTEGRITY use a heap-backed pthread worker; OSAL-thread based backends use caller-managed stack storage. | Caller / backend |

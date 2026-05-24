@@ -67,11 +67,21 @@
 #endif
 
 // ---------------------------------------------------------------------------
-// Tick counter (volatile so the compiler doesn't cache it across calls)
+// Tick counter shared with the SysTick ISR.
 // ---------------------------------------------------------------------------
 namespace
 {
-volatile std::uint64_t g_ticks = 0U;
+std::atomic<std::uint64_t> g_ticks{0U};
+
+inline std::uint64_t bm_ticks_now() noexcept
+{
+    return g_ticks.load(std::memory_order_relaxed);
+}
+
+inline std::uint64_t bm_ticks_advance_one() noexcept
+{
+    return g_ticks.fetch_add(1U, std::memory_order_relaxed) + 1U;
+}
 
 #if defined(OSAL_BM_TEST_SELF_TICK)
 void bm_advance_timers() noexcept;
@@ -85,7 +95,7 @@ inline void bm_maybe_self_tick() noexcept
     }
 
     bm_self_tick_active = true;
-    g_ticks             = g_ticks + 1;
+    (void)bm_ticks_advance_one();
     bm_advance_timers();
     bm_self_tick_active = false;
 }
@@ -97,7 +107,7 @@ inline void bm_maybe_self_tick() noexcept {}
 /// @brief Called by the SysTick handler (or equivalent) each tick.
 extern "C" void osal_baremetal_tick() noexcept
 {
-    g_ticks = g_ticks + 1;
+    (void)bm_ticks_advance_one();
 
     // Advance software timers.
     // See timer section below.
@@ -113,7 +123,7 @@ extern "C"
     /// @return Monotonic time in milliseconds (one tick = one millisecond by default).
     std::int64_t osal_clock_monotonic_ms() noexcept
     {
-        return static_cast<std::int64_t>(g_ticks);
+        return static_cast<std::int64_t>(bm_ticks_now());
     }
 
     /// @brief Return system time — identical to `osal_clock_monotonic_ms` on bare-metal.
@@ -127,7 +137,7 @@ extern "C"
     /// @return Current `g_ticks` value cast to `osal::tick_t`.
     osal::tick_t osal_clock_ticks() noexcept
     {
-        return static_cast<osal::tick_t>(g_ticks);
+        return static_cast<osal::tick_t>(bm_ticks_now());
     }
 
     /// @brief Return the nominal tick period in microseconds.
@@ -356,11 +366,11 @@ extern "C"
             return osal::error_code::not_initialized;
         }
         auto*               t        = static_cast<bm_task*>(handle->native);
-        const std::uint64_t deadline = g_ticks + static_cast<std::uint64_t>(timeout);
+        const std::uint64_t deadline = bm_ticks_now() + static_cast<std::uint64_t>(timeout);
         while (!t->finished)
         {
             osal_thread_yield();
-            if (timeout != osal::WAIT_FOREVER && g_ticks >= deadline)
+            if (timeout != osal::WAIT_FOREVER && bm_ticks_now() >= deadline)
             {
                 return osal::error_code::timeout;
             }
@@ -480,8 +490,8 @@ extern "C"
     /// @param ms Milliseconds to sleep (1 tick = 1 ms by default).
     void osal_thread_sleep_ms(std::uint32_t ms) noexcept
     {
-        const std::uint64_t wake = g_ticks + static_cast<std::uint64_t>(ms);
-        while (g_ticks < wake)
+        const std::uint64_t wake = bm_ticks_now() + static_cast<std::uint64_t>(ms);
+        while (bm_ticks_now() < wake)
         {
             bm_wait_yield();
         }
@@ -555,10 +565,10 @@ extern "C"
         }
         auto*               m = static_cast<bm_mutex*>(handle->native);
         const std::uint64_t deadline =
-            (timeout == osal::WAIT_FOREVER) ? UINT64_MAX : g_ticks + static_cast<std::uint64_t>(timeout);
+            (timeout == osal::WAIT_FOREVER) ? UINT64_MAX : bm_ticks_now() + static_cast<std::uint64_t>(timeout);
         while (m->flag.test_and_set(std::memory_order_acquire))
         {
-            if (g_ticks >= deadline)
+            if (bm_ticks_now() >= deadline)
             {
                 return osal::error_code::timeout;
             }
@@ -684,7 +694,7 @@ extern "C"
         }
         auto*               s = static_cast<bm_semaphore*>(handle->native);
         const std::uint64_t deadline =
-            (timeout == osal::WAIT_FOREVER) ? UINT64_MAX : g_ticks + static_cast<std::uint64_t>(timeout);
+            (timeout == osal::WAIT_FOREVER) ? UINT64_MAX : bm_ticks_now() + static_cast<std::uint64_t>(timeout);
         while (true)
         {
             unsigned c = s->count.load(std::memory_order_acquire);
@@ -697,7 +707,7 @@ extern "C"
             }
             else
             {
-                if (g_ticks >= deadline)
+                if (bm_ticks_now() >= deadline)
                 {
                     return osal::error_code::timeout;
                 }
@@ -789,7 +799,7 @@ extern "C"
         }
         auto*               q = static_cast<bm_queue*>(handle->native);
         const std::uint64_t deadline =
-            (timeout == osal::WAIT_FOREVER) ? UINT64_MAX : g_ticks + static_cast<std::uint64_t>(timeout);
+            (timeout == osal::WAIT_FOREVER) ? UINT64_MAX : bm_ticks_now() + static_cast<std::uint64_t>(timeout);
         while (true)
         {
             OSAL_BM_ENTER_CRITICAL();
@@ -802,7 +812,7 @@ extern "C"
                 return osal::ok();
             }
             OSAL_BM_EXIT_CRITICAL();
-            if (timeout == osal::NO_WAIT || g_ticks >= deadline)
+            if (timeout == osal::NO_WAIT || bm_ticks_now() >= deadline)
             {
                 return osal::error_code::would_block;
             }
@@ -833,7 +843,7 @@ extern "C"
         }
         auto*               q = static_cast<bm_queue*>(handle->native);
         const std::uint64_t deadline =
-            (timeout == osal::WAIT_FOREVER) ? UINT64_MAX : g_ticks + static_cast<std::uint64_t>(timeout);
+            (timeout == osal::WAIT_FOREVER) ? UINT64_MAX : bm_ticks_now() + static_cast<std::uint64_t>(timeout);
         while (true)
         {
             OSAL_BM_ENTER_CRITICAL();
@@ -846,7 +856,7 @@ extern "C"
                 return osal::ok();
             }
             OSAL_BM_EXIT_CRITICAL();
-            if (timeout == osal::NO_WAIT || g_ticks >= deadline)
+            if (timeout == osal::NO_WAIT || bm_ticks_now() >= deadline)
             {
                 return osal::error_code::timeout;
             }
@@ -945,7 +955,7 @@ void bm_advance_timers() noexcept
         {
             continue;
         }
-        if (g_ticks >= t.deadline)
+        if (bm_ticks_now() >= t.deadline)
         {
             if (t.fn != nullptr)
             {
@@ -953,7 +963,7 @@ void bm_advance_timers() noexcept
             }
             if (t.auto_reload)
             {
-                t.deadline = g_ticks + static_cast<std::uint64_t>(t.period);
+                t.deadline = bm_ticks_now() + static_cast<std::uint64_t>(t.period);
             }
             else
             {
@@ -974,7 +984,7 @@ extern "C"
     ///          software timer support is needed.
     void osal_baremetal_tick_with_timers() noexcept
     {
-        g_ticks = g_ticks + 1;
+        (void)bm_ticks_advance_one();
         bm_advance_timers();
     }
 
@@ -1025,7 +1035,7 @@ extern "C"
             return osal::error_code::not_initialized;
         }
         auto* t     = static_cast<bm_timer*>(handle->native);
-        t->deadline = g_ticks + static_cast<std::uint64_t>(t->period);
+        t->deadline = bm_ticks_now() + static_cast<std::uint64_t>(t->period);
         t->active   = true;
         return osal::ok();
     }
@@ -1064,7 +1074,7 @@ extern "C"
         }
         auto* t     = static_cast<bm_timer*>(handle->native);
         t->period   = p;
-        t->deadline = g_ticks + static_cast<std::uint64_t>(p);
+        t->deadline = bm_ticks_now() + static_cast<std::uint64_t>(p);
         return osal::ok();
     }
 

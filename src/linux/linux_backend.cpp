@@ -382,7 +382,7 @@ extern "C"
     /// @return osal::ok() on success; osal::error_code::timeout, ::unknown, or ::not_initialized.
     osal::result osal_thread_join(osal::active_traits::thread_handle_t* handle, osal::tick_t timeout) noexcept
     {
-        if (handle_is_null(handle))
+        if (handle_is_null(handle)) [[unlikely]]
         {
             return osal::error_code::not_initialized;
         }
@@ -413,7 +413,7 @@ extern "C"
     /// @return osal::ok() on success; osal::error_code::not_initialized if the handle is null.
     osal::result osal_thread_detach(osal::active_traits::thread_handle_t* handle) noexcept
     {
-        if (handle_is_null(handle))
+        if (handle_is_null(handle)) [[unlikely]]
         {
             return osal::error_code::not_initialized;
         }
@@ -582,7 +582,7 @@ extern "C"
     osal::result osal_thread_set_priority(osal::active_traits::thread_handle_t* handle,
                                           osal::priority_t                      priority) noexcept
     {
-        if (handle_is_null(handle))
+        if (handle_is_null(handle)) [[unlikely]]
         {
             return osal::error_code::not_initialized;
         }
@@ -607,7 +607,7 @@ extern "C"
     osal::result osal_thread_set_affinity(osal::active_traits::thread_handle_t* handle,
                                           osal::affinity_t                      affinity) noexcept
     {
-        if (handle_is_null(handle))
+        if (handle_is_null(handle)) [[unlikely]]
         {
             return osal::error_code::not_initialized;
         }
@@ -692,7 +692,7 @@ extern "C"
     /// @return osal::ok() always.
     osal::result osal_mutex_destroy(osal::active_traits::mutex_handle_t* handle) noexcept
     {
-        if (handle_is_null(handle))
+        if (handle_is_null(handle)) [[unlikely]]
         {
             return osal::ok();
         }
@@ -708,7 +708,7 @@ extern "C"
     /// @return osal::ok() on success; osal::error_code::would_block, ::timeout, or ::unknown.
     osal::result osal_mutex_lock(osal::active_traits::mutex_handle_t* handle, osal::tick_t t) noexcept
     {
-        if (handle_is_null(handle))
+        if (handle_is_null(handle)) [[unlikely]]
         {
             return osal::error_code::not_initialized;
         }
@@ -747,7 +747,7 @@ extern "C"
     /// @return osal::ok() on success; osal::error_code::not_initialized or ::not_owner on failure.
     osal::result osal_mutex_unlock(osal::active_traits::mutex_handle_t* handle) noexcept
     {
-        if (handle_is_null(handle))
+        if (handle_is_null(handle)) [[unlikely]]
         {
             return osal::error_code::not_initialized;
         }
@@ -781,7 +781,7 @@ extern "C"
     /// @return osal::ok() always.
     osal::result osal_semaphore_destroy(osal::active_traits::semaphore_handle_t* handle) noexcept
     {
-        if (handle_is_null(handle))
+        if (handle_is_null(handle)) [[unlikely]]
         {
             return osal::ok();
         }
@@ -796,7 +796,7 @@ extern "C"
     /// @return osal::ok() on success; osal::error_code::not_initialized or ::unknown on failure.
     osal::result osal_semaphore_give(osal::active_traits::semaphore_handle_t* handle) noexcept
     {
-        if (handle_is_null(handle))
+        if (handle_is_null(handle)) [[unlikely]]
         {
             return osal::error_code::not_initialized;
         }
@@ -819,7 +819,7 @@ extern "C"
     /// @return osal::ok() on success; osal::error_code::would_block, ::timeout, or ::unknown.
     osal::result osal_semaphore_take(osal::active_traits::semaphore_handle_t* handle, osal::tick_t t) noexcept
     {
-        if (handle_is_null(handle))
+        if (handle_is_null(handle)) [[unlikely]]
         {
             return osal::error_code::not_initialized;
         }
@@ -892,7 +892,7 @@ extern "C"
     /// @return osal::ok() always.
     osal::result osal_queue_destroy(osal::active_traits::queue_handle_t* handle) noexcept
     {
-        if (handle_is_null(handle))
+        if (handle_is_null(handle)) [[unlikely]]
         {
             return osal::ok();
         }
@@ -912,7 +912,7 @@ extern "C"
     /// @return osal::ok() on success; osal::error_code::would_block or ::timeout if the queue is full.
     osal::result osal_queue_send(osal::active_traits::queue_handle_t* handle, const void* item, osal::tick_t t) noexcept
     {
-        if (handle_is_null(handle))
+        if (handle_is_null(handle)) [[unlikely]]
         {
             return osal::error_code::not_initialized;
         }
@@ -963,7 +963,7 @@ extern "C"
     /// @return osal::ok() on success; osal::error_code::would_block or ::timeout if the queue is empty.
     osal::result osal_queue_receive(osal::active_traits::queue_handle_t* handle, void* item, osal::tick_t t) noexcept
     {
-        if (handle_is_null(handle))
+        if (handle_is_null(handle)) [[unlikely]]
         {
             return osal::error_code::not_initialized;
         }
@@ -1013,7 +1013,7 @@ extern "C"
     /// @return osal::ok() if an item was available; osal::error_code::would_block if empty.
     osal::result osal_queue_peek(osal::active_traits::queue_handle_t* handle, void* item, osal::tick_t) noexcept
     {
-        if (handle_is_null(handle))
+        if (handle_is_null(handle)) [[unlikely]]
         {
             return osal::error_code::not_initialized;
         }
@@ -1034,7 +1034,7 @@ extern "C"
     /// @return Item count, or 0 if the handle is invalid.
     std::size_t osal_queue_count(const osal::active_traits::queue_handle_t* h) noexcept
     {
-        if (handle_is_null(h))
+        if (handle_is_null(h)) [[unlikely]]
         {
             return 0U;
         }
@@ -1050,7 +1050,7 @@ extern "C"
     /// @return Free slot count, or 0 if the handle is invalid.
     std::size_t osal_queue_free(const osal::active_traits::queue_handle_t* h) noexcept
     {
-        if (handle_is_null(h))
+        if (handle_is_null(h)) [[unlikely]]
         {
             return 0U;
         }
@@ -1118,7 +1118,7 @@ extern "C"
     /// @return osal::ok() on success; osal::error_code::not_initialized or ::unknown on failure.
     osal::result osal_timer_start(osal::active_traits::timer_handle_t* handle) noexcept
     {
-        if (handle_is_null(handle))
+        if (handle_is_null(handle)) [[unlikely]]
         {
             return osal::error_code::not_initialized;
         }
@@ -1136,7 +1136,7 @@ extern "C"
     /// @return osal::ok() on success; osal::error_code::not_initialized if the handle is null.
     osal::result osal_timer_stop(osal::active_traits::timer_handle_t* handle) noexcept
     {
-        if (handle_is_null(handle))
+        if (handle_is_null(handle)) [[unlikely]]
         {
             return osal::error_code::not_initialized;
         }
@@ -1163,7 +1163,7 @@ extern "C"
     /// @return osal::ok() on success; osal::error_code::not_initialized or ::unknown on failure.
     osal::result osal_timer_set_period(osal::active_traits::timer_handle_t* handle, osal::tick_t p) noexcept
     {
-        if (handle_is_null(handle))
+        if (handle_is_null(handle)) [[unlikely]]
         {
             return osal::error_code::not_initialized;
         }
@@ -1181,7 +1181,7 @@ extern "C"
     /// @return osal::ok() always.
     osal::result osal_timer_destroy(osal::active_traits::timer_handle_t* handle) noexcept
     {
-        if (handle_is_null(handle))
+        if (handle_is_null(handle)) [[unlikely]]
         {
             return osal::ok();
         }
@@ -1207,7 +1207,7 @@ extern "C"
     /// @return True if it_value is non-zero.
     bool osal_timer_is_active(const osal::active_traits::timer_handle_t* handle) noexcept
     {
-        if (handle_is_null(handle))
+        if (handle_is_null(handle)) [[unlikely]]
         {
             return false;
         }
@@ -1253,7 +1253,7 @@ extern "C"
     /// @return osal::ok() always.
     osal::result osal_wait_set_destroy(osal::active_traits::wait_set_handle_t* handle) noexcept
     {
-        if (handle_is_null(handle))
+        if (handle_is_null(handle)) [[unlikely]]
         {
             return osal::ok();
         }
@@ -1272,7 +1272,7 @@ extern "C"
     osal::result osal_wait_set_add(osal::active_traits::wait_set_handle_t* handle, int fd,
                                    std::uint32_t events) noexcept
     {
-        if (handle_is_null(handle))
+        if (handle_is_null(handle)) [[unlikely]]
         {
             return osal::error_code::not_initialized;
         }
@@ -1291,7 +1291,7 @@ extern "C"
     /// @return osal::ok() on success; osal::error_code::invalid_argument if not found.
     osal::result osal_wait_set_remove(osal::active_traits::wait_set_handle_t* handle, int fd) noexcept
     {
-        if (handle_is_null(handle))
+        if (handle_is_null(handle)) [[unlikely]]
         {
             return osal::error_code::not_initialized;
         }
@@ -1309,7 +1309,7 @@ extern "C"
     osal::result osal_wait_set_wait(osal::active_traits::wait_set_handle_t* handle, int* fds_ready,
                                     std::size_t max_ready, std::size_t* n_ready, osal::tick_t timeout) noexcept
     {
-        if (handle_is_null(handle))
+        if (handle_is_null(handle)) [[unlikely]]
         {
             return osal::error_code::not_initialized;
         }

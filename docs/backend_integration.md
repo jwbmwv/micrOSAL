@@ -6,20 +6,31 @@ Follow these steps to integrate a new RTOS or platform.
 
 ---
 
-### Step 1 — Add a backend tag type
+### Step 1 — Add a backend tag and selector
 
-In `include/osal/backends.hpp`, add a new empty struct:
+Add the new backend tag in `include/osal/capabilities.hpp` alongside the
+existing `backend_*` forward declarations:
 
 ```cpp
 struct backend_mynewrtos {};
 ```
 
-Then add it to the macro selector block:
+Then update `include/osal/backends.hpp` so the selector logic recognizes the
+new macro in all three places it is validated:
+
+- `detail::backend_selection_flags`
+- the "define exactly one `OSAL_BACKEND_*` macro" validation block
+- the `active_backend` `#elif` chain
+
+The alias block should gain:
 
 ```cpp
 #elif defined(OSAL_BACKEND_MYNEWRTOS)
 using active_backend = backend_mynewrtos;
 ```
+
+Finally, extend `backend_tag` in `include/osal/concepts.hpp` so the compile-time
+concept checks accept the new tag.
 
 ---
 
@@ -368,7 +379,7 @@ Current users: Linux, POSIX, QNX, and NuttX backends.
 
 ### Step 5 — Add to CMakeLists.txt
 
-In `osal/CMakeLists.txt`, extend the backend selector block:
+In the repository-root `CMakeLists.txt`, extend the backend selector block:
 
 ```cmake
 elseif(_OSAL_BACKEND_UPPER STREQUAL "MYNEWRTOS")

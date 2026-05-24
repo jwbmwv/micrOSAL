@@ -1,75 +1,87 @@
-# micrOSAL Channel Layer — Overview
+# micrOSAL Bus + Signal Layer — Overview
 
-The channel layer adds a portable, deterministic pub/sub abstraction on top of
-the existing micrOSAL primitives (queue, mutex).  It consists of two API tiers:
+The bus layer adds typed, fixed-capacity messaging abstractions on top of the
+existing MicrOSAL primitives.
 
-| Tier          | Class                 | Guarantee                               |
-|---------------|-----------------------|-----------------------------------------|
-| **LCD**       | `osal_signal`          | Works on every micrOSAL backend.        |
-| **Premium**   | `osal_signal_premium`  | Unlocks observer, zero-copy, routing.   |
+| API | Class template | Current status |
+| --- | --- | --- |
+| Point-to-point | `osal::osal_bus<T, Capacity, BackendTag>` | Implemented on the generic backend and all delegated backends |
+| LCD pub/sub | `osal::osal_signal<T, MaxSubscribers, PerSubCapacity, BackendTag>` | Implemented on the generic backend and all delegated backends |
+| Premium wrapper | `osal::osal_signal_premium<T, MaxSubscribers, PerSubCapacity, BackendTag>` | Implemented with portable observer/copy-fallback logic; native routing remains a stub |
+
+## Current Backend Status
+
+| Backend tag | Current runtime status |
+| --- | --- |
+| `bus_backend_generic` | Canonical implementation; uses the MicrOSAL queue C ABI plus `osal::mutex` |
+| Delegated `bus_backend_*` tags | Fully implemented by delegating to `bus_backend_generic` |
+| `bus_backend_mock` | Test-only backend used by hosted premium tests |
+| `bus_backend_zephyr` | Compile-time Zbus skeleton; capability traits advertise native intent, but the runtime methods are still TODO stubs |
+
+If you need a working portable bus/signal implementation on Zephyr today, use
+`osal::bus_backend_generic` explicitly instead of relying on the default tag.
 
 ## Design Constraints
 
-- C++20, no dynamic allocation, no hidden global state.
-- Deterministic O(MaxSubscribers) publish cost.
+- C++20, bounded storage, no hidden global state.
+- Deterministic `O(MaxSubscribers)` publish cost for the LCD implementation.
 - Traits-based, compile-time backend selection.
-- Generic fallback builds on `osal::queue` + `osal::mutex`.
+- Generic behavior builds on the existing MicrOSAL queue and mutex primitives.
 
 ## File Layout
 
-```
+```text
 include/microsal/
-  microsal_config.hpp                        Channel backend tags + default selection
-  channel/
-    osal_bus.hpp                         Typed point-to-point channel
-    osal_signal.hpp                           LCD pub/sub topic (primary template)
-    osal_signal_premium.hpp                   Premium topic (observer, zero-copy, routing)
+  microsal_config.hpp
+  bus/
+    osal_bus.hpp
+    osal_signal.hpp
+    osal_signal_premium.hpp
     detail/
-      osal_signal_traits.hpp                  osal_signal_capabilities<BackendTag>
-      osal_signal_backend_generic.hpp         Generic fallback (osal::queue backed)
-      osal_signal_backend_zephyr.hpp          Zbus-backed backend (skeleton)
-      osal_signal_backend_delegated.hpp       16 backends delegating to generic
-      osal_signal_backend_mock.hpp            Mock premium backend for tests
+      osal_bus_fwd.hpp
+      osal_signal_traits.hpp
+      osal_signal_backend_generic.hpp
+      osal_signal_backend_delegated.hpp
+      osal_signal_backend_mock.hpp
+      osal_signal_backend_zephyr.hpp
+
+tests/bus/
+  test_osal_signal_lcd.cpp
+  test_osal_signal_premium.cpp
+  test_osal_signal_backends.cpp
 ```
 
 ## Backend Selection
 
-The default backend is chosen automatically from the active `OSAL_BACKEND_*` macro.
-All 17 supported OSAL backends have a corresponding `bus_backend_*` tag:
+`MICROSAL_DEFAULT_BACKEND_TAG` is selected in `include/microsal/microsal_config.hpp`
+from the active `OSAL_BACKEND_*` macro. Every supported OSAL backend has a
+matching `bus_backend_*` tag, and if no OSAL backend macro is present the bus
+layer defaults to `bus_backend_generic`.
 
-| OSAL backend macro         | Default channel backend          |
-|----------------------------|----------------------------------|
-| `OSAL_BACKEND_ZEPHYR`     | `bus_backend_zephyr`         |
-| `OSAL_BACKEND_FREERTOS`   | `bus_backend_freertos`       |
-| `OSAL_BACKEND_LINUX`      | `bus_backend_linux`          |
-| All other backends         | Matching `bus_backend_*` tag |
-| (none defined)             | `bus_backend_generic`        |
-
-See [Backend Reference](backends.md) for the complete mapping table.
+See [Backend Reference](backends.md) for the full mapping table and status notes.
 
 ## Quick Start
 
 ```cpp
 #include <microsal/bus/osal_signal.hpp>
 
-// Topic: uint32_t messages, ≤4 subscribers, queue depth 8 each.
-osal::osal_signal<std::uint32_t, 4, 8> topic;
+osal::osal_signal<std::uint32_t, 4, 8, osal::bus_backend_generic> topic;
 
 osal::subscriber_id sub{osal::invalid_subscriber_id};
 topic.subscribe(sub);
 topic.publish(42U);
 
-std::uint32_t val{};
-topic.try_receive(sub, val);  // val == 42
+std::uint32_t value{};
+topic.try_receive(sub, value);
 
 topic.unsubscribe(sub);
 ```
 
 ## Diagrams
 
-- [Architecture](../diagrams/channel_architecture.puml)
-- [Class Diagram](../diagrams/channel_class_diagram.puml)
-- [Publish Sequence](../diagrams/channel_sequence_publish.puml)
+- [Architecture](../diagrams/bus_architecture.puml)
+- [Class Diagram](../diagrams/bus_class_diagram.puml)
+- [Publish Sequence](../diagrams/bus_sequence_publish.puml)
 
 ## Further Reading
 
