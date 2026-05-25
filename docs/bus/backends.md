@@ -7,7 +7,7 @@
 | `bus_backend_generic` | All `native_*` and `zero_copy` flags are `false` | Fully implemented; canonical bus/signal behavior |
 | Delegated `bus_backend_*` tags | Same flags as `bus_backend_generic` | Fully implemented by delegating to the generic backend |
 | `bus_backend_mock` | All premium flags are `true` | Implemented for hosted tests; uses the generic bus/signal path plus the premium wrapper's local observer table |
-| `bus_backend_zephyr` | All premium flags are `true` | Compile-time Zbus placeholder; methods are still TODO stubs and are not a usable runtime implementation yet |
+| `bus_backend_zephyr` | All premium flags are `false` | Dedicated Zephyr tag that currently delegates to the generic runtime; native Zbus integration is not implemented yet |
 
 ## `bus_backend_generic`
 
@@ -62,12 +62,13 @@ wrapper exposes observer support and copy-based `publish_zero_copy()` behavior.
 
 **File:** `include/microsal/bus/detail/osal_signal_backend_zephyr.hpp`
 
-The Zephyr specialisations are currently a Zbus integration skeleton. The
-capability traits still advertise native pub/sub, observers, routing, and
-zero-copy as the intended end state, but the runtime methods remain TODO stubs.
+The Zephyr specialisations currently delegate to `bus_backend_generic`. This
+keeps `MICROSAL_DEFAULT_BACKEND_TAG` usable on Zephyr today while preserving a
+dedicated specialisation point for a future native Zbus implementation.
 
-Until that wiring lands, prefer `osal::bus_backend_generic` explicitly for a
-working bus/signal implementation on Zephyr.
+Because the runtime is still the generic path, the Zephyr capability traits
+stay `false` today and `osal_signal_premium` uses its portable observer and
+copy-fallback behavior.
 
 ## Backend Selection Macro
 

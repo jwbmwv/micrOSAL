@@ -16,10 +16,11 @@ existing MicrOSAL primitives.
 | `bus_backend_generic` | Canonical implementation; uses the MicrOSAL queue C ABI plus `osal::mutex` |
 | Delegated `bus_backend_*` tags | Fully implemented by delegating to `bus_backend_generic` |
 | `bus_backend_mock` | Test-only backend used by hosted premium tests |
-| `bus_backend_zephyr` | Compile-time Zbus skeleton; capability traits advertise native intent, but the runtime methods are still TODO stubs |
+| `bus_backend_zephyr` | Dedicated Zephyr tag that currently delegates to `bus_backend_generic`; native Zbus specialisation not implemented yet |
 
-If you need a working portable bus/signal implementation on Zephyr today, use
-`osal::bus_backend_generic` explicitly instead of relying on the default tag.
+On Zephyr today, the default backend tag behaves like `bus_backend_generic`.
+That keeps the runtime usable now while preserving the public tag for a future
+native Zbus implementation.
 
 ## Design Constraints
 

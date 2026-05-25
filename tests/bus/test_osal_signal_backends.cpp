@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 /// @file test_osal_signal_backends.cpp
-/// @brief Compilation and functional tests for all delegated channel backends
+/// @brief Compilation and functional tests for delegated and fallback channel backends
 /// @details Verifies that every bus_backend_* tag compiles as a fully
 ///          functional osal_bus + osal_signal + osal_signal_premium, and
-///          that the delegated backends behave identically to
-///          bus_backend_generic.
+///          that delegated backends plus the current Zephyr fallback behave
+///          identically to bus_backend_generic.
 ///
 /// @copyright Copyright (c) 2026 James Baldwin. AI-assisted — see NOTICE.
 /// @author James Baldwin
@@ -112,6 +112,24 @@ static void check_lcd_capabilities()
 // ===========================================================================
 // Per-backend test cases
 // ===========================================================================
+
+// --- Zephyr ---
+TEST_CASE("bus_backend_zephyr: LCD API")
+{
+    exercise_lcd_api<osal::bus_backend_zephyr>();
+}
+TEST_CASE("bus_backend_zephyr: channel API")
+{
+    exercise_channel_api<osal::bus_backend_zephyr>();
+}
+TEST_CASE("bus_backend_zephyr: premium API")
+{
+    exercise_premium_api<osal::bus_backend_zephyr>();
+}
+TEST_CASE("bus_backend_zephyr: capabilities")
+{
+    check_lcd_capabilities<osal::bus_backend_zephyr>();
+}
 
 // --- FreeRTOS ---
 TEST_CASE("bus_backend_freertos: LCD API")

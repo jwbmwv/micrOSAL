@@ -14,7 +14,7 @@ or the [online server](https://www.plantuml.com/plantuml/uml)).
 | [capability_matrix.puml](capability_matrix.puml) | Map | Per-backend feature support matrix (25 capability flags × 17 backends) |
 | [emulation_strategy.puml](emulation_strategy.puml) | Component | Native vs emulated breakdown for condvar, work_queue, memory_pool, and rwlock, showing which backends use shared .inl emulations |
 | [build_flow.puml](build_flow.puml) | Activity | CMake build pipeline — backend selection → compile → link → test |
-| [bus_architecture.puml](bus_architecture.puml) | Component | Bus/signal layer architecture — API, generic runtime, delegated tags, test backend, and Zephyr TODO path |
+| [bus_architecture.puml](bus_architecture.puml) | Component | Bus/signal layer architecture — API, generic runtime, delegated tags, test backend, current Zephyr fallback, and planned native path |
 | [bus_class_diagram.puml](bus_class_diagram.puml) | Class | `osal_bus`, `osal_signal`, `osal_signal_premium`, and capability-trait relationships |
 | [bus_sequence_publish.puml](bus_sequence_publish.puml) | Sequence | Generic LCD publish fan-out and subscriber receive flow |
 | [sequence_mutex.puml](sequence_mutex.puml) | Sequence | Mutex full lifecycle: construct → lock → unlock → destroy, showing all four layers |

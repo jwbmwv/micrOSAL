@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
-/// @file example_topic_zephyr.cpp
-/// @brief Zephyr Zbus-backed pub/sub example (skeleton).
+/// @file example_signal_zephyr.cpp
+/// @brief Zephyr-tagged pub/sub example.
 ///
-/// Demonstrates the intended usage of osal_signal<T, N, M, bus_backend_zephyr>
-/// inside a Zephyr application.  The actual Zbus integration is marked with
-/// TODO — this skeleton compiles on generic backends and shows the API surface.
+/// Demonstrates osal_signal<T, N, M, bus_backend_zephyr>. Today that backend
+/// tag delegates to the generic runtime, so the example runs on hosted builds
+/// while preserving the future Zephyr-native integration surface.
 ///
-/// On a real Zephyr target:
+/// For a future native Zephyr target:
 ///   - ZBUS_CHAN_DEFINE() must appear at file scope.
 ///   - Each subscriber registers a ZBUS_SUBSCRIBER_DEFINE listener.
 ///   - publish() → zbus_chan_pub()
@@ -17,10 +17,10 @@
 ///   west build -b <board> examples/bus
 /// @endcode
 ///
-/// Build (standalone generic fallback, for compilation checks):
+/// Build (hosted fallback run):
 /// @code
 ///   cmake -B build -DOSAL_BACKEND=LINUX -DOSAL_BUILD_EXAMPLES=ON
-///   cmake --build build -- example_topic_zephyr
+///   cmake --build build -- example_signal_zephyr
 /// @endcode
 #include <microsal/bus/osal_signal_premium.hpp>
 
@@ -58,14 +58,7 @@ void print_value_line(const char* prefix, Integer value)
 
 int main()
 {
-    // The bus_backend_zephyr topic stubs return false until wired to zbus.
-    // Swap to bus_backend_generic to run this example on a non-Zephyr host.
-#if defined(OSAL_BACKEND_ZEPHYR)
     using TopicType = osal::osal_signal_premium<std::uint32_t, 4U, 8U, osal::bus_backend_zephyr>;
-#else
-    // Compile-check on non-Zephyr hosts using the generic fallback.
-    using TopicType = osal::osal_signal_premium<std::uint32_t, 4U, 8U, osal::bus_backend_generic>;
-#endif
 
     TopicType sensor_topic;
 
@@ -73,8 +66,8 @@ int main()
     osal::subscriber_id sub{osal::invalid_subscriber_id};
     if (!sensor_topic.subscribe(sub))
     {
-        std::puts("[zephyr-example] subscribe failed (stub backend returns false on Zephyr)\n");
-        // Expected until zbus wiring is complete.
+        std::puts("[zephyr-example] subscribe failed\n");
+        return 1;
     }
 
     // Register a Zbus observer callback.
@@ -86,7 +79,7 @@ int main()
     // Publish a sensor reading.
     (void)sensor_topic.publish(9876U);
 
-    // Zero-copy publish (maps to zbus_chan_pub_claim on Zephyr).
+    // Zero-copy publish currently uses the portable copy fallback.
     std::uint32_t msg = 1111U;
     (void)sensor_topic.publish_zero_copy(&msg);
 

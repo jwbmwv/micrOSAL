@@ -61,16 +61,16 @@ struct osal_signal_capabilities<bus_backend_generic>
 };
 
 // ---------------------------------------------------------------------------
-// bus_backend_zephyr — full Zbus-backed premium capabilities
+// bus_backend_zephyr — generic runtime until native Zbus support lands
 // ---------------------------------------------------------------------------
 
 template<>
 struct osal_signal_capabilities<bus_backend_zephyr>
 {
-    static constexpr bool native_pubsub    = true;
-    static constexpr bool native_observers = true;
-    static constexpr bool native_routing   = true;
-    static constexpr bool zero_copy        = true;
+    static constexpr bool native_pubsub    = false;
+    static constexpr bool native_observers = false;
+    static constexpr bool native_routing   = false;
+    static constexpr bool zero_copy        = false;
 };
 
 // ---------------------------------------------------------------------------

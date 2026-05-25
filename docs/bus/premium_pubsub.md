@@ -13,7 +13,7 @@ is using its portable fallback behavior.
 | --- | --- | --- |
 | `bus_backend_generic` and delegated backends | `native_* == false`, `zero_copy == false` | Local observer table, synchronous observer callbacks, `publish_zero_copy()` falls back to `publish(*ptr)`, `route_to()` returns `false` |
 | `bus_backend_mock` | All premium flags `true` | Hosted test backend; uses the same portable observer/copy fallback behavior while exercising the premium API surface |
-| `bus_backend_zephyr` | All premium flags `true` | Intended Zbus-native path, but the current runtime specialisations are still TODO stubs |
+| `bus_backend_zephyr` | All premium flags `false` | Current Zephyr tag delegates to the generic runtime, so the premium wrapper uses the same portable observer and copy-fallback behavior |
 
 Use `osal::osal_signal_capabilities<BackendTag>` and the `native_*` concepts in
 `osal_signal_traits.hpp` when you need to branch on native backend support.
@@ -31,8 +31,8 @@ std::size_t observer_count() const;
 ```
 
 On the currently implemented backends, observers are invoked synchronously
-during `publish()`. The intended Zephyr-native model is a Zbus listener thread,
-but that runtime path is not wired up yet.
+during `publish()`. A future native Zephyr model may switch that to Zbus
+listener integration, but the current Zephyr tag still uses the portable path.
 
 ### `publish_zero_copy()`
 

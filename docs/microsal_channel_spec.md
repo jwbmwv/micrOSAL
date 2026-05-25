@@ -11,13 +11,14 @@ Implemented today:
 - `osal::osal_signal<T, MaxSubscribers, PerSubCapacity, BackendTag>`
 - `osal::osal_signal_premium<T, ...>` with portable observer storage,
   copy-based `publish_zero_copy()`, and a stub `route_to()`
-- delegated `bus_backend_*` tags for all non-Zephyr OSAL backends
+- delegated `bus_backend_*` tags for all non-Zephyr, non-mock OSAL backends
 - `bus_backend_mock` for hosted premium tests
+- `bus_backend_zephyr` as a dedicated tag that currently forwards to the generic runtime
 - hosted test coverage in `tests/bus/`
 
 Not implemented yet:
 
-- a working Zephyr Zbus runtime backend
+- a native Zephyr Zbus runtime backend
 - native zero-copy publish behavior
 - topic registry / cross-topic routing
 - backend-specific optimized bus runtimes beyond delegated generic behavior
@@ -65,9 +66,9 @@ are exercised in hosted tests.
 
 ## Remaining Work
 
-1. Replace the Zephyr skeleton with a real Zbus integration.
-2. Decide whether `native_*` traits should remain optimistic for the Zephyr tag
-   before that runtime implementation exists.
+1. Replace the Zephyr fallback with a real Zbus integration.
+2. Decide which `native_*` traits the eventual Zbus implementation should
+   expose as part of the supported contract.
 3. Add native routing if a topic registry or RTOS-native mechanism becomes part
    of the supported contract.
 - All file skeletons

@@ -3,10 +3,10 @@
 `osal::osal_signal<T, MaxSubscribers, PerSubCapacity, BackendTag>` is the
 portable fixed-capacity pub/sub topic in the bus layer.
 
-The implemented LCD behavior is provided by `bus_backend_generic` and every
-delegated `bus_backend_*` tag. The current Zephyr-specific specialisation is
-still a TODO skeleton, so portable Zephyr code should request
-`osal::bus_backend_generic` explicitly for now.
+The implemented LCD behavior is provided by `bus_backend_generic`, every
+delegated `bus_backend_*` tag, and the current Zephyr-tagged fallback. The
+Zephyr specialisation currently forwards to the generic runtime, which keeps
+Zephyr behavior portable today while leaving room for a future native backend.
 
 ## Guarantees
 

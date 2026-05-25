@@ -156,9 +156,9 @@ Legend:
 | C API (`osal_c.h`) | `test_c_api.cpp` | ⚠️ | C11 compilation verified; hosted tests cover notification and delayable_work; Zephyr `native_sim` rerun also passes the C notification and C delayable-work round-trips; ISR variants still not called from C |
 | Integration (multi-primitive) | `test_integration.cpp` | ⚠️ | Producer/consumer with queue+semaphore; no rwlock or memory_pool integration |
 | Thread task notification | `test_thread.cpp` | ⚠️ | Unsupported path verified on Linux; native `xTaskNotify` round-trip now covered in the FreeRTOS suite; embOS task-event coverage still needs a licensed SDK environment |
-| `osal::osal_bus` | `tests/bus/test_osal_signal_backends.cpp` | ✅ | Hosted generic and delegated point-to-point channel behavior is covered; the Zephyr native specialisation is still a TODO skeleton |
+| `osal::osal_bus` | `tests/bus/test_osal_signal_backends.cpp` | ✅ | Hosted generic, delegated, and Zephyr-tagged fallback point-to-point channel behavior is covered; a native Zephyr runtime is still not implemented |
 | `osal::osal_signal` | `tests/bus/test_osal_signal_lcd.cpp`, `tests/bus/test_osal_signal_backends.cpp` | ✅ | Subscribe/unsubscribe, fan-out, FIFO ordering, full-queue drop semantics, and delegated backend compilation are covered on hosted builds |
-| `osal::osal_signal_premium` | `tests/bus/test_osal_signal_premium.cpp`, `tests/bus/test_osal_signal_backends.cpp` | ⚠️ | Mock-backend observers and copy-based `publish_zero_copy()` fallback are covered; `route_to()` is still a stub and the Zephyr native runtime path is still TODO |
+| `osal::osal_signal_premium` | `tests/bus/test_osal_signal_premium.cpp`, `tests/bus/test_osal_signal_backends.cpp` | ⚠️ | Mock-backend observers and copy-based `publish_zero_copy()` fallback are covered; `route_to()` is still a stub, and the Zephyr tag currently reuses the same portable premium path rather than a native Zbus implementation |
 
 ---
 

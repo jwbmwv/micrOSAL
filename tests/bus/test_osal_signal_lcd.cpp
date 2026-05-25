@@ -255,11 +255,11 @@ TEST_CASE("osal_signal: mock backend advertises all premium capabilities")
     CHECK(caps::zero_copy);
 }
 
-TEST_CASE("osal_signal: Zephyr backend advertises all premium capabilities")
+TEST_CASE("osal_signal: Zephyr backend has no native premium capabilities yet")
 {
     using caps = osal::osal_signal_capabilities<osal::bus_backend_zephyr>;
-    CHECK(caps::native_pubsub);
-    CHECK(caps::native_observers);
-    CHECK(caps::native_routing);
-    CHECK(caps::zero_copy);
+    CHECK_FALSE(caps::native_pubsub);
+    CHECK_FALSE(caps::native_observers);
+    CHECK_FALSE(caps::native_routing);
+    CHECK_FALSE(caps::zero_copy);
 }

@@ -20,7 +20,7 @@ namespace osal {
     }
 
     class "osal_bus<T,Capacity,\nbus_backend_zephyr>" as BusZephyr {
-        .. TODO Zbus reference ..
+        -impl_ : osal_bus<T,Capacity,bus_backend_generic>
     }
 
     Bus <|.. BusGeneric
@@ -39,6 +39,9 @@ namespace osal {
         -slots_ : subscriber_slot[N]
         -mutex_ : osal::mutex
         -subscriber_count_ : size_t
+    }
+
+    class "osal_signal<T,N,M,\nbus_backend_zephyr>" as SignalZephyr {
     }
 
     class subscriber_slot {
@@ -65,14 +68,19 @@ namespace osal {
     }
 
         Signal <|.. SignalGeneric
+        Signal <|.. SignalZephyr
         SignalPremium --|> Signal
+        SignalZephyr --|> SignalGeneric
         SignalGeneric *-- subscriber_slot
         subscriber_slot *-- BusGeneric
+        BusZephyr *-- BusGeneric : impl_
         SignalPremium ..> Caps : constexpr query
 
         note right of BusZephyr
-            Current Zephyr specialisation
-            is a TODO skeleton.
+            Current Zephyr specialisations
+            delegate to the generic runtime.
+            A future native Zbus path can
+            replace this wrapper.
         end note
 }
 
