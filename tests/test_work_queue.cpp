@@ -318,8 +318,7 @@ TEST_CASE("work_queue: cancel_all does not satisfy an earlier flush")
         auto* queue = active_wq.load(std::memory_order_acquire);
         if (queue != nullptr)
         {
-            flush_code.store(static_cast<int>(queue->flush(osal::milliseconds{50}).code()),
-                             std::memory_order_release);
+            flush_code.store(static_cast<int>(queue->flush(osal::milliseconds{50}).code()), std::memory_order_release);
         }
     };
 

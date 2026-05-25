@@ -76,8 +76,8 @@ template<typename NativeThreadId>
     constexpr std::uint64_t kFnvOffset = 1469598103934665603ULL;
     constexpr std::uint64_t kFnvPrime  = 1099511628211ULL;
 
-    std::uint64_t              hash  = kFnvOffset;
-    const auto* const          bytes = reinterpret_cast<const unsigned char*>(&native_id);
+    std::uint64_t     hash  = kFnvOffset;
+    const auto* const bytes = reinterpret_cast<const unsigned char*>(&native_id);
     for (std::size_t i = 0; i < sizeof(native_id); ++i)
     {
         hash ^= static_cast<std::uint64_t>(bytes[i]);
@@ -557,7 +557,7 @@ extern "C"
             {
                 return osal::error_code::not_initialized;
             }
-            auto* const thread_id = static_cast<const pthread_t*>(handle->native);
+            const auto* const thread_id = static_cast<const pthread_t*>(handle->native);
             if (pthread_getcpuclockid(*thread_id, &clock_id) != 0)
             {
                 return osal::error_code::unknown;

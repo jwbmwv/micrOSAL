@@ -33,7 +33,7 @@ void print_value_line(const char* prefix, Integer value)
     std::fputs(prefix, stdout);
 
     std::array<char, 32> buffer{};
-    const auto result = std::to_chars(buffer.data(), buffer.data() + buffer.size() - 1, value);
+    const auto           result = std::to_chars(buffer.data(), buffer.data() + buffer.size() - 1, value);
     if (result.ec == std::errc{})
     {
         *result.ptr = '\n';

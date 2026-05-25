@@ -114,7 +114,7 @@ TEST_CASE("memory_pool: all blocks are distinct and writable")
     // Verify blocks don't overlap by checking sentinel values intact.
     for (std::size_t i = 0; i < kCount; ++i)
     {
-        const auto* p = static_cast<const std::uint8_t*>(blocks[i]);
+        const auto* p  = static_cast<const std::uint8_t*>(blocks[i]);
         bool        ok = true;
         for (std::size_t j = 0; j < kBlockSize; ++j)
         {

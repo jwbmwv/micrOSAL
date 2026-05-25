@@ -408,7 +408,7 @@ TEST_CASE("condvar: wait_until with predicate succeeds before deadline")
     REQUIRE(t.create(make_cfg(setter, nullptr, t_stack, sizeof(t_stack), "wuntil_pred")).ok());
 
     const auto deadline = osal::monotonic_clock::now() + osal::milliseconds{2000};
-    bool       ok = false;
+    bool       ok       = false;
     {
         mtx.lock();
         ok = cv.wait_until(mtx, deadline, [] { return ready2; });

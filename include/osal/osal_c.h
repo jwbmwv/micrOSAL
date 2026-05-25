@@ -478,7 +478,7 @@ typedef uint32_t osal_tick_t;
         }
         if (duration_ns > (INT64_MAX - 999))
         {
-            return (INT64_MAX / 1000) + ((INT64_MAX % 1000) != 0);
+            return (INT64_MAX / 1000) + (((INT64_MAX % 1000) != 0) ? 1 : 0);
         }
         return (duration_ns + 999) / 1000;
     }
@@ -503,7 +503,7 @@ typedef uint32_t osal_tick_t;
     /** @brief Return non-zero when the monotonic deadline has expired. */
     static inline int osal_c_monotonic_deadline_expired(osal_monotonic_deadline deadline)
     {
-        return osal_c_clock_monotonic_ms() >= deadline.expiry_ms;
+        return (osal_c_clock_monotonic_ms() >= deadline.expiry_ms) ? 1 : 0;
     }
 
     /** @brief Return the remaining monotonic time in milliseconds, saturating at zero. */
@@ -540,7 +540,7 @@ typedef uint32_t osal_tick_t;
     /** @brief Return non-zero when the high-resolution deadline has expired. */
     static inline int osal_c_high_resolution_deadline_expired(osal_high_resolution_deadline deadline)
     {
-        return osal_c_clock_high_resolution_ns() >= deadline.expiry_ns;
+        return (osal_c_clock_high_resolution_ns() >= deadline.expiry_ns) ? 1 : 0;
     }
 
     /** @brief Return the remaining high-resolution time in nanoseconds, saturating at zero. */
