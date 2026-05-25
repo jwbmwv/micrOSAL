@@ -53,10 +53,7 @@ TEST_CASE("condvar: notify_one wakes one waiting thread")
     auto consumer = [](void*)
     {
         mtx.lock();
-        while (!data_ready)
-        {
-            cv.wait(mtx);
-        }
+        cv.wait(mtx, [] { return data_ready; });
         consumed = true;
         mtx.unlock();
     };
@@ -96,15 +93,13 @@ TEST_CASE("condvar: notify_all wakes all waiting threads")
     auto waiter = [](void*)
     {
         mtx.lock();
-        while (!go)
-        {
-            cv.wait(mtx);
-        }
+        cv.wait(mtx, [] { return go; });
         woke_up.fetch_add(1);
         mtx.unlock();
     };
 
-    osal::thread t1, t2;
+    osal::thread t1;
+    osal::thread t2;
     REQUIRE(t1.create(make_cfg(waiter, nullptr, t_stack, sizeof(t_stack), "cv_w1")).ok());
     REQUIRE(t2.create(make_cfg(waiter, nullptr, t_stack2, sizeof(t_stack2), "cv_w2")).ok());
 
@@ -302,7 +297,7 @@ TEST_CASE("condvar: wait with predicate blocks until predicate is true")
 
     {
         osal::mutex::lock_guard lg{mtx};
-        cv.wait(mtx, [] { return ready == true; });
+        cv.wait(mtx, [] { return ready; });
     }
     CHECK(ready);
 
@@ -354,10 +349,10 @@ TEST_CASE("condvar: wait_for with predicate succeeds before timeout")
     osal::thread t;
     REQUIRE(t.create(make_cfg(setter, nullptr, t_stack, sizeof(t_stack), "pred_wf")).ok());
 
-    bool ok;
+    bool ok = false;
     {
         mtx.lock();
-        ok = cv.wait_for(mtx, osal::milliseconds{2000}, [] { return flag == true; });
+        ok = cv.wait_for(mtx, osal::milliseconds{2000}, [] { return flag; });
         mtx.unlock();
     }
     CHECK(ok);
@@ -413,10 +408,10 @@ TEST_CASE("condvar: wait_until with predicate succeeds before deadline")
     REQUIRE(t.create(make_cfg(setter, nullptr, t_stack, sizeof(t_stack), "wuntil_pred")).ok());
 
     const auto deadline = osal::monotonic_clock::now() + osal::milliseconds{2000};
-    bool       ok;
+    bool       ok = false;
     {
         mtx.lock();
-        ok = cv.wait_until(mtx, deadline, [] { return ready2 == true; });
+        ok = cv.wait_until(mtx, deadline, [] { return ready2; });
         mtx.unlock();
     }
     CHECK(ok);

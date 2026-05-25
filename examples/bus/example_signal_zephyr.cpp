@@ -23,8 +23,33 @@
 ///   cmake --build build -- example_topic_zephyr
 /// @endcode
 #include <microsal/bus/osal_signal_premium.hpp>
+
+#include <array>
+#include <charconv>
 #include <cstdint>
 #include <cstdio>
+
+namespace
+{
+
+template<typename Integer>
+void print_value_line(const char* prefix, Integer value)
+{
+    std::fputs(prefix, stdout);
+
+    std::array<char, 32> buffer{};
+    const auto result = std::to_chars(buffer.data(), buffer.data() + buffer.size() - 1, value);
+    if (result.ec == std::errc{})
+    {
+        *result.ptr = '\n';
+        std::fwrite(buffer.data(), 1, static_cast<std::size_t>(result.ptr - buffer.data()) + 1U, stdout);
+        return;
+    }
+
+    std::fputs("?\n", stdout);
+}
+
+}  // namespace
 
 // ---------------------------------------------------------------------------
 // On Zephyr: define the channel at file scope with ZBUS_CHAN_DEFINE.
@@ -54,7 +79,7 @@ int main()
 
     // Register a Zbus observer callback.
     static auto obs = [](const std::uint32_t& v) noexcept
-    { std::printf("[zephyr-example] observer callback: %u\n", static_cast<unsigned>(v)); };
+    { print_value_line("[zephyr-example] observer callback: ", v); };
     // Cast lambda to function pointer (stateless lambda is convertible).
     (void)sensor_topic.subscribe_observer(static_cast<void (*)(const std::uint32_t&) noexcept>(obs));
 
@@ -69,7 +94,7 @@ int main()
     std::uint32_t val{0U};
     while (sensor_topic.try_receive(sub, val))
     {
-        std::printf("[zephyr-example] queue-subscriber received: %u\n", static_cast<unsigned>(val));
+        print_value_line("[zephyr-example] queue-subscriber received: ", val);
     }
 
     if (sub != osal::invalid_subscriber_id)

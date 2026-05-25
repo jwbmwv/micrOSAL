@@ -18,8 +18,33 @@
 ///   ./build/examples/bus/example_topic_lcd
 /// @endcode
 #include <microsal/bus/osal_signal.hpp>
+
+#include <array>
+#include <charconv>
 #include <cstdint>
 #include <cstdio>
+
+namespace
+{
+
+template<typename Integer>
+void print_value_line(const char* prefix, Integer value)
+{
+    std::fputs(prefix, stdout);
+
+    std::array<char, 32> buffer{};
+    const auto result = std::to_chars(buffer.data(), buffer.data() + buffer.size() - 1, value);
+    if (result.ec == std::errc{})
+    {
+        *result.ptr = '\n';
+        std::fwrite(buffer.data(), 1, static_cast<std::size_t>(result.ptr - buffer.data()) + 1U, stdout);
+        return;
+    }
+
+    std::fputs("?\n", stdout);
+}
+
+}  // namespace
 
 int main()
 {
@@ -43,7 +68,7 @@ int main()
         return 1;
     }
 
-    std::printf("[example] subscriber_count = %zu\n", sensor_topic.subscriber_count());
+    print_value_line("[example] subscriber_count = ", sensor_topic.subscriber_count());
 
     // Publish a sensor reading — fans out to both queues.
     const std::uint32_t reading = 1234U;
@@ -56,14 +81,14 @@ int main()
     std::uint32_t val_a{0U};
     if (sensor_topic.try_receive(sub_a, val_a))
     {
-        std::printf("[example] subscriber A received: %u\n", static_cast<unsigned>(val_a));
+        print_value_line("[example] subscriber A received: ", val_a);
     }
 
     // Consumer B receives.
     std::uint32_t val_b{0U};
     if (sensor_topic.try_receive(sub_b, val_b))
     {
-        std::printf("[example] subscriber B received: %u\n", static_cast<unsigned>(val_b));
+        print_value_line("[example] subscriber B received: ", val_b);
     }
 
     // Publish multiple messages and drain.
@@ -76,14 +101,14 @@ int main()
     std::uint32_t v{0U};
     while (sensor_topic.try_receive(sub_a, v))
     {
-        std::printf("  -> %u\n", static_cast<unsigned>(v));
+        print_value_line("  -> ", v);
     }
 
     // Clean up.
     (void)sensor_topic.unsubscribe(sub_a);
     (void)sensor_topic.unsubscribe(sub_b);
 
-    std::printf("[example] subscriber_count after cleanup = %zu\n", sensor_topic.subscriber_count());
+    print_value_line("[example] subscriber_count after cleanup = ", sensor_topic.subscriber_count());
     std::puts("[example] done.");
     return 0;
 }

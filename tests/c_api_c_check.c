@@ -23,10 +23,14 @@ static void c_smoke_delayable_cb(void* arg)
 static int c_branch_hint_smoke(int value)
 {
     if (OSAL_LIKELY(value > 0))
+    {
         return value;
+    }
 
     if (OSAL_UNLIKELY(value < 0))
+    {
         return -value;
+    }
 
     return 0;
 }
@@ -49,11 +53,17 @@ typedef char static_assert_tick_size[sizeof(osal_tick_t) == 4 ? 1 : -1];
 int osal_c_smoke_test(void)
 {
     if (c_branch_hint_smoke(7) != 7)
+    {
         return 97;
+    }
     if (c_branch_hint_smoke(-3) != 3)
+    {
         return 98;
+    }
     if (c_branch_hint_smoke(0) != 0)
+    {
         return 99;
+    }
 
     /* ---- Clock ---- */
     int64_t mono = osal_c_clock_monotonic_ms();
@@ -67,164 +77,240 @@ int osal_c_smoke_test(void)
 
     osal_monotonic_deadline mono_deadline = osal_c_monotonic_deadline_after_ms(5);
     if (osal_c_monotonic_deadline_remaining_ms(mono_deadline) <= 0)
+    {
         return 100;
+    }
 
     mono_deadline = osal_c_monotonic_deadline_at_ms(osal_c_clock_monotonic_ms());
     if (osal_c_monotonic_deadline_expired(mono_deadline) == 0)
+    {
         return 101;
+    }
 
     osal_high_resolution_deadline hi_res_deadline = osal_c_high_resolution_deadline_after_us(1000);
     if (osal_c_clock_high_resolution_resolution_ns() <= 0)
+    {
         return 102;
+    }
     if (osal_c_high_resolution_deadline_remaining_us(hi_res_deadline) <= 0)
+    {
         return 103;
+    }
 
     /* ---- Mutex ---- */
     osal_mutex_handle mtx;
     osal_result_t     rc = osal_c_mutex_create(&mtx, 0);
     if (rc != OSAL_OK)
+    {
         return 1;
+    }
 
     rc = osal_c_mutex_lock(&mtx, OSAL_WAIT_FOREVER);
     if (rc != OSAL_OK)
+    {
         return 2;
+    }
 
     rc = osal_c_mutex_unlock(&mtx);
     if (rc != OSAL_OK)
+    {
         return 3;
+    }
 
     rc = osal_c_mutex_destroy(&mtx);
     if (rc != OSAL_OK)
+    {
         return 4;
+    }
 
     /* ---- Semaphore ---- */
     osal_semaphore_handle sem;
     rc = osal_c_semaphore_create(&sem, 1, 10);
     if (rc != OSAL_OK)
+    {
         return 10;
+    }
 
     rc = osal_c_semaphore_take(&sem, OSAL_NO_WAIT);
     if (rc != OSAL_OK)
+    {
         return 11;
+    }
 
     rc = osal_c_semaphore_give(&sem);
     if (rc != OSAL_OK)
+    {
         return 12;
+    }
 
     rc = osal_c_semaphore_destroy(&sem);
     if (rc != OSAL_OK)
+    {
         return 13;
+    }
 
     /* ---- Queue ---- */
     osal_queue_handle q;
     int               queue_buf[4]; /* backing storage for 4 ints */
     rc = osal_c_queue_create(&q, queue_buf, sizeof(int), 4);
     if (rc != OSAL_OK)
+    {
         return 20;
+    }
 
     int val = 42;
     rc      = osal_c_queue_send(&q, &val, OSAL_WAIT_FOREVER);
     if (rc != OSAL_OK)
+    {
         return 21;
+    }
 
     if (osal_c_queue_count(&q) != 1)
+    {
         return 22;
+    }
 
     int out = 0;
     rc      = osal_c_queue_receive(&q, &out, OSAL_WAIT_FOREVER);
     if (rc != OSAL_OK)
+    {
         return 23;
+    }
     if (out != 42)
+    {
         return 24;
+    }
 
     rc = osal_c_queue_destroy(&q);
     if (rc != OSAL_OK)
+    {
         return 25;
+    }
 
     /* ---- Event Flags ---- */
     osal_event_flags_handle ef;
     rc = osal_c_event_flags_create(&ef);
     if (rc != OSAL_OK)
+    {
         return 30;
+    }
 
     rc = osal_c_event_flags_set(&ef, 0x05);
     if (rc != OSAL_OK)
+    {
         return 31;
+    }
 
     osal_event_bits_t bits = osal_c_event_flags_get(&ef);
     if ((bits & 0x05) != 0x05)
+    {
         return 32;
+    }
 
     rc = osal_c_event_flags_clear(&ef, 0x01);
     if (rc != OSAL_OK)
+    {
         return 33;
+    }
 
     rc = osal_c_event_flags_destroy(&ef);
     if (rc != OSAL_OK)
+    {
         return 34;
+    }
 
     /* ---- Condition Variable ---- */
     osal_condvar_handle cv;
     rc = osal_c_condvar_create(&cv);
     if (rc != OSAL_OK)
+    {
         return 40;
+    }
 
     /* notify on empty waiters should still succeed */
     rc = osal_c_condvar_notify_one(&cv);
     if (rc != OSAL_OK)
+    {
         return 41;
+    }
 
     rc = osal_c_condvar_destroy(&cv);
     if (rc != OSAL_OK)
+    {
         return 42;
+    }
 
     /* ---- Read-Write Lock ---- */
     osal_rwlock_handle rw;
     rc = osal_c_rwlock_create(&rw);
     if (rc != OSAL_OK)
+    {
         return 50;
+    }
 
     rc = osal_c_rwlock_read_lock(&rw, OSAL_WAIT_FOREVER);
     if (rc != OSAL_OK)
+    {
         return 51;
+    }
 
     rc = osal_c_rwlock_read_unlock(&rw);
     if (rc != OSAL_OK)
+    {
         return 52;
+    }
 
     rc = osal_c_rwlock_write_lock(&rw, OSAL_WAIT_FOREVER);
     if (rc != OSAL_OK)
+    {
         return 53;
+    }
 
     rc = osal_c_rwlock_write_unlock(&rw);
     if (rc != OSAL_OK)
+    {
         return 54;
+    }
 
     rc = osal_c_rwlock_destroy(&rw);
     if (rc != OSAL_OK)
+    {
         return 55;
+    }
 
     /* ---- Thread-Local Data ---- */
     {
         osal_tls_key_handle tls;
         rc = osal_c_tls_key_create(&tls);
         if (rc == OSAL_NOT_SUPPORTED)
+        {
             return 0;
+        }
         if (rc != OSAL_OK)
+        {
             return 56;
+        }
 
         int tls_value = 123;
         rc            = osal_c_tls_set(&tls, &tls_value);
         if (rc != OSAL_OK)
+        {
             return 57;
+        }
         if (osal_c_tls_get(&tls) != &tls_value)
+        {
             return 58;
+        }
 
         rc = osal_c_tls_key_destroy(&tls);
         if (rc != OSAL_OK)
+        {
             return 59;
+        }
         if (osal_c_tls_get(&tls) != NULL)
+        {
             return 66;
+        }
     }
 
     /* ---- Config-based creation (FLASH-friendly) ---- */
@@ -233,20 +319,28 @@ int osal_c_smoke_test(void)
         osal_mutex_handle       cmtx;
         rc = osal_c_mutex_create_with_cfg(&cmtx, &mcfg);
         if (rc != OSAL_OK)
+        {
             return 60;
+        }
         rc = osal_c_mutex_destroy(&cmtx);
         if (rc != OSAL_OK)
+        {
             return 61;
+        }
     }
     {
         const osal_semaphore_config scfg = {1, 5};
         osal_semaphore_handle       csem;
         rc = osal_c_semaphore_create_with_cfg(&csem, &scfg);
         if (rc != OSAL_OK)
+        {
             return 62;
+        }
         rc = osal_c_semaphore_destroy(&csem);
         if (rc != OSAL_OK)
+        {
             return 63;
+        }
     }
     {
         int                     qbuf[2];
@@ -254,10 +348,14 @@ int osal_c_smoke_test(void)
         osal_queue_handle       cq;
         rc = osal_c_queue_create_with_cfg(&cq, &qcfg);
         if (rc != OSAL_OK)
+        {
             return 64;
+        }
         rc = osal_c_queue_destroy(&cq);
         if (rc != OSAL_OK)
+        {
             return 65;
+        }
     }
 
     /* ---- Notification ---- */
@@ -267,24 +365,36 @@ int osal_c_smoke_test(void)
         osal_notification_handle note;
         rc = osal_c_notification_create(&note, values, pending, 2U);
         if (rc != OSAL_OK)
+        {
             return 67;
+        }
 
         rc = osal_c_notification_notify(&note, 0x1234U, OSAL_NOTIFICATION_OVERWRITE, 1U);
         if (rc != OSAL_OK)
+        {
             return 68;
+        }
         if (osal_c_notification_pending(&note, 1U) != 1)
+        {
             return 69;
+        }
 
         uint32_t out = 0U;
         rc           = osal_c_notification_wait(&note, 1U, &out, 0U, 0xFFFFFFFFU, OSAL_NO_WAIT);
         if (rc != OSAL_OK)
+        {
             return 78;
+        }
         if (out != 0x1234U)
+        {
             return 79;
+        }
 
         rc = osal_c_notification_destroy(&note);
         if (rc != OSAL_OK)
+        {
             return 87;
+        }
     }
 
     /* ---- Stream Buffer ---- */
@@ -294,33 +404,49 @@ int osal_c_smoke_test(void)
         osal_stream_buffer_handle sb;
         rc = osal_c_stream_buffer_create(&sb, sb_storage, 16, 1);
         if (rc != OSAL_OK)
+        {
             return 70;
+        }
 
         unsigned char tx[4] = {0x01, 0x02, 0x03, 0x04};
         rc                  = osal_c_stream_buffer_send(&sb, tx, sizeof(tx), OSAL_NO_WAIT);
         if (rc != OSAL_OK)
+        {
             return 71;
+        }
 
         if (osal_c_stream_buffer_available(&sb) != 4)
+        {
             return 72;
+        }
 
         unsigned char rx[4] = {0};
         size_t        n     = osal_c_stream_buffer_receive(&sb, rx, sizeof(rx), OSAL_NO_WAIT);
         if (n != 4)
+        {
             return 73;
+        }
         if (rx[0] != 0x01 || rx[3] != 0x04)
+        {
             return 74;
+        }
 
         rc = osal_c_stream_buffer_reset(&sb);
         if (rc != OSAL_OK)
+        {
             return 75;
+        }
 
         if (osal_c_stream_buffer_available(&sb) != 0)
+        {
             return 76;
+        }
 
         rc = osal_c_stream_buffer_destroy(&sb);
         if (rc != OSAL_OK)
+        {
             return 77;
+        }
     }
 
     /* ---- Message Buffer ---- */
@@ -330,31 +456,45 @@ int osal_c_smoke_test(void)
         osal_message_buffer_handle mb;
         rc = osal_c_message_buffer_create(&mb, mb_storage, 32);
         if (rc != OSAL_OK)
+        {
             return 80;
+        }
 
         unsigned char msg[4] = {0xAA, 0xBB, 0xCC, 0xDD};
         rc                   = osal_c_message_buffer_send(&mb, msg, sizeof(msg), OSAL_NO_WAIT);
         if (rc != OSAL_OK)
+        {
             return 81;
+        }
 
         /* next_message_size should equal payload length */
         if (osal_c_message_buffer_available(&mb) != sizeof(msg))
+        {
             return 82;
+        }
 
         unsigned char rxm[4] = {0};
         size_t        n      = osal_c_message_buffer_receive(&mb, rxm, sizeof(rxm), OSAL_NO_WAIT);
         if (n != sizeof(msg))
+        {
             return 83;
+        }
         if (rxm[0] != 0xAA || rxm[3] != 0xDD)
+        {
             return 84;
+        }
 
         rc = osal_c_message_buffer_reset(&mb);
         if (rc != OSAL_OK)
+        {
             return 85;
+        }
 
         rc = osal_c_message_buffer_destroy(&mb);
         if (rc != OSAL_OK)
+        {
             return 86;
+        }
     }
 
     /* ---- Delayable Work ---- */
@@ -363,9 +503,13 @@ int osal_c_smoke_test(void)
         osal_work_queue_handle wq;
         rc = osal_c_work_queue_create(&wq, wq_stack, sizeof(wq_stack), 8U, "c_smoke_dw_wq");
         if (rc == OSAL_NOT_SUPPORTED)
+        {
             return 0;
+        }
         if (rc != OSAL_OK)
+        {
             return 88;
+        }
 
         osal_delayable_work_handle work;
         int                        count = 0;
@@ -376,24 +520,36 @@ int osal_c_smoke_test(void)
             return 0;
         }
         if (rc != OSAL_OK)
+        {
             return 89;
+        }
 
         rc = osal_c_delayable_work_schedule(&work, 5U);
         if (rc != OSAL_OK)
+        {
             return 90;
+        }
 
         rc = osal_c_delayable_work_flush(&work, OSAL_WAIT_FOREVER);
         if (rc != OSAL_OK)
+        {
             return 91;
+        }
         if (count != 1)
+        {
             return 92;
+        }
 
         rc = osal_c_delayable_work_destroy(&work);
         if (rc != OSAL_OK)
+        {
             return 93;
+        }
         rc = osal_c_work_queue_destroy(&wq);
         if (rc != OSAL_OK)
+        {
             return 94;
+        }
     }
 
     return 0; /* all good */

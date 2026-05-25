@@ -95,7 +95,8 @@ TEST_CASE("thread_local_data: each thread sees its own value")
     alignas(16) static std::uint8_t stack_b[65536];
 
     osal::thread_config cfg{};
-    osal::thread        ta, tb;
+    osal::thread        ta;
+    osal::thread        tb;
 
     cfg.entry       = worker;
     cfg.arg         = &ctx_a;
@@ -189,7 +190,7 @@ TEST_CASE("thread_local_data: multiple keys are independent")
 
 TEST_CASE("thread_local_data: destroyed key returns nullptr on get")
 {
-    osal::thread_local_data* tls = new osal::thread_local_data{};
+    auto* tls = new osal::thread_local_data{};
     REQUIRE(tls->valid());
 
     static int v = 5;
@@ -231,5 +232,7 @@ TEST_CASE("thread_local_data: exhausting all keys returns invalid")
     CHECK(valid_count <= kMax);
 
     for (auto* k : keys)
+    {
         delete k;
+    }
 }

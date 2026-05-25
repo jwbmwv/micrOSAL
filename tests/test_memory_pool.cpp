@@ -114,8 +114,8 @@ TEST_CASE("memory_pool: all blocks are distinct and writable")
     // Verify blocks don't overlap by checking sentinel values intact.
     for (std::size_t i = 0; i < kCount; ++i)
     {
-        auto* p  = static_cast<const std::uint8_t*>(blocks[i]);
-        bool  ok = true;
+        const auto* p = static_cast<const std::uint8_t*>(blocks[i]);
+        bool        ok = true;
         for (std::size_t j = 0; j < kBlockSize; ++j)
         {
             if (p[j] != static_cast<std::uint8_t>(i + 1))
@@ -127,9 +127,9 @@ TEST_CASE("memory_pool: all blocks are distinct and writable")
         CHECK(ok);
     }
 
-    for (std::size_t i = 0; i < kCount; ++i)
+    for (auto* block : blocks)
     {
-        (void)pool.deallocate(blocks[i]);
+        (void)pool.deallocate(block);
     }
     CHECK(pool.available() == kCount);
 }
@@ -236,6 +236,8 @@ TEST_CASE("memory_pool: allocate_for unblocks when block is freed by another thr
     CHECK(blk != nullptr);
 
     REQUIRE(t.join().ok());
-    if (blk)
+    if (blk != nullptr)
+    {
         (void)pool.deallocate(blk);
+    }
 }

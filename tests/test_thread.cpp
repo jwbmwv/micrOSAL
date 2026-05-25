@@ -474,7 +474,7 @@ TEST_CASE("thread_local_data: values are isolated per thread")
         c->seen_before = c->tls->get();
         (void)c->tls->set(&c->worker_value);
         c->seen_after = c->tls->get();
-        (void)c->done->give();
+        c->done->give();
     };
 
     alignas(16) static std::uint8_t stack[65536];

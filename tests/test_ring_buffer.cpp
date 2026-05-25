@@ -122,10 +122,12 @@ TEST_CASE("ring_buffer: wrap-around maintains FIFO order")
 
     // Fill to capacity.
     for (int i = 0; i < 4; ++i)
+    {
         CHECK(rb.try_push(i));
+    }
 
     // Consume two.
-    int v;
+    int v = 0;
     CHECK(rb.try_pop(v));
     CHECK(v == 0);
     CHECK(rb.try_pop(v));
@@ -155,7 +157,9 @@ TEST_CASE("ring_buffer: reset discards all items")
 {
     osal::ring_buffer<int, 8> rb;
     for (int i = 0; i < 5; ++i)
+    {
         rb.try_push(i);
+    }
     CHECK(rb.size() == 5U);
 
     rb.reset();
@@ -234,7 +238,9 @@ TEST_CASE("ring_buffer: try_push_n partial when buffer nearly full")
 {
     osal::ring_buffer<int, 4> rb;
     for (int i = 0; i < 3; ++i)
+    {
         CHECK(rb.try_push(i));
+    }
 
     const int extra[] = {10, 20, 30};
     CHECK(rb.try_push_n(extra, 3U) == 1U);
@@ -282,7 +288,7 @@ TEST_CASE("ring_buffer: try_push_n / try_pop_n with wrap-around")
     {
         CHECK(rb.try_push(i));
     }
-    int discard;
+    int discard = 0;
     for (int i = 0; i < 3; ++i)
     {
         CHECK(rb.try_pop(discard));
@@ -350,7 +356,7 @@ TEST_CASE("ring_buffer: bulk push + single pop interleave")
     const int                 batch[] = {10, 20, 30, 40};
     CHECK(rb.try_push_n(batch, 4U) == 4U);
 
-    int v;
+    int v = 0;
     CHECK(rb.try_pop(v));
     CHECK(v == 10);
     CHECK(rb.try_pop(v));
@@ -404,7 +410,7 @@ TEST_CASE("ring_buffer: SPSC producer + consumer correctness")
         std::uint32_t expected = 0;
         while (expected < kItems)
         {
-            std::uint32_t val;
+            std::uint32_t val = 0;
             if (rb.try_pop(val))
             {
                 if (val != expected)
@@ -423,7 +429,8 @@ TEST_CASE("ring_buffer: SPSC producer + consumer correctness")
 
     alignas(16) static std::uint8_t stack_p[65536];
     alignas(16) static std::uint8_t stack_c[65536];
-    osal::thread                    tp, tc;
+    osal::thread                    tp;
+    osal::thread                    tc;
     osal::thread_config             cfg{};
 
     cfg.entry       = producer;

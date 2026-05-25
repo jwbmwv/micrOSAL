@@ -69,7 +69,8 @@ TEST_CASE("barrier: two-thread rendezvous")
     alignas(16) static std::uint8_t stack_a[65536];
     alignas(16) static std::uint8_t stack_b[65536];
 
-    osal::thread        ta, tb;
+    osal::thread        ta;
+    osal::thread        tb;
     osal::thread_config ca{};
     ca.entry               = worker;
     ca.arg                 = &ctx;

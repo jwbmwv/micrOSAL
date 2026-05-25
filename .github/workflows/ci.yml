@@ -73,9 +73,33 @@ jobs:
   # Static analysis (clang-tidy on Linux backend)
   # -------------------------------------------------------------------
   clang-tidy:
-    name: clang-tidy
+    name: clang-tidy core
     runs-on: ubuntu-24.04
     needs: build-test
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install clang-tidy
+        run: sudo apt-get update && sudo apt-get install -y clang-tidy
+
+      - name: Configure (for compile_commands.json)
+        run: |
+          cmake -B build \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+            -DOSAL_BACKEND=LINUX
+
+      - name: Build (needed for headers)
+        run: cmake --build build -j $(nproc)
+
+      - name: Run clang-tidy
+        run: CLANG_TIDY=clang-tidy BUILD_DIR=build ./scripts/tidy.sh --warnings-as-errors='*'
+
+  clang-tidy-tests:
+    name: clang-tidy tests/examples
+    runs-on: ubuntu-24.04
+    needs: build-test
+    continue-on-error: true
     steps:
       - uses: actions/checkout@v5
 
@@ -94,10 +118,12 @@ jobs:
       - name: Build (needed for headers)
         run: cmake --build build -j $(nproc)
 
-      - name: Run clang-tidy
-        run: CLANG_TIDY=clang-tidy BUILD_DIR=build ./scripts/tidy.sh --warnings-as-errors='*' || true
-        # NOTE: Using || true initially so tidy warnings don't block CI.
-        # Remove || true once the codebase is tidy-clean.
+      - name: Run clang-tidy on tests and examples
+        run: |
+          TIDY_INCLUDE_REGEX='.*/(tests|examples)/.*[.](cpp|c)$' \
+          CLANG_TIDY=clang-tidy \
+          BUILD_DIR=build \
+          ./scripts/tidy.sh --warnings-as-errors='*'
 
   # -------------------------------------------------------------------
   # Sanitiser run (ASan + UBSan on LINUX backend)

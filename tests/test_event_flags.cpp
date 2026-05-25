@@ -234,7 +234,9 @@ TEST_CASE("event_flags: only matching waiters wake while others remain blocked")
     waiter_ctx                      ctx_b{&ef, 0x02U, 0x02U, &started, &woke_mask};
     waiter_ctx                      ctx_c{&ef, 0x04U, 0x04U, &started, &woke_mask};
 
-    osal::thread        ta, tb, tc;
+    osal::thread        ta;
+    osal::thread        tb;
+    osal::thread        tc;
     osal::thread_config cfg_a{};
     osal::thread_config cfg_b{};
     osal::thread_config cfg_c{};

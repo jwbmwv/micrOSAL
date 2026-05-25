@@ -10,6 +10,7 @@ if [[ "$BUILD_DIR" != /* ]]; then
     BUILD_DIR="$REPO_ROOT/$BUILD_DIR"
 fi
 CT="${CLANG_TIDY:-clang-tidy}"
+TIDY_INCLUDE_REGEX="${TIDY_INCLUDE_REGEX:-}"
 
 if [[ ! -f "$BUILD_DIR/compile_commands.json" ]]; then
     echo "Error: $BUILD_DIR/compile_commands.json not found."
@@ -27,8 +28,8 @@ while IFS= read -r f; do
     FILES+=("$f")
 done < <(
     sed -n 's/^[[:space:]]*"file": "\(.*\)",$/\1/p' "$BUILD_DIR/compile_commands.json" \
-        | awk -v repo_root="$REPO_ROOT/" -v build_root="$BUILD_DIR/" '
-            index($0, repo_root) == 1 && index($0, build_root) != 1 && $0 ~ /\.(cpp|c)$/ {
+        | awk -v repo_root="$REPO_ROOT/" -v build_root="$BUILD_DIR/" -v include_regex="$TIDY_INCLUDE_REGEX" '
+            index($0, repo_root) == 1 && index($0, build_root) != 1 && $0 ~ /\.(cpp|c)$/ && (include_regex == "" || $0 ~ include_regex) {
                 print
             }
         ' \

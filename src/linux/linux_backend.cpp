@@ -77,7 +77,7 @@ template<typename NativeThreadId>
     constexpr std::uint64_t kFnvPrime  = 1099511628211ULL;
 
     std::uint64_t              hash  = kFnvOffset;
-    const unsigned char* const bytes = reinterpret_cast<const unsigned char*>(&native_id);
+    const auto* const          bytes = reinterpret_cast<const unsigned char*>(&native_id);
     for (std::size_t i = 0; i < sizeof(native_id); ++i)
     {
         hash ^= static_cast<std::uint64_t>(bytes[i]);

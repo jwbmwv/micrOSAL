@@ -87,7 +87,8 @@ TEST_CASE("rwlock: multiple readers can hold lock concurrently")
         (void)rw.read_unlock();
     };
 
-    osal::thread ta, tb;
+    osal::thread ta;
+    osal::thread tb;
     REQUIRE(ta.create(make_cfg(reader, nullptr, t_stack_a, sizeof(t_stack_a), "reader_a")).ok());
     REQUIRE(tb.create(make_cfg(reader, nullptr, t_stack_b, sizeof(t_stack_b), "reader_b")).ok());
     REQUIRE(ta.join().ok());
@@ -138,7 +139,8 @@ TEST_CASE("rwlock: writer blocks readers")
 
     static ctx_t ctx{&shared_value, &reader_saw_data};
 
-    osal::thread tw, tr;
+    osal::thread tw;
+    osal::thread tr;
     REQUIRE(tw.create(make_cfg(writer, &ctx, t_stack_a, sizeof(t_stack_a), "writer")).ok());
     REQUIRE(tr.create(make_cfg(reader, &ctx, t_stack_b, sizeof(t_stack_b), "reader")).ok());
     REQUIRE(tw.join().ok());
@@ -264,7 +266,8 @@ TEST_CASE("rwlock: writers are mutually exclusive")
         }
     };
 
-    osal::thread ta, tb;
+    osal::thread ta;
+    osal::thread tb;
     REQUIRE(ta.create(make_cfg(writer, nullptr, t_stack_a, sizeof(t_stack_a), "writer_a")).ok());
     REQUIRE(tb.create(make_cfg(writer, nullptr, t_stack_b, sizeof(t_stack_b), "writer_b")).ok());
     REQUIRE(ta.join().ok());

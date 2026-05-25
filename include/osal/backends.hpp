@@ -273,71 +273,108 @@ enum class support_requirement
     irq_mask_guard,
 };
 
+namespace detail
+{
+
+template<support_requirement Requirement, typename Backend>
+struct support_requirement_value;
+
+template<typename Backend>
+struct support_requirement_value<support_requirement::timer, Backend>
+{
+    static constexpr bool value = timer_backend<Backend>;
+};
+
+template<typename Backend>
+struct support_requirement_value<support_requirement::delayable_work, Backend>
+{
+    static constexpr bool value = delayable_work_backend<Backend>;
+};
+
+template<typename Backend>
+struct support_requirement_value<support_requirement::wait_set, Backend>
+{
+    static constexpr bool value = wait_set_backend<Backend>;
+};
+
+template<typename Backend>
+struct support_requirement_value<support_requirement::spinlock, Backend>
+{
+    static constexpr bool value = capabilities<Backend>::has_spinlock;
+};
+
+template<typename Backend>
+struct support_requirement_value<support_requirement::timed_join, Backend>
+{
+    static constexpr bool value = timed_join_backend<Backend>;
+};
+
+template<typename Backend>
+struct support_requirement_value<support_requirement::thread_affinity, Backend>
+{
+    static constexpr bool value = thread_affinity_backend<Backend>;
+};
+
+template<typename Backend>
+struct support_requirement_value<support_requirement::dynamic_thread_priority, Backend>
+{
+    static constexpr bool value = dynamic_thread_priority_backend<Backend>;
+};
+
+template<typename Backend>
+struct support_requirement_value<support_requirement::task_notification, Backend>
+{
+    static constexpr bool value = task_notification_backend<Backend>;
+};
+
+template<typename Backend>
+struct support_requirement_value<support_requirement::thread_suspend_resume, Backend>
+{
+    static constexpr bool value = capabilities<Backend>::has_thread_suspend_resume;
+};
+
+template<typename Backend>
+struct support_requirement_value<support_requirement::thread_stack_watermark, Backend>
+{
+    static constexpr bool value = thread_stack_watermark_capability<Backend>::value;
+};
+
+template<typename Backend>
+struct support_requirement_value<support_requirement::thread_execution_time, Backend>
+{
+    static constexpr bool value = thread_execution_time_capability<Backend>::value;
+};
+
+template<typename Backend>
+struct support_requirement_value<support_requirement::thread_cpu_load_stats, Backend>
+{
+    static constexpr bool value = thread_cpu_load_stats_capability<Backend>::value;
+};
+
+template<typename Backend>
+struct support_requirement_value<support_requirement::high_resolution_clock, Backend>
+{
+    static constexpr bool value = high_resolution_clock_capability<Backend>::value;
+};
+
+template<typename Backend>
+struct support_requirement_value<support_requirement::current_cpu_query, Backend>
+{
+    static constexpr bool value = current_cpu_query_capability<Backend>::value;
+};
+
+template<typename Backend>
+struct support_requirement_value<support_requirement::irq_mask_guard, Backend>
+{
+    static constexpr bool value = irq_mask_guard_capability<Backend>::value;
+};
+
+}  // namespace detail
+
 /// @brief True when the selected backend satisfies the requested requirement.
 template<support_requirement Requirement, typename Backend = active_backend>
-inline constexpr bool supports_requirement = []() constexpr
-{
-    if constexpr (Requirement == support_requirement::timer)
-    {
-        return timer_backend<Backend>;
-    }
-    else if constexpr (Requirement == support_requirement::delayable_work)
-    {
-        return delayable_work_backend<Backend>;
-    }
-    else if constexpr (Requirement == support_requirement::wait_set)
-    {
-        return wait_set_backend<Backend>;
-    }
-    else if constexpr (Requirement == support_requirement::spinlock)
-    {
-        return capabilities<Backend>::has_spinlock;
-    }
-    else if constexpr (Requirement == support_requirement::timed_join)
-    {
-        return timed_join_backend<Backend>;
-    }
-    else if constexpr (Requirement == support_requirement::thread_affinity)
-    {
-        return thread_affinity_backend<Backend>;
-    }
-    else if constexpr (Requirement == support_requirement::dynamic_thread_priority)
-    {
-        return dynamic_thread_priority_backend<Backend>;
-    }
-    else if constexpr (Requirement == support_requirement::task_notification)
-    {
-        return task_notification_backend<Backend>;
-    }
-    else if constexpr (Requirement == support_requirement::thread_stack_watermark)
-    {
-        return thread_stack_watermark_capability<Backend>::value;
-    }
-    else if constexpr (Requirement == support_requirement::thread_execution_time)
-    {
-        return thread_execution_time_capability<Backend>::value;
-    }
-    else if constexpr (Requirement == support_requirement::thread_cpu_load_stats)
-    {
-        return thread_cpu_load_stats_capability<Backend>::value;
-    }
-    else if constexpr (Requirement == support_requirement::high_resolution_clock)
-    {
-        return high_resolution_clock_capability<Backend>::value;
-    }
-    else if constexpr (Requirement == support_requirement::current_cpu_query)
-    {
-        return current_cpu_query_capability<Backend>::value;
-    }
-    else if constexpr (Requirement == support_requirement::irq_mask_guard)
-    {
-        return irq_mask_guard_capability<Backend>::value;
-    }
-    else
-    {
-        return capabilities<Backend>::has_thread_suspend_resume;
-    }
-}();
+// NOLINTNEXTLINE(google-readability-casting) -- false positive on non-type template parameter usage.
+inline constexpr bool supports_requirement = detail::support_requirement_value<Requirement, Backend>::value;
 
 /// @brief Force a clear compile-time diagnostic when a backend requirement is mandatory.
 template<support_requirement Requirement, typename Backend = active_backend>
