@@ -35,18 +35,18 @@ namespace
 template<typename Integer>
 void print_value_line(const char* prefix, Integer value)
 {
-    std::fputs(prefix, stdout);
+    (void)std::fputs(prefix, stdout);
 
     std::array<char, 32> buffer{};
     const auto           result = std::to_chars(buffer.data(), buffer.data() + buffer.size() - 1, value);
     if (result.ec == std::errc{})
     {
         *result.ptr = '\n';
-        std::fwrite(buffer.data(), 1, static_cast<std::size_t>(result.ptr - buffer.data()) + 1U, stdout);
+        (void)std::fwrite(buffer.data(), 1, static_cast<std::size_t>(result.ptr - buffer.data()) + 1U, stdout);
         return;
     }
 
-    std::fputs("?\n", stdout);
+    (void)std::fputs("?\n", stdout);
 }
 
 }  // namespace
