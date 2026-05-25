@@ -154,11 +154,11 @@ jobs:
         run: ctest --test-dir build --output-on-failure --timeout 120
 
   # -------------------------------------------------------------------
-  # Backends that require proprietary SDK headers or non-Ubuntu host
-  # toolchains are intentionally documented rather than built here.
+  # Backends whose integration environments are not available on the
+  # Ubuntu runners are intentionally documented rather than built here.
   # ThreadX, PX5, VxWorks, Micrium, ChibiOS, embOS, CMSIS-RTOS v1/v2,
-  # and QNX need external SDKs or licensed environments not available on
-  # GitHub-hosted runners.
+  # and QNX currently need external SDKs, BSPs, simulators, or host
+  # environments that are not provisioned on GitHub-hosted runners.
   # -------------------------------------------------------------------
   freertos-test:
     name: "FreeRTOS v11 test (POSIX sim)"

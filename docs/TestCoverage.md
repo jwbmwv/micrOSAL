@@ -32,12 +32,14 @@ Nine build targets are covered by automated builds or runtime suites:
 | NuttX (main / sim:nsh) | NuttX builtin app (printf framework) | NuttX sim/nsh on x86-64 | ✅ in CI; **30/30 pass** last recorded rerun |
 | Zephyr (`native_sim`) | west twister (ztest) | Native Linux process | ✅ Locally rerun in an isolated Zephyr v4.4 environment; current 97-case suite passed **2/2** configurations and **194/194** test cases |
 | Zephyr (`nrf52840dk`) | west twister (ztest + Renode) | **Renode** v1.15.3 SoC simulation | ⚠️ Last published rerun was **79/79** on the pre-change suite; current 97-case suite not rerun after the stack-watermark, high-resolution-clock, and thread-introspection additions |
-| ThreadX / PX5 / VxWorks / Micrium / ChibiOS / embOS / CMSIS-RTOS{,2} / QNX | External SDK integration | Proprietary or non-hosted toolchain required | ❌ Not on GitHub-hosted CI |
+| ThreadX / PX5 / VxWorks / Micrium / ChibiOS / embOS / CMSIS-RTOS{,2} / QNX | External SDK or BSP integration | External SDK, BSP, simulator, or non-hosted toolchain/environment required | ❌ Not on GitHub-hosted CI |
 
-GitHub-hosted CI does not attempt to build the vendor-SDK backends because the
-required headers and toolchains are not available on Ubuntu runners.  Their
-integration contracts are still documented, but validating them requires the
-corresponding SDKs or licensed host environments.
+GitHub-hosted CI does not attempt to build these external-integration backends
+because the required SDK/header sets, BSPs, simulators, or toolchains are not
+available on Ubuntu runners. Their integration contracts are still documented,
+but validating them requires the corresponding integration environments. Some
+of these backends are open source upstream; the current gap is environment
+availability, not licensing alone.
 
 Hosted bare-metal validation uses a test-only single-process helper that drives
 the bare-metal tick source and cooperative contexts for the doctest binaries.

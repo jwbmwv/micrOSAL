@@ -230,13 +230,16 @@ printf 'microsal_test\nexit\n' | timeout 120 ./nuttx/build/nuttx
 | NuttX (`sim/nsh`) | printf framework | NuttX sim on x86-64 Linux | ✅ 30/30 last recorded rerun |
 | Zephyr (`native_sim`) | west twister / ztest | Native process | ✅ 194/194 locally rerun across 2 configs |
 | Zephyr (`nrf52840dk`) | west twister / ztest | Renode v1.15.3 | ⚠️ 79/79 last recorded rerun on the pre-thread-introspection suite |
-| ThreadX / PX5 / VxWorks / Micrium / ChibiOS / embOS / CMSIS-RTOS{,2} / QNX | Vendor or non-hosted SDK integration | External toolchain / licensed SDK required | Documented, not GitHub-hosted CI-built |
+| ThreadX / PX5 / VxWorks / Micrium / ChibiOS / embOS / CMSIS-RTOS{,2} / QNX | External SDK or non-hosted integration | External SDK, BSP, simulator, or non-Ubuntu toolchain/environment required | Documented, not GitHub-hosted CI-built |
 
 Several backends intentionally remain out of GitHub-hosted CI because their
-source files include vendor SDK headers or require non-Ubuntu host toolchains.
+source files depend on SDK/header sets, BSPs, simulators, or host toolchains
+that are not provisioned on Ubuntu runners.
 That includes ThreadX, PX5, VxWorks, Micrium, ChibiOS, embOS,
 CMSIS-RTOS v1/v2, and QNX. Their integration points and feature expectations
-are still documented, but validating them requires the corresponding SDKs.
+are still documented, but validating them requires the corresponding external
+integration environments. Some of those backends are open source upstream; the
+gap here is CI availability, not licensing alone.
 
 See [`docs/TestCoverage.md`](docs/TestCoverage.md) for the full primitive
 coverage matrix and gap analysis.
