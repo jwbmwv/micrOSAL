@@ -14,7 +14,7 @@ Public bus headers are canonical under `include/osal/bus/`. The legacy
 
 ## `bus_backend_generic`
 
-**File:** `include/osal/bus/detail/osal_signal_backend_generic.hpp`
+**Files:** `include/osal/bus/detail/osal_bus_backend_generic.hpp`, `include/osal/bus/detail/osal_signal_backend_generic.hpp`
 
 `bus_backend_generic` is the authoritative implementation for the bus layer.
 It uses the MicrOSAL queue C ABI for `osal_bus` and `osal_signal` data flow,
@@ -28,7 +28,7 @@ This backend provides:
 
 ## Delegated Backends
 
-**File:** `include/osal/bus/detail/osal_signal_backend_delegated.hpp`
+**Files:** `include/osal/bus/detail/osal_bus_backend_delegated.hpp`, `include/osal/bus/detail/osal_signal_backend_delegated.hpp`
 
 All non-Zephyr, non-mock OSAL backends currently reuse the generic runtime
 implementation through `OSAL_BUS_DELEGATE_BACKEND_()`. Each tag is distinct at
@@ -55,7 +55,7 @@ compile time, but today they all behave like `bus_backend_generic`.
 
 ## `bus_backend_mock`
 
-**File:** `include/osal/bus/detail/osal_signal_backend_mock.hpp`
+**Files:** `include/osal/bus/detail/osal_bus_backend_mock.hpp`, `include/osal/bus/detail/osal_signal_backend_mock.hpp`
 
 `bus_backend_mock` exists to exercise `osal::osal_signal_premium` in hosted
 tests. It reuses the generic bus/signal implementation and exposes backend-
@@ -64,7 +64,7 @@ hosted suite.
 
 ## `bus_backend_zephyr`
 
-**File:** `include/osal/bus/detail/osal_signal_backend_zephyr.hpp`
+**Files:** `include/osal/bus/detail/osal_bus_backend_zephyr.hpp`, `include/osal/bus/detail/osal_signal_backend_zephyr.hpp`
 
 On real Zephyr builds, the Zephyr specialisations use a dedicated `k_msgq`-
 backed runtime. `osal_bus` maps directly to a Zephyr message queue, and
@@ -82,7 +82,7 @@ premium-wrapper behavior.
 
 ## Backend Selection Macro
 
-`MICROSAL_DEFAULT_BACKEND_TAG` is auto-defined in `include/microsal/microsal_config.hpp`
+`MICROSAL_DEFAULT_BACKEND_TAG` is auto-defined in `include/osal/bus/config.hpp`
 from the active `OSAL_BACKEND_*` macro:
 
 | OSAL backend macro | Default bus tag |
@@ -114,14 +114,16 @@ Override before including any bus header:
 
 ## Adding a New Bus Backend
 
-1. Add the tag struct in `include/microsal/microsal_config.hpp`.
+1. Add the tag struct in `include/osal/bus/config.hpp`.
 2. Add or update the `osal_signal_capabilities<>` specialisation in
    `include/osal/bus/detail/osal_signal_traits.hpp`.
 3. Either:
-   - add a delegated specialisation via `OSAL_BUS_DELEGATE_BACKEND_()` when the
-     generic runtime path is sufficient, or
-    - add a new native backend header under `include/osal/bus/detail/` and
-       include it from `include/osal/bus/osal_bus.hpp`.
+   - add delegated channel/topic specialisations via
+     `OSAL_BUS_DELEGATE_BACKEND_()` and `OSAL_SIGNAL_DELEGATE_BACKEND_()` when
+     the generic runtime path is sufficient, or
+   - add new native channel/topic backend headers under
+     `include/osal/bus/detail/` and include them from
+     `include/osal/bus/osal_bus.hpp` and `include/osal/bus/osal_signal.hpp`.
 4. Extend the `bus_backend_tag` concept in `osal_signal_traits.hpp`.
 5. Update the `MICROSAL_DEFAULT_BACKEND_TAG` selector if the new backend should
    become the default for an `OSAL_BACKEND_*` macro.

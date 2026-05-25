@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 /// @file osal_signal_backend_generic.hpp
-/// @brief Generic micrOSAL channel + topic backend (LCD implementation)
-/// @details Provides osal::osal_bus and osal::osal_signal specialisations
-///          for osal::bus_backend_generic.
+/// @brief Generic micrOSAL topic backend (LCD implementation)
+/// @details Provides the osal::osal_signal specialisation for
+///          osal::bus_backend_generic.
 ///
 ///          Implementation uses only micrOSAL primitives:
 ///          - Per-subscriber queue: backed by osal_queue_create / osal_queue_receive
@@ -22,8 +22,7 @@
 /// @ingroup osal_bus
 #pragma once
 
-#include <osal/bus/detail/osal_bus_fwd.hpp>
-#include <osal/queue.hpp>
+#include <osal/bus/detail/osal_bus_backend_generic.hpp>
 #include <osal/mutex.hpp>
 #include <osal/types.hpp>
 #include <osal/error.hpp>
@@ -33,101 +32,8 @@
 #include <cstdint>
 #include <type_traits>
 
-// Bring in the C queue ABI (declared in <osal/queue.hpp>).
-// osal_queue_create / osal_queue_destroy / osal_queue_send / osal_queue_receive
-// are already visible after including <osal/queue.hpp>.
-
 namespace osal
 {
-
-// ===========================================================================
-// osal_bus<T, Capacity, bus_backend_generic>
-// ===========================================================================
-
-/// @brief Generic channel specialisation — queue backed by the micrOSAL C ABI.
-/// @tparam T         Message type (trivially copyable + standard layout).
-/// @tparam Capacity  Maximum number of buffered messages.
-///
-/// @details This specialisation owns its backing storage and calls the
-///          osal_queue_* C functions directly so that @c tick_t timeouts
-///          are forwarded verbatim without a ticks↔ms round-trip.
-template<queue_element T, std::size_t Capacity>
-    requires(Capacity > 0U)
-class osal_bus<T, Capacity, bus_backend_generic>
-{
-public:
-    using value_type                        = T;
-    static constexpr std::size_t capacity   = Capacity;
-    static constexpr std::size_t value_size = sizeof(T);
-
-    // ---- construction / destruction ----------------------------------------
-
-    osal_bus() noexcept { valid_ = osal_queue_create(&handle_, storage_, value_size, Capacity).ok(); }
-
-    ~osal_bus() noexcept
-    {
-        if (valid_)
-        {
-            (void)osal_queue_destroy(&handle_);
-            valid_ = false;
-        }
-    }
-
-    osal_bus(const osal_bus&)            = delete;
-    osal_bus& operator=(const osal_bus&) = delete;
-    osal_bus(osal_bus&&)                 = delete;
-    osal_bus& operator=(osal_bus&&)      = delete;
-
-    // ---- query -------------------------------------------------------------
-
-    /// @brief Returns true if the underlying queue was successfully created.
-    [[nodiscard]] bool valid() const noexcept { return valid_; }
-
-    // ---- send --------------------------------------------------------------
-
-    /// @brief Non-blocking send. Returns true if the item was enqueued.
-    bool try_send(const T& item) noexcept { return osal_queue_send(&handle_, &item, NO_WAIT).ok(); }
-
-    /// @brief Blocking send — waits at most @p timeout_ticks ticks.
-    bool send(const T& item, tick_t timeout_ticks = WAIT_FOREVER) noexcept
-    {
-        return osal_queue_send(&handle_, &item, timeout_ticks).ok();
-    }
-
-    // ---- receive -----------------------------------------------------------
-
-    /// @brief Non-blocking receive. Returns true if an item was dequeued.
-    bool try_receive(T& out) noexcept { return osal_queue_receive(&handle_, &out, NO_WAIT).ok(); }
-
-    /// @brief Blocking receive — waits at most @p timeout_ticks ticks.
-    bool receive(T& out, tick_t timeout_ticks = WAIT_FOREVER) noexcept
-    {
-        return osal_queue_receive(&handle_, &out, timeout_ticks).ok();
-    }
-
-private:
-    template<typename U, std::size_t MaxSignalSubscribers, std::size_t SignalPerSubCapacity, typename BackendTag>
-    friend class osal_signal;
-
-    /// @brief Clears any buffered messages without blocking.
-    void purge() noexcept
-    {
-        if (!valid_)
-        {
-            return;
-        }
-
-        std::array<std::byte, value_size> scratch{};
-        while (osal_queue_receive(&handle_, scratch.data(), NO_WAIT).ok())
-        {
-        }
-    }
-
-    bool                          valid_{false};
-    active_traits::queue_handle_t handle_{};
-    alignas(T) std::uint8_t storage_[Capacity * sizeof(T)]{};
-};
-
 // ===========================================================================
 // osal_signal<T, MaxSubscribers, PerSubCapacity, bus_backend_generic>
 // ===========================================================================
@@ -280,7 +186,7 @@ private:
 
     [[nodiscard]] subscriber_id subscriber_cookie_() const noexcept
     {
-        constexpr subscriber_id mix = static_cast<subscriber_id>(0x9E3779B97F4A7C15ULL);
+        constexpr auto mix = static_cast<subscriber_id>(0x9E3779B97F4A7C15ULL);
         return static_cast<subscriber_id>(reinterpret_cast<std::uintptr_t>(this)) ^ mix;
     }
 

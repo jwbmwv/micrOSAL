@@ -32,10 +32,9 @@
 /// @} // osal_bus
 
 // ---------------------------------------------------------------------------
-// Backend specialisations — included here so a single header gives the full
-// channel interface regardless of which backends are available.
+// Channel backend specialisations.
 // ---------------------------------------------------------------------------
-#include <osal/bus/detail/osal_signal_backend_generic.hpp>
-#include <osal/bus/detail/osal_signal_backend_zephyr.hpp>
-#include <osal/bus/detail/osal_signal_backend_delegated.hpp>
-#include <osal/bus/detail/osal_signal_backend_mock.hpp>
+#include <osal/bus/detail/osal_bus_backend_generic.hpp>
+#include <osal/bus/detail/osal_bus_backend_zephyr.hpp>
+#include <osal/bus/detail/osal_bus_backend_delegated.hpp>
+#include <osal/bus/detail/osal_bus_backend_mock.hpp>

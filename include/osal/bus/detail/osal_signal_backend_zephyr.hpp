@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 /// @file osal_signal_backend_zephyr.hpp
-/// @brief Zephyr bus + signal backend tag
-/// @details On real Zephyr builds this header provides a dedicated native
-///          implementation using Zephyr kernel primitives directly. On hosted
-///          builds that instantiate @c bus_backend_zephyr only for compile-time
-///          coverage, the tag still delegates to the generic runtime so the
+/// @brief Zephyr topic backend tag
+/// @details On real Zephyr builds this header provides the dedicated native
+///          osal::osal_signal implementation for @c bus_backend_zephyr. On
+///          hosted builds that instantiate the tag only for compile-time
+///          coverage, the topic still delegates to the generic runtime so the
 ///          cross-backend doctest matrix keeps compiling.
 ///
 ///          Premium capability traits remain limited to the functionality that
@@ -14,6 +14,7 @@
 /// @ingroup osal_bus
 #pragma once
 
+#include <osal/bus/detail/osal_bus_backend_zephyr.hpp>
 #include <osal/bus/detail/osal_signal_backend_generic.hpp>
 
 #if defined(OSAL_BACKEND_ZEPHYR)
@@ -32,79 +33,6 @@ namespace osal
 {
 
 #if defined(OSAL_BACKEND_ZEPHYR)
-
-namespace zephyr_bus_detail
-{
-
-[[nodiscard]] inline k_timeout_t to_zephyr_timeout(tick_t timeout_ticks) noexcept
-{
-    if (timeout_ticks == WAIT_FOREVER)
-    {
-        return K_FOREVER;
-    }
-    if (timeout_ticks == NO_WAIT)
-    {
-        return K_NO_WAIT;
-    }
-    return K_MSEC(static_cast<int64_t>(timeout_ticks));
-}
-
-}  // namespace zephyr_bus_detail
-
-// ===========================================================================
-// osal_bus<T, Capacity, bus_backend_zephyr>
-// ===========================================================================
-
-/// @brief Zephyr-native channel backed by @c k_msgq.
-template<queue_element T, std::size_t Capacity>
-    requires(Capacity > 0U)
-class osal_bus<T, Capacity, bus_backend_zephyr>
-{
-public:
-    using value_type                      = T;
-    static constexpr std::size_t capacity = Capacity;
-
-    osal_bus() noexcept
-    {
-        k_msgq_init(&queue_, reinterpret_cast<char*>(storage_), sizeof(T), Capacity);
-        valid_ = true;
-    }
-
-    [[nodiscard]] bool valid() const noexcept { return valid_; }
-
-    bool try_send(const T& item) noexcept { return k_msgq_put(&queue_, &item, K_NO_WAIT) == 0; }
-
-    bool send(const T& item, tick_t timeout_ticks = WAIT_FOREVER) noexcept
-    {
-        return k_msgq_put(&queue_, &item, zephyr_bus_detail::to_zephyr_timeout(timeout_ticks)) == 0;
-    }
-
-    bool try_receive(T& out) noexcept { return k_msgq_get(&queue_, &out, K_NO_WAIT) == 0; }
-
-    bool receive(T& out, tick_t timeout_ticks = WAIT_FOREVER) noexcept
-    {
-        return k_msgq_get(&queue_, &out, zephyr_bus_detail::to_zephyr_timeout(timeout_ticks)) == 0;
-    }
-
-private:
-    template<typename U, std::size_t MaxSignalSubscribers, std::size_t SignalPerSubCapacity, typename BackendTag>
-    friend class osal_signal;
-
-    /// @brief Clears any buffered messages without blocking.
-    void purge() noexcept
-    {
-        std::array<std::byte, sizeof(T)> scratch{};
-        while (k_msgq_get(&queue_, scratch.data(), K_NO_WAIT) == 0)
-        {
-        }
-    }
-
-    bool valid_{false};
-    struct k_msgq queue_
-    {
-    };
-    alignas(T) std::uint8_t storage_[Capacity * sizeof(T)]{};
-};
 
 // ===========================================================================
 // osal_signal<T, MaxSubscribers, PerSubCapacity, bus_backend_zephyr>
@@ -287,7 +215,7 @@ private:
 
     [[nodiscard]] subscriber_id subscriber_cookie_() const noexcept
     {
-        constexpr subscriber_id mix = static_cast<subscriber_id>(0x9E3779B97F4A7C15ULL);
+        constexpr auto mix = static_cast<subscriber_id>(0x9E3779B97F4A7C15ULL);
         return static_cast<subscriber_id>(reinterpret_cast<std::uintptr_t>(this)) ^ mix;
     }
 
@@ -398,29 +326,6 @@ private:
 // ===========================================================================
 // Hosted fallback used when the Zephyr tag is instantiated outside a Zephyr build
 // ===========================================================================
-
-/// @brief Zephyr-tagged channel that delegates to the generic runtime on non-Zephyr builds.
-template<queue_element T, std::size_t Capacity>
-    requires(Capacity > 0U)
-class osal_bus<T, Capacity, bus_backend_zephyr>
-{
-public:
-    using value_type                      = T;
-    static constexpr std::size_t capacity = Capacity;
-
-    [[nodiscard]] bool valid() const noexcept { return impl_.valid(); }
-
-    bool try_send(const T& item) noexcept { return impl_.try_send(item); }
-
-    bool send(const T& item, tick_t timeout_ticks = WAIT_FOREVER) noexcept { return impl_.send(item, timeout_ticks); }
-
-    bool try_receive(T& out) noexcept { return impl_.try_receive(out); }
-
-    bool receive(T& out, tick_t timeout_ticks = WAIT_FOREVER) noexcept { return impl_.receive(out, timeout_ticks); }
-
-private:
-    osal_bus<T, Capacity, bus_backend_generic> impl_{};
-};
 
 /// @brief Zephyr-tagged pub/sub topic that delegates to the generic runtime on non-Zephyr builds.
 template<queue_element T, std::size_t MaxSubscribers, std::size_t PerSubCapacity>

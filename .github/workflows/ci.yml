@@ -93,7 +93,7 @@ jobs:
         run: cmake --build build -j $(nproc)
 
       - name: Run clang-tidy
-        run: CLANG_TIDY=clang-tidy BUILD_DIR=build ./scripts/tidy.sh --warnings-as-errors='*'
+        run: TIDY_JOBS=$(nproc) CLANG_TIDY=clang-tidy BUILD_DIR=build ./scripts/tidy.sh --warnings-as-errors='*'
 
   clang-tidy-tests:
     name: clang-tidy tests/examples
@@ -121,6 +121,7 @@ jobs:
       - name: Run clang-tidy on tests and examples
         run: |
           TIDY_INCLUDE_REGEX='.*/(tests|examples)/.*[.](cpp|c)$' \
+          TIDY_JOBS=$(nproc) \
           CLANG_TIDY=clang-tidy \
           BUILD_DIR=build \
           ./scripts/tidy.sh --warnings-as-errors='*'

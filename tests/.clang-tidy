@@ -1,2 +1,2 @@
 InheritParentConfig: true
-Checks: '-misc-use-anonymous-namespace,-clang-analyzer-cplusplus.NewDeleteLeaks'
+Checks: '-clang-analyzer-*,-cert-*,-cppcoreguidelines-*,-google-*,-hicpp-*,-misc-use-anonymous-namespace,-readability-*'

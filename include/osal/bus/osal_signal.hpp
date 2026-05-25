@@ -27,7 +27,10 @@
 /// @ingroup osal_bus
 #pragma once
 
-#include <osal/bus/osal_bus.hpp>
+#include <osal/bus/detail/osal_signal_backend_generic.hpp>
+#include <osal/bus/detail/osal_signal_backend_zephyr.hpp>
+#include <osal/bus/detail/osal_signal_backend_delegated.hpp>
+#include <osal/bus/detail/osal_signal_backend_mock.hpp>
 
 namespace osal
 {
@@ -47,7 +50,7 @@ namespace osal
 /// @tparam BackendTag      Backend implementation (defaults to MICROSAL_DEFAULT_BACKEND_TAG).
 ///
 /// @details Specialisations are provided via the backend headers included by
-///          osal_bus.hpp.  An unsupported BackendTag produces an "incomplete
+///          this header. An unsupported BackendTag produces an "incomplete
 ///          type" compile error — choose a supported backend tag.
 ///
 ///          LCD API:
@@ -68,7 +71,7 @@ class osal_signal;  // intentionally incomplete — specialised per backend
 }  // namespace osal
 
 // ---------------------------------------------------------------------------
-// Backend specialisations are already included transitively via
-// osal_bus.hpp → osal_signal_backend_generic.hpp / _zephyr.hpp / _mock.hpp
-// No additional includes needed here.
+// Signal backend specialisations are included above so this header provides
+// the complete topic interface without pulling in delegated/mock channel-only
+// specialisations.
 // ---------------------------------------------------------------------------

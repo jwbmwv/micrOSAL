@@ -16,6 +16,7 @@
 
 #include <zephyr/ztest.h>
 #include <zephyr/kernel.h>
+#include <osal/bus/osal_bus.hpp>
 #include <osal/bus/osal_signal_premium.hpp>
 #include <osal/osal.hpp>
 #include <atomic>

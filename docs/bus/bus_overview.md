@@ -45,6 +45,10 @@ include/
       detail/
         osal_bus_fwd.hpp
         osal_signal_traits.hpp
+        osal_bus_backend_generic.hpp
+        osal_bus_backend_delegated.hpp
+        osal_bus_backend_mock.hpp
+        osal_bus_backend_zephyr.hpp
         osal_signal_backend_generic.hpp
         osal_signal_backend_delegated.hpp
         osal_signal_backend_mock.hpp
@@ -58,7 +62,7 @@ tests/bus/
 
 ## Backend Selection
 
-`MICROSAL_DEFAULT_BACKEND_TAG` is selected in `include/microsal/microsal_config.hpp`
+`MICROSAL_DEFAULT_BACKEND_TAG` is selected in `include/osal/bus/config.hpp`
 from the active `OSAL_BACKEND_*` macro. Every supported OSAL backend has a
 matching `bus_backend_*` tag, and if no OSAL backend macro is present the bus
 layer defaults to `bus_backend_generic`. Public bus headers are now canonical
