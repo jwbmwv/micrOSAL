@@ -91,7 +91,7 @@ TEST_CASE("osal_signal_premium: observer table capacity limit")
     MockTopic topic;
     // MaxSubscribers == 4 → max 4 observers
 
-    // Fill all 4 slots with the same pointer (simplification for test)
+    // Fill all 4 slots with distinct observer pointers.
     static void (*fn1)(const std::uint32_t&) noexcept = [](const std::uint32_t&) noexcept {};
     static void (*fn2)(const std::uint32_t&) noexcept = [](const std::uint32_t&) noexcept {};
     static void (*fn3)(const std::uint32_t&) noexcept = [](const std::uint32_t&) noexcept {};
