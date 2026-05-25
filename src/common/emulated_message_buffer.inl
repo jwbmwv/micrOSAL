@@ -12,13 +12,9 @@
 ///          Atomicity guarantee (SPSC)
 ///          ──────────────────────────────────────────────────────────────────
 ///          The producer writes the full frame (header + payload) before
-///          storing the updated head_ index; the consumer will never see a
-///          partial frame because it first checks available >=
-///          sizeof(header) + header.length.
-///          A partial frame CAN appear transiently (between the header write
-///          and the payload write's head_ store), but the consumer handles
-///          this correctly by re-checking and blocking when the incomplete
-///          frame is detected.
+///          storing the updated head_ index, so the consumer never observes a
+///          visible partial frame. It first checks available >=
+///          sizeof(header) + header.length before consuming a message.
 ///
 ///          Blocking semaphores (binary, max_count = 1):
 ///          • data_sem : given per complete message sent.  Binary is sufficient
@@ -40,6 +36,8 @@
 ///
 /// @copyright Copyright (c) 2026 James Baldwin. AI-assisted — see NOTICE.
 
+#pragma once
+
 // These headers define C++ templates and must never be included inside an
 // extern "C" { } block.  If this .inl file is included from within such a
 // block (as all backends do), temporarily close it, pull in the headers,
@@ -47,7 +45,7 @@
 #ifdef __cplusplus
 }  // temporarily close extern "C" (opened by the including backend)
 #endif
-#include <atomic>
+#include <osal/detail/atomic_compat.hpp>
 #include <algorithm>
 #include <cstring>
 #ifdef __cplusplus
@@ -91,16 +89,15 @@ extern "C"
         osal::active_traits::semaphore_handle_t space_sem;
     };
 
-    static emu_mb_obj emu_mb_pool[OSAL_EMULATED_MESSAGE_BUFFER_POOL_SIZE];
-    static bool       emu_mb_used[OSAL_EMULATED_MESSAGE_BUFFER_POOL_SIZE];
+    static emu_mb_obj       emu_mb_pool[OSAL_EMULATED_MESSAGE_BUFFER_POOL_SIZE];
+    static std::atomic_bool emu_mb_used[OSAL_EMULATED_MESSAGE_BUFFER_POOL_SIZE];
 
     static emu_mb_obj* emu_mb_acquire() noexcept
     {
         for (std::size_t i = 0U; i < OSAL_EMULATED_MESSAGE_BUFFER_POOL_SIZE; ++i)
         {
-            if (!emu_mb_used[i])
+            if (!emu_mb_used[i].exchange(true, std::memory_order_acq_rel))
             {
-                emu_mb_used[i] = true;
                 return &emu_mb_pool[i];
             }
         }
@@ -113,7 +110,7 @@ extern "C"
         {
             if (&emu_mb_pool[i] == p)
             {
-                emu_mb_used[i] = false;
+                emu_mb_used[i].store(false, std::memory_order_release);
                 return;
             }
         }
@@ -135,58 +132,57 @@ extern "C"
         return s->capacity - emu_mb_available(s);
     }
 
-    static void emu_mb_write(emu_mb_obj* s, const std::uint8_t* data, std::size_t len) noexcept
+    static std::size_t emu_mb_advance_index(std::size_t index, std::size_t len, std::size_t ring_size) noexcept
     {
-        std::size_t h = s->head.load(std::memory_order_relaxed);
-        for (std::size_t i = 0U; i < len; ++i)
+        const std::size_t advanced = index + len;
+        return (advanced < ring_size) ? advanced : (advanced - ring_size);
+    }
+
+    static void emu_mb_copy_in(emu_mb_obj* s, std::size_t index, const std::uint8_t* data, std::size_t len) noexcept
+    {
+        const std::size_t first = std::min(len, s->ring_size - index);
+        std::memcpy(s->buf + index, data, first);
+        if (first < len)
         {
-            s->buf[h] = data[i];
-            if (++h == s->ring_size)
-            {
-                h = 0U;
-            }
+            std::memcpy(s->buf, data + first, len - first);
         }
-        s->head.store(h, std::memory_order_release);
+    }
+
+    static void emu_mb_copy_out(const emu_mb_obj* s, std::size_t index, std::uint8_t* buf, std::size_t len) noexcept
+    {
+        const std::size_t first = std::min(len, s->ring_size - index);
+        std::memcpy(buf, s->buf + index, first);
+        if (first < len)
+        {
+            std::memcpy(buf + first, s->buf, len - first);
+        }
+    }
+
+    static void emu_mb_write_frame(emu_mb_obj* s, const std::uint8_t* header, std::size_t header_len,
+                                   const std::uint8_t* payload, std::size_t payload_len) noexcept
+    {
+        const std::size_t head = s->head.load(std::memory_order_relaxed);
+        emu_mb_copy_in(s, head, header, header_len);
+        emu_mb_copy_in(s, emu_mb_advance_index(head, header_len, s->ring_size), payload, payload_len);
+        s->head.store(emu_mb_advance_index(head, header_len + payload_len, s->ring_size), std::memory_order_release);
     }
 
     static void emu_mb_read(emu_mb_obj* s, std::uint8_t* buf, std::size_t len) noexcept
     {
-        std::size_t t = s->tail.load(std::memory_order_relaxed);
-        for (std::size_t i = 0U; i < len; ++i)
-        {
-            buf[i] = s->buf[t];
-            if (++t == s->ring_size)
-            {
-                t = 0U;
-            }
-        }
-        s->tail.store(t, std::memory_order_release);
+        const std::size_t tail = s->tail.load(std::memory_order_relaxed);
+        emu_mb_copy_out(s, tail, buf, len);
+        s->tail.store(emu_mb_advance_index(tail, len, s->ring_size), std::memory_order_release);
     }
 
     static void emu_mb_skip(emu_mb_obj* s, std::size_t len) noexcept
     {
-        std::size_t t = s->tail.load(std::memory_order_relaxed);
-        for (std::size_t i = 0U; i < len; ++i)
-        {
-            if (++t == s->ring_size)
-            {
-                t = 0U;
-            }
-        }
-        s->tail.store(t, std::memory_order_release);
+        const std::size_t tail = s->tail.load(std::memory_order_relaxed);
+        s->tail.store(emu_mb_advance_index(tail, len, s->ring_size), std::memory_order_release);
     }
 
     static void emu_mb_peek(const emu_mb_obj* s, std::uint8_t* buf, std::size_t len) noexcept
     {
-        std::size_t t = s->tail.load(std::memory_order_relaxed);
-        for (std::size_t i = 0U; i < len; ++i)
-        {
-            buf[i] = s->buf[t];
-            if (++t == s->ring_size)
-            {
-                t = 0U;
-            }
-        }
+        emu_mb_copy_out(s, s->tail.load(std::memory_order_relaxed), buf, len);
     }
 
     }  // anonymous namespace
@@ -208,7 +204,7 @@ extern "C"
     osal::result osal_message_buffer_create(osal::active_traits::message_buffer_handle_t* handle, void* buffer,
                                             std::size_t capacity) noexcept
     {
-        if (!handle || !buffer || capacity <= kMsgHeaderBytes)
+        if (!handle || !buffer || capacity <= kMsgHeaderBytes) [[unlikely]]
         {
             return osal::error_code::invalid_argument;
         }
@@ -246,7 +242,7 @@ extern "C"
     /// @return `osal::ok()` on success, `error_code::not_initialized` if null.
     osal::result osal_message_buffer_destroy(osal::active_traits::message_buffer_handle_t* handle) noexcept
     {
-        if (!handle || !handle->native)
+        if (!handle || !handle->native) [[unlikely]]
         {
             return osal::error_code::not_initialized;
         }
@@ -275,22 +271,22 @@ extern "C"
     osal::result osal_message_buffer_send(osal::active_traits::message_buffer_handle_t* handle, const void* msg,
                                           std::size_t len, osal::tick_t timeout_ticks) noexcept
     {
-        if (!handle || !handle->native)
+        if (!handle || !handle->native) [[unlikely]]
         {
             return osal::error_code::not_initialized;
         }
-        if (!msg || len == 0U)
+        if (!msg || len == 0U) [[unlikely]]
         {
             return osal::error_code::invalid_argument;
         }
-        if (len > static_cast<std::size_t>(~osal_mb_length_t(0)))
+        if (len > static_cast<std::size_t>(~osal_mb_length_t(0))) [[unlikely]]
         {
             return osal::error_code::invalid_argument;
         }
         auto* s = static_cast<emu_mb_obj*>(handle->native);
 
         const std::size_t frame_size = kMsgHeaderBytes + len;
-        if (frame_size > s->capacity)
+        if (frame_size > s->capacity) [[unlikely]]
         {
             return osal::error_code::invalid_argument;
         }
@@ -301,12 +297,11 @@ extern "C"
         {
             if (emu_mb_free(s) >= frame_size)
             {
-                // Write header then payload.  head_ is updated ONCE per call to
-                // emu_mb_write so a partially-written frame is never visible as
-                // "complete" to the consumer.
+                // Publish the complete frame with a single head-store so the
+                // consumer never observes a visible header before the payload.
                 const osal_mb_length_t hdr = static_cast<osal_mb_length_t>(len);
-                emu_mb_write(s, reinterpret_cast<const std::uint8_t*>(&hdr), kMsgHeaderBytes);
-                emu_mb_write(s, static_cast<const std::uint8_t*>(msg), len);
+                emu_mb_write_frame(s, reinterpret_cast<const std::uint8_t*>(&hdr), kMsgHeaderBytes,
+                                   static_cast<const std::uint8_t*>(msg), len);
                 (void)osal_semaphore_give(&s->data_sem);  // notify consumer
                 return osal::ok();
             }
@@ -332,11 +327,11 @@ extern "C"
     osal::result osal_message_buffer_send_isr(osal::active_traits::message_buffer_handle_t* handle, const void* msg,
                                               std::size_t len) noexcept
     {
-        if (!handle || !handle->native)
+        if (!handle || !handle->native) [[unlikely]]
         {
             return osal::error_code::not_initialized;
         }
-        if (!msg || len == 0U)
+        if (!msg || len == 0U) [[unlikely]]
         {
             return osal::error_code::invalid_argument;
         }
@@ -348,8 +343,8 @@ extern "C"
         }
 
         const osal_mb_length_t hdr = static_cast<osal_mb_length_t>(len);
-        emu_mb_write(s, reinterpret_cast<const std::uint8_t*>(&hdr), kMsgHeaderBytes);
-        emu_mb_write(s, static_cast<const std::uint8_t*>(msg), len);
+        emu_mb_write_frame(s, reinterpret_cast<const std::uint8_t*>(&hdr), kMsgHeaderBytes,
+                           static_cast<const std::uint8_t*>(msg), len);
         (void)osal_semaphore_give_isr(&s->data_sem);
         return osal::ok();
     }
@@ -370,7 +365,7 @@ extern "C"
     std::size_t osal_message_buffer_receive(osal::active_traits::message_buffer_handle_t* handle, void* buf,
                                             std::size_t max_len, osal::tick_t timeout_ticks) noexcept
     {
-        if (!handle || !handle->native || !buf || max_len == 0U)
+        if (!handle || !handle->native || !buf || max_len == 0U) [[unlikely]]
         {
             return 0U;
         }
@@ -439,7 +434,7 @@ extern "C"
     std::size_t osal_message_buffer_receive_isr(osal::active_traits::message_buffer_handle_t* handle, void* buf,
                                                 std::size_t max_len) noexcept
     {
-        if (!handle || !handle->native || !buf || max_len == 0U)
+        if (!handle || !handle->native || !buf || max_len == 0U) [[unlikely]]
         {
             return 0U;
         }
@@ -483,7 +478,7 @@ extern "C"
     /// @return Payload byte count of the oldest complete message, or 0.
     std::size_t osal_message_buffer_available(const osal::active_traits::message_buffer_handle_t* handle) noexcept
     {
-        if (!handle || !handle->native)
+        if (!handle || !handle->native) [[unlikely]]
         {
             return 0U;
         }
@@ -506,7 +501,7 @@ extern "C"
     /// @return Maximum payload bytes, or 0 if the ring cannot accommodate even the header.
     std::size_t osal_message_buffer_free_space(const osal::active_traits::message_buffer_handle_t* handle) noexcept
     {
-        if (!handle || !handle->native)
+        if (!handle || !handle->native) [[unlikely]]
         {
             return 0U;
         }
@@ -522,7 +517,7 @@ extern "C"
     /// @return `osal::ok()` on success, `error_code::not_initialized` if null.
     osal::result osal_message_buffer_reset(osal::active_traits::message_buffer_handle_t* handle) noexcept
     {
-        if (!handle || !handle->native)
+        if (!handle || !handle->native) [[unlikely]]
         {
             return osal::error_code::not_initialized;
         }

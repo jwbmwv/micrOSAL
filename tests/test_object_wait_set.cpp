@@ -11,10 +11,9 @@ TEST_CASE("object_wait_set: construction succeeds")
     CHECK(ws.valid());
 }
 
-
 TEST_CASE("object_wait_set: queue readiness returns the registered id")
 {
-    osal::object_wait_set      ws;
+    osal::object_wait_set         ws;
     osal::queue<std::uint32_t, 4> q;
     REQUIRE(q.valid());
     REQUIRE(ws.add(q, 11).ok());
@@ -45,7 +44,7 @@ TEST_CASE("object_wait_set: event_flags any can clear on exit")
 
 TEST_CASE("object_wait_set: notification readiness is reported")
 {
-    osal::object_wait_set  ws;
+    osal::object_wait_set ws;
     osal::notification<2> note;
     REQUIRE(note.valid());
     REQUIRE(ws.add(note, 1U, 31, true).ok());
@@ -68,7 +67,7 @@ TEST_CASE("object_wait_set: delayable work can be observed as pending")
     }
 
     alignas(16) static std::uint8_t stack[65536];
-    osal::work_queue wq{stack, sizeof(stack), 8, "ow_wq"};
+    osal::work_queue                wq{stack, sizeof(stack), 8, "ow_wq"};
     REQUIRE(wq.valid());
 
     osal::delayable_work work{wq, +[](void*) {}, nullptr, "ow_dw"};
@@ -88,7 +87,7 @@ TEST_CASE("object_wait_set: delayable work can be observed as pending")
 
 TEST_CASE("object_wait_set: remove clears an entry")
 {
-    osal::object_wait_set      ws;
+    osal::object_wait_set         ws;
     osal::queue<std::uint32_t, 4> q;
     REQUIRE(q.valid());
     REQUIRE(ws.add(q, 51).ok());
@@ -103,7 +102,7 @@ TEST_CASE("object_wait_set: remove clears an entry")
 
 TEST_CASE("object_wait_set: wait times out when nothing is ready")
 {
-    osal::object_wait_set      ws;
+    osal::object_wait_set         ws;
     osal::queue<std::uint32_t, 4> q;
     REQUIRE(q.valid());
     REQUIRE(ws.add(q, 61).ok());

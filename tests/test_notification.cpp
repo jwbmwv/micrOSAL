@@ -15,19 +15,19 @@ TEST_CASE("notification: construction succeeds")
     CHECK(note.peek(0) == 0U);
 }
 
-
 TEST_CASE("notification: overwrite and wait round-trip")
 {
     osal::notification<2> note;
     REQUIRE(note.valid());
 
     static std::atomic<std::uint32_t> received{0U};
-    static osal::semaphore ready{osal::semaphore_type::binary, 0U};
-    static osal::semaphore done{osal::semaphore_type::binary, 0U};
+    static osal::semaphore            ready{osal::semaphore_type::binary, 0U};
+    static osal::semaphore            done{osal::semaphore_type::binary, 0U};
     REQUIRE(ready.valid());
     REQUIRE(done.valid());
 
-    auto worker = [](void* arg) {
+    auto worker = [](void* arg)
+    {
         auto* n = static_cast<osal::notification<2>*>(arg);
         ready.give();
         std::uint32_t value = 0U;
@@ -40,8 +40,8 @@ TEST_CASE("notification: overwrite and wait round-trip")
     };
 
     alignas(16) static std::uint8_t stack[65536];
-    osal::thread t;
-    osal::thread_config cfg{};
+    osal::thread                    t;
+    osal::thread_config             cfg{};
     cfg.entry       = worker;
     cfg.arg         = &note;
     cfg.stack       = stack;
@@ -63,8 +63,7 @@ TEST_CASE("notification: no_overwrite reports would_block when pending")
     REQUIRE(note.valid());
 
     CHECK(note.notify(0xAAU, osal::notification_action::overwrite, 0U).ok());
-    CHECK(note.notify(0x55U, osal::notification_action::no_overwrite, 0U)
-          == osal::error_code::would_block);
+    CHECK(note.notify(0x55U, osal::notification_action::no_overwrite, 0U) == osal::error_code::would_block);
     CHECK(note.peek(0U) == 0xAAU);
 }
 

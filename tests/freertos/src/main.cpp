@@ -431,7 +431,7 @@ TEST_CASE("freertos/event_flags: set and get")
 {
     osal::event_flags ef;
     REQUIRE(ef.valid());
-    ef.set(0b1010U);
+    (void)ef.set(0b1010U);
     CHECK((ef.get() & 0b1010U) == 0b1010U);
 }
 
@@ -439,7 +439,7 @@ TEST_CASE("freertos/event_flags: wait_any immediate")
 {
     osal::event_flags ef;
     REQUIRE(ef.valid());
-    ef.set(0x0FU);
+    (void)ef.set(0x0FU);
     osal::event_bits_t actual = 0U;
     auto               r      = ef.wait_any(0x0FU, &actual, /*clear_on_exit=*/true, osal::milliseconds{0});
     REQUIRE(r.ok());
@@ -457,7 +457,7 @@ TEST_CASE("freertos/event_flags: cross-thread set")
     cfg.entry = [](void*)
     {
         osal::thread::sleep_for(osal::milliseconds{30});
-        ef.set(0x01U);
+        (void)ef.set(0x01U);
     };
     cfg.arg         = nullptr;
     cfg.priority    = osal::PRIORITY_NORMAL;
@@ -611,6 +611,190 @@ TEST_CASE("freertos/thread: sleep_for is non-trivial")
     CHECK(elapsed.count() >= 40);  // allow ± 20 % jitter
 }
 
+TEST_CASE("freertos/thread: task notification round-trip")
+{
+    if constexpr (!osal::thread::supports_task_notification)
+    {
+        MESSAGE("Skipped — backend lacks task notifications");
+        return;
+    }
+
+    osal::semaphore            ready{osal::semaphore_type::binary, 0U};
+    osal::semaphore            done{osal::semaphore_type::binary, 0U};
+    std::atomic<std::uint32_t> received{0U};
+    REQUIRE(ready.valid());
+    REQUIRE(done.valid());
+
+    struct ctx_t
+    {
+        osal::semaphore*            ready;
+        osal::semaphore*            done;
+        std::atomic<std::uint32_t>* received;
+    } ctx{&ready, &done, &received};
+
+    constexpr std::size_t           kStack = 65536U;
+    alignas(16) static std::uint8_t stack[kStack];
+    osal::thread_config             cfg{};
+    cfg.entry = [](void* arg)
+    {
+        auto* ctx = static_cast<ctx_t*>(arg);
+        ctx->ready->give();
+        std::uint32_t value = 0U;
+        if (osal::thread::wait_for_notification(osal::milliseconds{2000}, &value).ok())
+        {
+            ctx->received->store(value);
+        }
+        ctx->done->give();
+    };
+    cfg.arg         = &ctx;
+    cfg.priority    = osal::PRIORITY_NORMAL;
+    cfg.stack       = stack;
+    cfg.stack_bytes = kStack;
+    cfg.name        = "fr_notify";
+
+    osal::thread t;
+    REQUIRE(t.create(cfg).ok());
+    REQUIRE(ready.take_for(osal::milliseconds{2000}));
+    REQUIRE(t.notify(0xA5A5U).ok());
+    REQUIRE(done.take_for(osal::milliseconds{2000}));
+    CHECK(received.load() == 0xA5A5U);
+    REQUIRE(t.join().ok());
+}
+
+TEST_CASE("freertos/thread: stack watermark")
+{
+    std::size_t unsupported_bytes = 0U;
+    if constexpr (!osal::thread::supports_stack_watermark)
+    {
+        CHECK(osal::this_thread::stack_low_watermark_bytes(unsupported_bytes) == osal::error_code::not_supported);
+        return;
+    }
+
+    osal::semaphore ready{osal::semaphore_type::binary, 0U};
+    osal::semaphore release{osal::semaphore_type::binary, 0U};
+    REQUIRE(ready.valid());
+    REQUIRE(release.valid());
+
+    struct ctx_t
+    {
+        osal::semaphore* ready;
+        osal::semaphore* release;
+    } ctx{&ready, &release};
+
+    constexpr std::size_t           kStack = 65536U;
+    alignas(16) static std::uint8_t stack[kStack];
+    osal::thread_config             cfg{};
+    cfg.entry = [](void* arg)
+    {
+        auto* c = static_cast<ctx_t*>(arg);
+        c->ready->give();
+        (void)c->release->take_for(osal::milliseconds{2000});
+    };
+    cfg.arg         = &ctx;
+    cfg.priority    = osal::PRIORITY_NORMAL;
+    cfg.stack       = stack;
+    cfg.stack_bytes = kStack;
+    cfg.name        = "fr_stackdiag";
+
+    osal::thread t;
+    REQUIRE(t.create(cfg).ok());
+    REQUIRE(ready.take_for(osal::milliseconds{2000}));
+
+    std::size_t current_unused = 0U;
+    std::size_t worker_unused  = 0U;
+    CHECK(osal::this_thread::stack_low_watermark_bytes(current_unused).ok());
+    CHECK(t.stack_low_watermark_bytes(worker_unused).ok());
+    CHECK(current_unused > 0U);
+    CHECK(worker_unused > 0U);
+
+    release.give();
+    REQUIRE(t.join().ok());
+}
+
+TEST_CASE("freertos/thread: introspection")
+{
+    if constexpr (osal::thread_identity_query_capability<osal::active_backend>::value)
+    {
+        CHECK(osal::this_thread::get_id() != osal::INVALID_THREAD_ID);
+    }
+    else
+    {
+        CHECK(osal::this_thread::get_id() == osal::INVALID_THREAD_ID);
+    }
+
+    if constexpr (osal::thread_priority_query_capability<osal::active_backend>::value)
+    {
+        osal::priority_t current_priority = osal::PRIORITY_LOWEST;
+        CHECK(osal::this_thread::get_priority(current_priority).ok());
+        CHECK(current_priority >= osal::PRIORITY_LOWEST);
+        CHECK(current_priority <= osal::PRIORITY_HIGHEST);
+    }
+    else
+    {
+        osal::priority_t current_priority = osal::PRIORITY_LOWEST;
+        CHECK(osal::this_thread::get_priority(current_priority) == osal::error_code::not_supported);
+    }
+
+    std::uint32_t current_cpu = 0U;
+    CHECK(osal::this_thread::get_cpu(current_cpu) == osal::error_code::not_supported);
+
+    osal::semaphore ready{osal::semaphore_type::binary, 0U};
+    osal::semaphore release{osal::semaphore_type::binary, 0U};
+    REQUIRE(ready.valid());
+    REQUIRE(release.valid());
+
+    struct ctx_t
+    {
+        osal::semaphore*   ready;
+        osal::semaphore*   release;
+        osal::thread_id_t* worker_id;
+    };
+
+    osal::thread_id_t worker_id = osal::INVALID_THREAD_ID;
+    ctx_t             ctx{&ready, &release, &worker_id};
+
+    constexpr std::size_t           kStack = 65536U;
+    alignas(16) static std::uint8_t stack[kStack];
+    osal::thread_config             cfg{};
+    cfg.entry = [](void* arg)
+    {
+        auto* c       = static_cast<ctx_t*>(arg);
+        *c->worker_id = osal::this_thread::get_id();
+        c->ready->give();
+        (void)c->release->take_for(osal::milliseconds{2000});
+    };
+    cfg.arg         = &ctx;
+    cfg.priority    = osal::PRIORITY_NORMAL;
+    cfg.stack       = stack;
+    cfg.stack_bytes = kStack;
+    cfg.name        = "fr_introspect";
+
+    osal::thread t;
+    REQUIRE(t.create(cfg).ok());
+    REQUIRE(ready.take_for(osal::milliseconds{2000}));
+
+    if constexpr (osal::thread_identity_query_capability<osal::active_backend>::value)
+    {
+        CHECK(t.id() != osal::INVALID_THREAD_ID);
+        CHECK(t.id() == worker_id);
+    }
+    else
+    {
+        CHECK(t.id() == osal::INVALID_THREAD_ID);
+    }
+
+    if constexpr (osal::thread_priority_query_capability<osal::active_backend>::value)
+    {
+        osal::priority_t worker_priority = osal::PRIORITY_LOWEST;
+        CHECK(t.get_priority(worker_priority).ok());
+        CHECK(worker_priority >= osal::PRIORITY_LOWEST);
+        CHECK(worker_priority <= osal::PRIORITY_HIGHEST);
+    }
+
+    release.give();
+    REQUIRE(t.join().ok());
+}
+
 // --------------------------------------------------------------------------
 // osal::condvar
 // --------------------------------------------------------------------------
@@ -655,6 +839,55 @@ TEST_CASE("freertos/condvar: cross-thread notify")
 }
 
 // --------------------------------------------------------------------------
+// osal::barrier
+// --------------------------------------------------------------------------
+
+TEST_CASE("freertos/barrier: two-thread rendezvous")
+{
+    osal::barrier    barr{2U};
+    std::atomic<int> passed{0};
+    REQUIRE(barr.valid());
+
+    struct ctx_t
+    {
+        osal::barrier*    barrier;
+        std::atomic<int>* passed;
+    } ctx{&barr, &passed};
+
+    auto worker = [](void* arg)
+    {
+        auto*              ctx = static_cast<ctx_t*>(arg);
+        const osal::result r   = ctx->barrier->wait();
+        if (r.ok() || (r == osal::error_code::barrier_serial))
+        {
+            ctx->passed->fetch_add(1);
+        }
+    };
+
+    constexpr std::size_t           kStack = 65536U;
+    alignas(16) static std::uint8_t stack_a[kStack];
+    alignas(16) static std::uint8_t stack_b[kStack];
+    osal::thread_config             cfg{};
+    cfg.entry       = worker;
+    cfg.arg         = &ctx;
+    cfg.priority    = osal::PRIORITY_NORMAL;
+    cfg.stack       = stack_a;
+    cfg.stack_bytes = kStack;
+    cfg.name        = "fr_barr_a";
+
+    osal::thread ta;
+    osal::thread tb;
+    REQUIRE(ta.create(cfg).ok());
+    cfg.stack = stack_b;
+    cfg.name  = "fr_barr_b";
+    REQUIRE(tb.create(cfg).ok());
+
+    REQUIRE(ta.join().ok());
+    REQUIRE(tb.join().ok());
+    CHECK(passed.load() == 2);
+}
+
+// --------------------------------------------------------------------------
 // osal::notification
 // --------------------------------------------------------------------------
 
@@ -663,8 +896,8 @@ TEST_CASE("freertos/notification: notify and wait round-trip")
     static osal::notification<2> note;
     REQUIRE(note.valid());
 
-    static osal::semaphore ready{osal::semaphore_type::binary, 0U};
-    static osal::semaphore done{osal::semaphore_type::binary, 0U};
+    static osal::semaphore            ready{osal::semaphore_type::binary, 0U};
+    static osal::semaphore            done{osal::semaphore_type::binary, 0U};
     static std::atomic<std::uint32_t> received{0U};
     static std::atomic<bool>          wait_ok{false};
     REQUIRE(ready.valid());
@@ -823,7 +1056,7 @@ TEST_CASE("freertos/memory_pool: alloc and free")
     void* p = pool.allocate();
     REQUIRE(p != nullptr);
     CHECK(pool.available() == 7U);
-    pool.deallocate(p);
+    (void)pool.deallocate(p);
     CHECK(pool.available() == 8U);
 }
 
@@ -841,6 +1074,6 @@ TEST_CASE("freertos/memory_pool: exhaustion returns nullptr on try_allocate")
     void* p3 = pool.allocate();  // returns nullptr when exhausted
     CHECK(p3 == nullptr);
 
-    pool.deallocate(p1);
-    pool.deallocate(p2);
+    (void)pool.deallocate(p1);
+    (void)pool.deallocate(p2);
 }

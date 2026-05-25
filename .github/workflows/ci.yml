@@ -1,13 +1,11 @@
 # SPDX-License-Identifier: Apache-2.0
 # CI workflow for MicrOSAL
-# Runs on every push/PR to main.
+# Runs on every push and PR.
 name: CI
 
 on:
   push:
-    branches: [main]
   pull_request:
-    branches: [main]
   workflow_dispatch:
     # Optional: Add inputs here if needed
 
@@ -23,13 +21,11 @@ jobs:
     name: clang-format check
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Install clang-format
         run: sudo apt-get update && sudo apt-get install -y clang-format-18
       - name: Check formatting
-        run: |
-          find include src -type f \( -name '*.hpp' -o -name '*.cpp' \) -print0 \
-            | xargs -0 clang-format-18 --dry-run --Werror --style=file
+        run: CLANG_FORMAT=clang-format-18 ./scripts/format.sh --check
 
   # -------------------------------------------------------------------
   # Build + test matrix (hosted backends)
@@ -55,12 +51,13 @@ jobs:
           - backend: BAREMETAL
             run_tests: true
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Configure
         run: |
           cmake -B build \
             -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_COMPILE_WARNING_AS_ERROR=ON \
             -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
             -DOSAL_BACKEND=${{ matrix.backend }} \
             -DOSAL_BUILD_TESTS=ON
@@ -76,11 +73,11 @@ jobs:
   # Static analysis (clang-tidy on Linux backend)
   # -------------------------------------------------------------------
   clang-tidy:
-    name: clang-tidy
+    name: clang-tidy core
     runs-on: ubuntu-24.04
     needs: build-test
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install clang-tidy
         run: sudo apt-get update && sudo apt-get install -y clang-tidy
@@ -96,46 +93,80 @@ jobs:
         run: cmake --build build -j $(nproc)
 
       - name: Run clang-tidy
+        run: TIDY_JOBS=$(nproc) CLANG_TIDY=clang-tidy BUILD_DIR=build ./scripts/tidy.sh --warnings-as-errors='*'
+
+  clang-tidy-tests:
+    name: clang-tidy tests/examples
+    runs-on: ubuntu-24.04
+    needs: build-test
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install clang-tidy
+        run: sudo apt-get update && sudo apt-get install -y clang-tidy
+
+      - name: Configure (for compile_commands.json)
         run: |
-          find src/linux include -type f \( -name '*.cpp' -o -name '*.hpp' \) -print0 \
-            | xargs -0 clang-tidy -p build --warnings-as-errors='*' || true
-        # NOTE: Using || true initially so tidy warnings don't block CI.
-        # Remove || true once the codebase is tidy-clean.
+          cmake -B build \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+            -DOSAL_BACKEND=LINUX \
+            -DOSAL_BUILD_TESTS=ON \
+            -DOSAL_BUILD_EXAMPLES=ON
+
+      - name: Build (needed for headers)
+        run: cmake --build build -j $(nproc)
+
+      - name: Run clang-tidy on tests and examples
+        run: |
+          TIDY_INCLUDE_REGEX='.*/(tests|examples)/.*[.](cpp|c)$' \
+          TIDY_JOBS=$(nproc) \
+          CLANG_TIDY=clang-tidy \
+          BUILD_DIR=build \
+          ./scripts/tidy.sh --warnings-as-errors='*'
 
   # -------------------------------------------------------------------
-  # Compile-check only: backends without a full simulation port
+  # Sanitiser run (ASan + UBSan on LINUX backend)
   # -------------------------------------------------------------------
-  compile-check:
-    name: "Compile check (${{ matrix.backend }})"
+  sanitizers:
+    name: "ASan + UBSan"
     runs-on: ubuntu-24.04
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          # ThreadX, PX5, VxWorks etc. need proprietary headers — verify only
-          # that the CMake plumbing and our public header structure compile.
-          - backend: LINUX
-            extra_args: ""
+    needs: build-test
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
+
       - name: Configure
         run: |
           cmake -B build \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DOSAL_BACKEND=${{ matrix.backend }} \
-            ${{ matrix.extra_args }}
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer" \
+            -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined" \
+            -DOSAL_BACKEND=LINUX \
+            -DOSAL_BUILD_TESTS=ON
+
       - name: Build
         run: cmake --build build -j $(nproc)
 
+      - name: Test under sanitizers
+        env:
+          ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+        run: ctest --test-dir build --output-on-failure --timeout 120
+
   # -------------------------------------------------------------------
-  # FreeRTOS v11 — POSIX simulation port (runs as a Linux process)
+  # Backends whose integration environments are not available on the
+  # Ubuntu runners are intentionally documented rather than built here.
+  # ThreadX, PX5, VxWorks, Micrium, ChibiOS, embOS, CMSIS-RTOS v1/v2,
+  # and QNX currently need external SDKs, BSPs, simulators, or host
+  # environments that are not provisioned on GitHub-hosted runners.
   # -------------------------------------------------------------------
   freertos-test:
     name: "FreeRTOS v11 test (POSIX sim)"
     runs-on: ubuntu-24.04
     needs: build-test
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install build dependencies
         run: sudo apt-get update && sudo apt-get install -y build-essential cmake
@@ -162,7 +193,7 @@ jobs:
     runs-on: ubuntu-24.04
     needs: build-test
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           path: microsal
 
@@ -210,7 +241,9 @@ jobs:
           CONFIG_TESTING_MICROSAL_TEST_PRIORITY=100
           CONFIG_CPP=y
           CONFIG_HAVE_CXX=y
-          CONFIG_STD_CXX17=y
+          CONFIG_LIBCXXTOOLCHAIN=y
+          CONFIG_LIBSUPCXX_TOOLCHAIN=y
+          CONFIG_CXX_STANDARD="gnu++20"
           EOF
           cmake build   # re-run to apply updated .config
 
@@ -264,8 +297,8 @@ jobs:
             board: native_sim
             runner: native
             renode_version: ""
-          - zephyr_version: "v4.3.0"
-            zephyr_sdk_version: "0.17.0"
+          - zephyr_version: "v4.4.0"
+            zephyr_sdk_version: "1.0.1"
             board: native_sim
             runner: native
             renode_version: ""
@@ -275,15 +308,15 @@ jobs:
             zephyr_sdk_version: "0.16.8"
             board: nrf52840dk/nrf52840
             runner: renode
-            renode_version: "1.15.3"
-          - zephyr_version: "v4.3.0"
-            zephyr_sdk_version: "0.17.0"
+            renode_version: "1.16.1"
+          - zephyr_version: "v4.4.0"
+            zephyr_sdk_version: "1.0.1"
             board: nrf52840dk/nrf52840
             runner: renode
-            renode_version: "1.15.3"
+            renode_version: "1.16.1"
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           path: modules/lib/microsal
 
@@ -395,7 +428,7 @@ jobs:
 
       # twister full-discovery run on native_sim / latest Zephyr only
       - name: Run twister full sweep (native_sim + latest Zephyr only)
-        if: matrix.runner == 'native' && matrix.zephyr_version == 'v4.3.0'
+        if: matrix.runner == 'native' && matrix.zephyr_version == 'v4.4.0'
         continue-on-error: true
         run: |
           cd zephyrproject

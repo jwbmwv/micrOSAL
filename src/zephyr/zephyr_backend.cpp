@@ -23,29 +23,105 @@
 #define OSAL_BACKEND_ZEPHYR
 #endif
 #include <osal/osal.hpp>
+#include <osal/detail/atomic_compat.hpp>
 
 #include <zephyr/kernel.h>
+#include <zephyr/kernel_structs.h>
 #include <zephyr/sys/util.h>
 #include <cassert>
 #include <cstring>
 #include <cerrno>
+#include <limits>
 
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
 
+namespace
+{
+
+constexpr std::uint64_t kNanosecondsPerSecond = 1'000'000'000ULL;
+
+[[nodiscard]] std::int64_t zephyr_cycles_to_nanoseconds(std::uint64_t cycles) noexcept
+{
+    const std::uint64_t frequency_hz = static_cast<std::uint64_t>(sys_clock_hw_cycles_per_sec());
+    if (frequency_hz == 0U)
+    {
+        return 0;
+    }
+
+    const std::uint64_t whole_seconds = cycles / frequency_hz;
+    const std::uint64_t remainder     = cycles % frequency_hz;
+    if (whole_seconds > (static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max()) / kNanosecondsPerSecond))
+    {
+        return std::numeric_limits<std::int64_t>::max();
+    }
+
+    const std::uint64_t nanoseconds =
+        (whole_seconds * kNanosecondsPerSecond) + ((remainder * kNanosecondsPerSecond) / frequency_hz);
+    if (nanoseconds > static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max()))
+    {
+        return std::numeric_limits<std::int64_t>::max();
+    }
+    return static_cast<std::int64_t>(nanoseconds);
+}
+
+[[nodiscard]] std::int64_t zephyr_cycle_resolution_ns() noexcept
+{
+    const std::uint64_t frequency_hz = static_cast<std::uint64_t>(sys_clock_hw_cycles_per_sec());
+    if (frequency_hz == 0U)
+    {
+        return 0;
+    }
+    return static_cast<std::int64_t>((kNanosecondsPerSecond + frequency_hz - 1U) / frequency_hz);
+}
+
+[[nodiscard]] osal::priority_t zephyr_to_osal_priority(int priority) noexcept
+{
+    const int zmax = CONFIG_NUM_PREEMPT_PRIORITIES - 1;
+    if (zmax <= 0)
+    {
+        return osal::PRIORITY_NORMAL;
+    }
+
+    if (priority < 0)
+    {
+        priority = 0;
+    }
+    else if (priority > zmax)
+    {
+        priority = zmax;
+    }
+
+    return static_cast<osal::priority_t>(((zmax - priority) * osal::PRIORITY_HIGHEST) / zmax);
+}
+
+// Zephyr exposes the live CPU mask through k_thread internals when SMP masks are enabled.
+#if defined(CONFIG_SCHED_CPU_MASK)
+[[nodiscard]] osal::affinity_t zephyr_thread_affinity_mask(k_tid_t tid) noexcept
+{
+    using cpu_mask_t          = decltype(tid->base.cpu_mask);
+    const cpu_mask_t cpu_mask = tid->base.cpu_mask;
+    if (cpu_mask == std::numeric_limits<cpu_mask_t>::max())
+    {
+        return osal::AFFINITY_ANY;
+    }
+    return static_cast<osal::affinity_t>(cpu_mask);
+}
+#endif
+
 /// @brief Converts an OSAL priority to Zephyr thread priority.
 /// Zephyr: lower integer = higher priority (0 = highest cooperative).
-static constexpr int osal_to_zephyr_priority(osal::priority_t p) noexcept
+constexpr int osal_to_zephyr_priority(osal::priority_t p) noexcept
 {
     // Map [0,255] -> [CONFIG_NUM_PREEMPT_PRIORITIES-1, 0]
-    const int zmax = CONFIG_NUM_PREEMPT_PRIORITIES - 1;
+    const int zmax = CONFIG_NUM_PREEMPT_PRIORITIES - 1;  // NOLINT(cppcoreguidelines-init-variables)
     return zmax - static_cast<int>((static_cast<std::uint32_t>(p) * static_cast<std::uint32_t>(zmax)) /
                                    static_cast<std::uint32_t>(osal::PRIORITY_HIGHEST));
 }
 
 /// @brief Converts tick count to Zephyr k_timeout_t.
-static k_timeout_t to_zephyr_timeout(osal::tick_t t) noexcept
+k_timeout_t to_zephyr_timeout(osal::tick_t t) noexcept
 {
     if (t == osal::WAIT_FOREVER)
     {
@@ -58,6 +134,8 @@ static k_timeout_t to_zephyr_timeout(osal::tick_t t) noexcept
     return K_MSEC(static_cast<int64_t>(t));  // osal tick is ms on Zephyr backend
 }
 
+}  // namespace
+
 // Accessor macros: Zephyr objects are stored via the handle's native pointer.
 #define ZK_MUTEX(h) static_cast<struct k_mutex*>((h)->native)
 #define ZK_SEM(h) static_cast<struct k_sem*>((h)->native)
@@ -65,29 +143,117 @@ static k_timeout_t to_zephyr_timeout(osal::tick_t t) noexcept
 #define ZK_TIMER(h) static_cast<struct k_timer*>((h)->native)
 #define ZK_THREAD(h) static_cast<struct k_thread*>((h)->native)
 
+#if defined(CONFIG_MICRO_OSAL) && (!defined(CONFIG_MULTITHREADING) || (CONFIG_MULTITHREADING != 1))
+#error "MicrOSAL Zephyr backend requires CONFIG_MULTITHREADING=y."
+#endif
+
+#if defined(CONFIG_MICRO_OSAL) && (!defined(CONFIG_EVENTS) || (CONFIG_EVENTS != 1))
+#error "MicrOSAL Zephyr backend requires CONFIG_EVENTS=y for native event flags."
+#endif
+
 // ---------------------------------------------------------------------------
 // Static kernel object pools — one entry per concurrent object.
-// For production use, adjust pool sizes or use a proper allocator.
+// For production use, adjust the Zephyr Kconfig symbols or override the
+// OSAL_ZEPHYR_* macros before compiling this translation unit.
 // ---------------------------------------------------------------------------
+#ifndef OSAL_ZEPHYR_MAX_MUTEXES
+#if defined(CONFIG_MICRO_OSAL_MUTEX_MAX)
+#define OSAL_ZEPHYR_MAX_MUTEXES CONFIG_MICRO_OSAL_MUTEX_MAX
+#else
 #define OSAL_ZEPHYR_MAX_MUTEXES 16
-#define OSAL_ZEPHYR_MAX_SEMS 16
-#define OSAL_ZEPHYR_MAX_QUEUES 8
-#define OSAL_ZEPHYR_MAX_TIMERS 8
-#define OSAL_ZEPHYR_MAX_THREADS 8
+#endif
+#endif
 
-static struct k_mutex  zephyr_mutexes[OSAL_ZEPHYR_MAX_MUTEXES];
-static bool            zephyr_mutex_used[OSAL_ZEPHYR_MAX_MUTEXES];
-static struct k_sem    zephyr_sems[OSAL_ZEPHYR_MAX_SEMS];
-static bool            zephyr_sem_used[OSAL_ZEPHYR_MAX_SEMS];
-static struct k_msgq   zephyr_queues[OSAL_ZEPHYR_MAX_QUEUES];
-static bool            zephyr_queue_used[OSAL_ZEPHYR_MAX_QUEUES];
-static struct k_timer  zephyr_timers[OSAL_ZEPHYR_MAX_TIMERS];
-static bool            zephyr_timer_used[OSAL_ZEPHYR_MAX_TIMERS];
-static struct k_thread zephyr_threads[OSAL_ZEPHYR_MAX_THREADS];
-static bool            zephyr_thread_used[OSAL_ZEPHYR_MAX_THREADS];
+#ifndef OSAL_ZEPHYR_MAX_SEMS
+#if defined(CONFIG_MICRO_OSAL_SEMAPHORE_MAX)
+#define OSAL_ZEPHYR_MAX_SEMS CONFIG_MICRO_OSAL_SEMAPHORE_MAX
+#else
+#define OSAL_ZEPHYR_MAX_SEMS 16
+#endif
+#endif
+
+#ifndef OSAL_ZEPHYR_MAX_QUEUES
+#if defined(CONFIG_MICRO_OSAL_QUEUE_MAX)
+#define OSAL_ZEPHYR_MAX_QUEUES CONFIG_MICRO_OSAL_QUEUE_MAX
+#else
+#define OSAL_ZEPHYR_MAX_QUEUES 8
+#endif
+#endif
+
+#ifndef OSAL_ZEPHYR_MAX_TIMERS
+#if defined(CONFIG_MICRO_OSAL_TIMER_MAX)
+#define OSAL_ZEPHYR_MAX_TIMERS CONFIG_MICRO_OSAL_TIMER_MAX
+#else
+#define OSAL_ZEPHYR_MAX_TIMERS 8
+#endif
+#endif
+
+#ifndef OSAL_ZEPHYR_MAX_THREADS
+#if defined(CONFIG_MICRO_OSAL_THREAD_MAX)
+#define OSAL_ZEPHYR_MAX_THREADS CONFIG_MICRO_OSAL_THREAD_MAX
+#else
+#define OSAL_ZEPHYR_MAX_THREADS 8
+#endif
+#endif
+
+#ifndef OSAL_ZEPHYR_MAX_EVENTS
+#if defined(CONFIG_MICRO_OSAL_EVENT_FLAGS_MAX)
+#define OSAL_ZEPHYR_MAX_EVENTS CONFIG_MICRO_OSAL_EVENT_FLAGS_MAX
+#else
+#define OSAL_ZEPHYR_MAX_EVENTS 8
+#endif
+#endif
+
+#ifndef OSAL_ZEPHYR_MAX_CONDVARS
+#if defined(CONFIG_MICRO_OSAL_CONDVAR_MAX)
+#define OSAL_ZEPHYR_MAX_CONDVARS CONFIG_MICRO_OSAL_CONDVAR_MAX
+#else
+#define OSAL_ZEPHYR_MAX_CONDVARS 16
+#endif
+#endif
+
+#ifndef OSAL_ZEPHYR_MAX_WORK_QUEUES
+#if defined(CONFIG_MICRO_OSAL_WORK_QUEUE_MAX)
+#define OSAL_ZEPHYR_MAX_WORK_QUEUES CONFIG_MICRO_OSAL_WORK_QUEUE_MAX
+#else
+#define OSAL_ZEPHYR_MAX_WORK_QUEUES 4
+#endif
+#endif
+
+#ifndef OSAL_ZEPHYR_WQ_MAX_DEPTH
+#if defined(CONFIG_MICRO_OSAL_WORK_QUEUE_DEPTH)
+#define OSAL_ZEPHYR_WQ_MAX_DEPTH CONFIG_MICRO_OSAL_WORK_QUEUE_DEPTH
+#else
+#define OSAL_ZEPHYR_WQ_MAX_DEPTH 32
+#endif
+#endif
+
+static_assert(OSAL_ZEPHYR_MAX_MUTEXES > 0, "OSAL_ZEPHYR_MAX_MUTEXES must be > 0.");
+static_assert(OSAL_ZEPHYR_MAX_SEMS > 0, "OSAL_ZEPHYR_MAX_SEMS must be > 0.");
+static_assert(OSAL_ZEPHYR_MAX_QUEUES > 0, "OSAL_ZEPHYR_MAX_QUEUES must be > 0.");
+static_assert(OSAL_ZEPHYR_MAX_TIMERS > 0, "OSAL_ZEPHYR_MAX_TIMERS must be > 0.");
+static_assert(OSAL_ZEPHYR_MAX_THREADS > 0, "OSAL_ZEPHYR_MAX_THREADS must be > 0.");
+static_assert(OSAL_ZEPHYR_MAX_EVENTS > 0, "OSAL_ZEPHYR_MAX_EVENTS must be > 0.");
+static_assert(OSAL_ZEPHYR_MAX_CONDVARS > 0, "OSAL_ZEPHYR_MAX_CONDVARS must be > 0.");
+static_assert(OSAL_ZEPHYR_MAX_WORK_QUEUES > 0, "OSAL_ZEPHYR_MAX_WORK_QUEUES must be > 0.");
+static_assert(OSAL_ZEPHYR_WQ_MAX_DEPTH > 0, "OSAL_ZEPHYR_WQ_MAX_DEPTH must be > 0.");
+
+namespace
+{
+
+struct k_mutex  zephyr_mutexes[OSAL_ZEPHYR_MAX_MUTEXES];
+bool            zephyr_mutex_used[OSAL_ZEPHYR_MAX_MUTEXES];
+struct k_sem    zephyr_sems[OSAL_ZEPHYR_MAX_SEMS];
+bool            zephyr_sem_used[OSAL_ZEPHYR_MAX_SEMS];
+struct k_msgq   zephyr_queues[OSAL_ZEPHYR_MAX_QUEUES];
+bool            zephyr_queue_used[OSAL_ZEPHYR_MAX_QUEUES];
+struct k_timer  zephyr_timers[OSAL_ZEPHYR_MAX_TIMERS];
+bool            zephyr_timer_used[OSAL_ZEPHYR_MAX_TIMERS];
+struct k_thread zephyr_threads[OSAL_ZEPHYR_MAX_THREADS];
+bool            zephyr_thread_used[OSAL_ZEPHYR_MAX_THREADS];
 
 template<typename T, std::size_t N>
-static T* acquire_from_pool(T (&pool)[N], bool (&used)[N]) noexcept
+T* acquire_from_pool(T (&pool)[N], bool (&used)[N]) noexcept
 {
     for (std::size_t i = 0U; i < N; ++i)
     {
@@ -101,7 +267,7 @@ static T* acquire_from_pool(T (&pool)[N], bool (&used)[N]) noexcept
 }
 
 template<typename T, std::size_t N>
-static void release_to_pool(T (&pool)[N], bool (&used)[N], T* p) noexcept
+void release_to_pool(T (&pool)[N], bool (&used)[N], T* p) noexcept
 {
     for (std::size_t i = 0U; i < N; ++i)
     {
@@ -112,6 +278,8 @@ static void release_to_pool(T (&pool)[N], bool (&used)[N], T* p) noexcept
         }
     }
 }
+
+}  // namespace
 
 extern "C"
 {
@@ -149,6 +317,30 @@ extern "C"
     std::uint32_t osal_clock_tick_period_us() noexcept
     {
         return static_cast<std::uint32_t>(1'000'000U / CONFIG_SYS_CLOCK_TICKS_PER_SEC);
+    }
+
+    /// @brief Returns the current Zephyr hardware-cycle clock in nanoseconds.
+    std::int64_t osal_clock_high_resolution_ns() noexcept
+    {
+#if defined(CONFIG_TIMER_HAS_64BIT_CYCLE_COUNTER) && (CONFIG_TIMER_HAS_64BIT_CYCLE_COUNTER == 1)
+        const std::int64_t ns = zephyr_cycles_to_nanoseconds(k_cycle_get_64());
+        if (ns > 0)
+        {
+            return ns;
+        }
+#endif
+        return osal_clock_monotonic_ms() * 1'000'000LL;
+    }
+
+    /// @brief Returns the nominal Zephyr hardware-cycle resolution in nanoseconds.
+    std::int64_t osal_clock_high_resolution_resolution_ns() noexcept
+    {
+#if defined(CONFIG_TIMER_HAS_64BIT_CYCLE_COUNTER) && (CONFIG_TIMER_HAS_64BIT_CYCLE_COUNTER == 1)
+        const std::int64_t resolution_ns = zephyr_cycle_resolution_ns();
+        return (resolution_ns > 0) ? resolution_ns : 1'000'000LL;
+#else
+        return static_cast<std::int64_t>(osal_clock_tick_period_us()) * 1'000LL;
+#endif
     }
 
     // ---------------------------------------------------------------------------
@@ -232,7 +424,8 @@ extern "C"
         {
             return osal::error_code::not_initialized;
         }
-        const int rc = k_thread_join(ZK_THREAD(handle), to_zephyr_timeout(timeout_ticks));
+        const int rc = k_thread_join(ZK_THREAD(handle),
+                                     to_zephyr_timeout(timeout_ticks));  // NOLINT(cppcoreguidelines-init-variables)
         if (rc == 0)
         {
             release_to_pool(zephyr_threads, zephyr_thread_used, ZK_THREAD(handle));
@@ -338,6 +531,154 @@ extern "C"
         return osal::ok();
     }
 
+    /// @brief Return a comparable opaque identifier for a Zephyr thread.
+    osal::result osal_thread_get_id(const osal::active_traits::thread_handle_t* handle,
+                                    osal::thread_id_t*                          out_id) noexcept
+    {
+        if (out_id == nullptr)
+        {
+            return osal::error_code::invalid_argument;
+        }
+
+        k_tid_t tid = k_current_get();
+        if (handle != nullptr)
+        {
+            if (handle->native == nullptr)
+            {
+                return osal::error_code::not_initialized;
+            }
+            tid = ZK_THREAD(handle);
+        }
+
+        *out_id = reinterpret_cast<osal::thread_id_t>(tid);
+        return osal::ok();
+    }
+
+    /// @brief Query the current scheduler priority of a Zephyr thread.
+    osal::result osal_thread_get_priority(const osal::active_traits::thread_handle_t* handle,
+                                          osal::priority_t*                           out_priority) noexcept
+    {
+        if (out_priority == nullptr)
+        {
+            return osal::error_code::invalid_argument;
+        }
+
+        k_tid_t tid = k_current_get();
+        if (handle != nullptr)
+        {
+            if (handle->native == nullptr)
+            {
+                return osal::error_code::not_initialized;
+            }
+            tid = ZK_THREAD(handle);
+        }
+
+        *out_priority = zephyr_to_osal_priority(k_thread_priority_get(tid));
+        return osal::ok();
+    }
+
+    /// @brief Query the CPU-affinity mask of a Zephyr thread.
+    osal::result osal_thread_get_affinity(const osal::active_traits::thread_handle_t* handle,
+                                          osal::affinity_t*                           out_affinity) noexcept
+    {
+#if defined(CONFIG_SCHED_CPU_MASK)
+        if (out_affinity == nullptr)
+        {
+            return osal::error_code::invalid_argument;
+        }
+
+        k_tid_t tid = k_current_get();
+        if (handle != nullptr)
+        {
+            if (handle->native == nullptr)
+            {
+                return osal::error_code::not_initialized;
+            }
+            tid = ZK_THREAD(handle);
+        }
+
+        *out_affinity = zephyr_thread_affinity_mask(tid);
+        return osal::ok();
+#else
+        (void)handle;
+        (void)out_affinity;
+        return osal::error_code::not_supported;
+#endif
+    }
+
+    /// @brief Query the current CPU/core index for the running thread.
+    osal::result osal_thread_current_cpu(std::uint32_t* out_cpu) noexcept
+    {
+        if (out_cpu == nullptr)
+        {
+            return osal::error_code::invalid_argument;
+        }
+
+#if defined(CONFIG_MP_MAX_NUM_CPUS) && (CONFIG_MP_MAX_NUM_CPUS > 1)
+        return osal::error_code::not_supported;
+#else
+        *out_cpu = 0U;
+        return osal::ok();
+#endif
+    }
+
+    /// @brief Returns the stack low-watermark for a Zephyr thread.
+    /// @details Uses @c k_thread_stack_space_get() for the target thread, or
+    ///          the current thread when @p handle is null.
+    osal::result osal_thread_stack_low_watermark_bytes(const osal::active_traits::thread_handle_t* handle,
+                                                       std::size_t*                                out_bytes) noexcept
+    {
+#if defined(CONFIG_THREAD_STACK_INFO) && (CONFIG_THREAD_STACK_INFO == 1) && defined(CONFIG_INIT_STACKS) && \
+    (CONFIG_INIT_STACKS == 1)
+        if (out_bytes == nullptr)
+        {
+            return osal::error_code::invalid_argument;
+        }
+
+        k_tid_t tid = k_current_get();
+        if (handle != nullptr)
+        {
+            if (handle->native == nullptr)
+            {
+                return osal::error_code::not_initialized;
+            }
+            tid = ZK_THREAD(handle);
+        }
+
+        std::size_t unused = 0U;
+        const int   rc     = k_thread_stack_space_get(tid, &unused);
+        if (rc == 0)
+        {
+            *out_bytes = unused;
+            return osal::ok();
+        }
+        if (rc == -ENOTSUP)
+        {
+            return osal::error_code::not_supported;
+        }
+        return osal::error_code::unknown;
+#else
+        (void)handle;
+        if (out_bytes != nullptr)
+        {
+            *out_bytes = 0U;
+        }
+        return osal::error_code::not_supported;
+#endif
+    }
+
+    /// @brief Returns the execution time for a Zephyr thread.
+    /// @details Runtime-stat collection is not enabled in this first Zephyr slice.
+    osal::result osal_thread_execution_time_us(const osal::active_traits::thread_handle_t* /*handle*/,
+                                               std::int64_t* out_us) noexcept
+    {
+        if (out_us != nullptr)
+        {
+            *out_us = 0;
+        }
+        return osal::error_code::not_supported;
+    }
+
     /// @brief Yields the CPU to other threads of the same or higher priority.
     /// @details Calls @c k_yield().
     void osal_thread_yield() noexcept
@@ -404,7 +745,8 @@ extern "C"
         {
             return osal::error_code::not_initialized;
         }
-        const int rc = k_mutex_lock(ZK_MUTEX(handle), to_zephyr_timeout(timeout_ticks));
+        const int rc = k_mutex_lock(ZK_MUTEX(handle),
+                                    to_zephyr_timeout(timeout_ticks));  // NOLINT(cppcoreguidelines-init-variables)
         if (rc == 0)
         {
             return osal::ok();
@@ -514,7 +856,8 @@ extern "C"
         {
             return osal::error_code::not_initialized;
         }
-        const int rc = k_sem_take(ZK_SEM(handle), to_zephyr_timeout(timeout_ticks));
+        const int rc =
+            k_sem_take(ZK_SEM(handle), to_zephyr_timeout(timeout_ticks));  // NOLINT(cppcoreguidelines-init-variables)
         return (rc == 0) ? osal::ok() : osal::error_code::timeout;
     }
 
@@ -582,7 +925,8 @@ extern "C"
         {
             return osal::error_code::not_initialized;
         }
-        const int rc = k_msgq_put(ZK_MSGQ(handle), const_cast<void*>(item), to_zephyr_timeout(timeout_ticks));
+        const int rc = k_msgq_put(ZK_MSGQ(handle), const_cast<void*>(item),
+                                  to_zephyr_timeout(timeout_ticks));  // NOLINT(cppcoreguidelines-init-variables)
         return (rc == 0) ? osal::ok() : osal::error_code::timeout;
     }
 
@@ -611,7 +955,8 @@ extern "C"
         {
             return osal::error_code::not_initialized;
         }
-        const int rc = k_msgq_get(ZK_MSGQ(handle), item, to_zephyr_timeout(timeout_ticks));
+        const int rc = k_msgq_get(ZK_MSGQ(handle), item,
+                                  to_zephyr_timeout(timeout_ticks));  // NOLINT(cppcoreguidelines-init-variables)
         return (rc == 0) ? osal::ok() : osal::error_code::timeout;
     }
 
@@ -654,7 +999,7 @@ extern "C"
         {
             return 0U;
         }
-        return static_cast<std::size_t>(k_msgq_num_used_get(const_cast<struct k_msgq*>(ZK_MSGQ(handle))));
+        return static_cast<std::size_t>(k_msgq_num_used_get(ZK_MSGQ(handle)));
     }
 
     /// @brief Returns the number of free slots remaining in the queue.
@@ -667,7 +1012,7 @@ extern "C"
         {
             return 0U;
         }
-        return static_cast<std::size_t>(k_msgq_num_free_get(const_cast<struct k_msgq*>(ZK_MSGQ(handle))));
+        return static_cast<std::size_t>(k_msgq_num_free_get(ZK_MSGQ(handle)));
     }
 
     // ---------------------------------------------------------------------------
@@ -681,7 +1026,10 @@ extern "C"
         osal::tick_t          period_ticks;
         bool                  auto_reload;
     };
-    static zephyr_timer_ctx timer_ctx[OSAL_ZEPHYR_MAX_TIMERS];
+    namespace
+    {
+    zephyr_timer_ctx timer_ctx[OSAL_ZEPHYR_MAX_TIMERS];
+    }  // namespace
 
     /// @brief Creates a software timer backed by a Zephyr @c k_timer.
     /// @details Allocates a @c k_timer from the static pool and a @c zephyr_timer_ctx slot,
@@ -833,16 +1181,18 @@ extern "C"
         {
             return false;
         }
-        return k_timer_remaining_get(const_cast<struct k_timer*>(ZK_TIMER(handle))) > 0U;
+        return k_timer_remaining_get(ZK_TIMER(handle)) > 0U;
     }
 
     // ---------------------------------------------------------------------------
     // Event flags (native — Zephyr k_event, requires CONFIG_EVENTS=y)
     // ---------------------------------------------------------------------------
 
-#define OSAL_ZEPHYR_MAX_EVENTS 8
-    static struct k_event zephyr_events[OSAL_ZEPHYR_MAX_EVENTS];
-    static bool           zephyr_event_used[OSAL_ZEPHYR_MAX_EVENTS];
+    namespace
+    {
+    struct k_event zephyr_events[OSAL_ZEPHYR_MAX_EVENTS];
+    bool           zephyr_event_used[OSAL_ZEPHYR_MAX_EVENTS];
+    }  // namespace
 
     /// @brief Creates an event-flags object backed by a Zephyr @c k_event.
     /// @details Allocates a @c k_event from the static pool and calls @c k_event_init().
@@ -852,7 +1202,7 @@ extern "C"
     ///         or @c error_code::invalid_argument if @p handle is @c nullptr.
     osal::result osal_event_flags_create(osal::active_traits::event_flags_handle_t* handle) noexcept
     {
-        if (!handle)
+        if (handle == nullptr)
         {
             return osal::error_code::invalid_argument;
         }
@@ -880,7 +1230,7 @@ extern "C"
     /// @return Always @c osal::ok().
     osal::result osal_event_flags_destroy(osal::active_traits::event_flags_handle_t* handle) noexcept
     {
-        if (!handle || !handle->native)
+        if (handle == nullptr || handle->native == nullptr)
         {
             return osal::ok();
         }
@@ -905,7 +1255,7 @@ extern "C"
     osal::result osal_event_flags_set(osal::active_traits::event_flags_handle_t* handle,
                                       osal::event_bits_t                         bits) noexcept
     {
-        if (!handle || !handle->native)
+        if (handle == nullptr || handle->native == nullptr)
         {
             return osal::error_code::not_initialized;
         }
@@ -921,7 +1271,7 @@ extern "C"
     osal::result osal_event_flags_clear(osal::active_traits::event_flags_handle_t* handle,
                                         osal::event_bits_t                         bits) noexcept
     {
-        if (!handle || !handle->native)
+        if (handle == nullptr || handle->native == nullptr)
         {
             return osal::error_code::not_initialized;
         }
@@ -935,7 +1285,7 @@ extern "C"
     /// @return Current bitmask of set bits, or 0 if @p handle is invalid.
     osal::event_bits_t osal_event_flags_get(const osal::active_traits::event_flags_handle_t* handle) noexcept
     {
-        if (!handle || !handle->native)
+        if (handle == nullptr || handle->native == nullptr)
         {
             return 0U;
         }
@@ -959,7 +1309,7 @@ extern "C"
                                            osal::event_bits_t wait_bits, osal::event_bits_t* actual, bool clear_on_exit,
                                            osal::tick_t timeout) noexcept
     {
-        if (!handle || !handle->native)
+        if (handle == nullptr || handle->native == nullptr)
         {
             return osal::error_code::not_initialized;
         }
@@ -969,7 +1319,8 @@ extern "C"
         // NOTE: Zephyr's 'reset' param clears ALL events BEFORE waiting,
         //       which is NOT the OSAL clear_on_exit semantics. We always
         //       pass reset=false and manually clear matched bits on success.
-        const uint32_t matched = k_event_wait(ev, static_cast<uint32_t>(wait_bits), false, to_zephyr_timeout(timeout));
+        const uint32_t matched = k_event_wait(ev, static_cast<uint32_t>(wait_bits), false,
+                                              to_zephyr_timeout(timeout));  // NOLINT(cppcoreguidelines-init-variables)
         if (actual != nullptr)
         {
             *actual = static_cast<osal::event_bits_t>(matched);
@@ -1001,7 +1352,7 @@ extern "C"
                                            osal::event_bits_t wait_bits, osal::event_bits_t* actual, bool clear_on_exit,
                                            osal::tick_t timeout) noexcept
     {
-        if (!handle || !handle->native)
+        if (handle == nullptr || handle->native == nullptr)
         {
             return osal::error_code::not_initialized;
         }
@@ -1009,7 +1360,7 @@ extern "C"
 
         // k_event_wait_all: waits until ALL bits in wait_bits are set.
         // Same reset caveat as wait_any — always false, clear manually.
-        const uint32_t matched =
+        const uint32_t matched =  // NOLINT(cppcoreguidelines-init-variables)
             k_event_wait_all(ev, static_cast<uint32_t>(wait_bits), false, to_zephyr_timeout(timeout));
         if (actual != nullptr)
         {
@@ -1034,7 +1385,7 @@ extern "C"
     osal::result osal_event_flags_set_isr(osal::active_traits::event_flags_handle_t* handle,
                                           osal::event_bits_t                         bits) noexcept
     {
-        if (!handle || !handle->native)
+        if (handle == nullptr || handle->native == nullptr)
         {
             return osal::error_code::not_initialized;
         }
@@ -1082,8 +1433,10 @@ extern "C"
     osal::result osal_wait_set_wait(osal::active_traits::wait_set_handle_t*, int*, std::size_t, std::size_t* n,
                                     osal::tick_t) noexcept
     {
-        if (n)
+        if (n != nullptr)
+        {
             *n = 0U;
+        }
         return osal::error_code::not_supported;
     }
 
@@ -1094,13 +1447,14 @@ extern "C"
     struct zephyr_condvar_obj
     {
         struct k_condvar cv;
-        bool             valid;
+        bool             valid{};
     };
 
-    static constexpr std::size_t OSAL_ZEPHYR_MAX_CONDVARS = 16U;
-    static zephyr_condvar_obj    condvar_pool[OSAL_ZEPHYR_MAX_CONDVARS];
+    namespace
+    {
+    zephyr_condvar_obj condvar_pool[OSAL_ZEPHYR_MAX_CONDVARS];
 
-    static zephyr_condvar_obj* condvar_alloc() noexcept
+    zephyr_condvar_obj* condvar_alloc() noexcept
     {
         for (auto& c : condvar_pool)
         {
@@ -1112,6 +1466,7 @@ extern "C"
         }
         return nullptr;
     }
+    }  // namespace
 
     /// @brief Creates a condition variable backed by a Zephyr @c k_condvar.
     /// @details Allocates a @c zephyr_condvar_obj from the static pool and calls @c k_condvar_init().
@@ -1120,11 +1475,15 @@ extern "C"
     ///         or @c error_code::invalid_argument if @p handle is @c nullptr.
     osal::result osal_condvar_create(osal::active_traits::condvar_handle_t* handle) noexcept
     {
-        if (!handle)
+        if (handle == nullptr)
+        {
             return osal::error_code::invalid_argument;
+        }
         auto* obj = condvar_alloc();
-        if (!obj)
+        if (obj == nullptr)
+        {
             return osal::error_code::out_of_resources;
+        }
         k_condvar_init(&obj->cv);
         handle->native = obj;
         return osal::ok();
@@ -1135,8 +1494,10 @@ extern "C"
     /// @return Always @c osal::ok().
     osal::result osal_condvar_destroy(osal::active_traits::condvar_handle_t* handle) noexcept
     {
-        if (!handle || !handle->native)
+        if (handle == nullptr || handle->native == nullptr)
+        {
             return osal::ok();
+        }
         auto* obj      = static_cast<zephyr_condvar_obj*>(handle->native);
         obj->valid     = false;
         handle->native = nullptr;
@@ -1154,16 +1515,23 @@ extern "C"
     osal::result osal_condvar_wait(osal::active_traits::condvar_handle_t* handle,
                                    osal::active_traits::mutex_handle_t* mutex, osal::tick_t timeout) noexcept
     {
-        if (!handle || !handle->native || !mutex || !mutex->native)
+        if (handle == nullptr || handle->native == nullptr || mutex == nullptr || mutex->native == nullptr)
+        {
             return osal::error_code::not_initialized;
+        }
         auto* obj = static_cast<zephyr_condvar_obj*>(handle->native);
         // Zephyr OSAL mutex handle stores a struct k_mutex* directly.
         auto*     mtx = static_cast<struct k_mutex*>(mutex->native);
-        const int rc  = k_condvar_wait(&obj->cv, mtx, to_zephyr_timeout(timeout));
+        const int rc =
+            k_condvar_wait(&obj->cv, mtx, to_zephyr_timeout(timeout));  // NOLINT(cppcoreguidelines-init-variables)
         if (rc == 0)
+        {
             return osal::ok();
+        }
         if (rc == -EAGAIN || rc == -ETIMEDOUT)
+        {
             return osal::error_code::timeout;
+        }
         return osal::error_code::unknown;
     }
 
@@ -1173,8 +1541,10 @@ extern "C"
     /// @return @c osal::ok() on success, or @c error_code::not_initialized if @p handle is invalid.
     osal::result osal_condvar_notify_one(osal::active_traits::condvar_handle_t* handle) noexcept
     {
-        if (!handle || !handle->native)
+        if (handle == nullptr || handle->native == nullptr)
+        {
             return osal::error_code::not_initialized;
+        }
         auto* obj = static_cast<zephyr_condvar_obj*>(handle->native);
         k_condvar_signal(&obj->cv);
         return osal::ok();
@@ -1186,8 +1556,10 @@ extern "C"
     /// @return @c osal::ok() on success, or @c error_code::not_initialized if @p handle is invalid.
     osal::result osal_condvar_notify_all(osal::active_traits::condvar_handle_t* handle) noexcept
     {
-        if (!handle || !handle->native)
+        if (handle == nullptr || handle->native == nullptr)
+        {
             return osal::error_code::not_initialized;
+        }
         auto* obj = static_cast<zephyr_condvar_obj*>(handle->native);
         k_condvar_broadcast(&obj->cv);
         return osal::ok();
@@ -1197,34 +1569,29 @@ extern "C"
     // Work queue (native — Zephyr k_work_queue)
     // ---------------------------------------------------------------------------
 
-#ifndef OSAL_ZEPHYR_MAX_WORK_QUEUES
-#define OSAL_ZEPHYR_MAX_WORK_QUEUES 4
-#endif
-#ifndef OSAL_ZEPHYR_WQ_MAX_DEPTH
-#define OSAL_ZEPHYR_WQ_MAX_DEPTH 32
-#endif
-
     struct zephyr_wq_entry
     {
         struct k_work           work;
-        osal_work_func_t        func;
-        void*                   arg;
-        struct zephyr_wq_obj_s* parent;
-        volatile bool           in_use;
+        osal_work_func_t        func{};
+        void*                   arg{};
+        struct zephyr_wq_obj_s* parent{};
+        std::atomic_bool        in_use{false};
     };
 
     struct zephyr_wq_obj_s
     {
         struct k_work_q workq;
         zephyr_wq_entry entries[OSAL_ZEPHYR_WQ_MAX_DEPTH];
-        std::size_t     capacity;
+        std::size_t     capacity{};
         struct k_sem    flush_sem;
     };
 
-    static zephyr_wq_obj_s zephyr_wq_pool[OSAL_ZEPHYR_MAX_WORK_QUEUES];
-    static bool            zephyr_wq_used[OSAL_ZEPHYR_MAX_WORK_QUEUES];
+    namespace
+    {
+    zephyr_wq_obj_s zephyr_wq_pool[OSAL_ZEPHYR_MAX_WORK_QUEUES];
+    bool            zephyr_wq_used[OSAL_ZEPHYR_MAX_WORK_QUEUES];
 
-    static zephyr_wq_obj_s* zephyr_wq_acquire() noexcept
+    zephyr_wq_obj_s* zephyr_wq_acquire() noexcept
     {
         for (std::size_t i = 0U; i < OSAL_ZEPHYR_MAX_WORK_QUEUES; ++i)
         {
@@ -1237,7 +1604,7 @@ extern "C"
         return nullptr;
     }
 
-    static void zephyr_wq_release(zephyr_wq_obj_s* p) noexcept
+    void zephyr_wq_release(zephyr_wq_obj_s* p) noexcept
     {
         for (std::size_t i = 0U; i < OSAL_ZEPHYR_MAX_WORK_QUEUES; ++i)
         {
@@ -1249,7 +1616,7 @@ extern "C"
         }
     }
 
-    static void zephyr_wq_handler(struct k_work* work) noexcept
+    void zephyr_wq_handler(struct k_work* work) noexcept
     {
         auto* e = CONTAINER_OF(work, zephyr_wq_entry, work);
         if (e->func != nullptr)
@@ -1261,8 +1628,9 @@ extern "C"
             // Sentinel — flush complete.
             k_sem_give(&e->parent->flush_sem);
         }
-        e->in_use = false;
+        e->in_use.store(false, std::memory_order_release);
     }
+    }  // namespace
 
     /// @brief Creates a work queue backed by a Zephyr @c k_work_queue.
     /// @details Allocates a @c zephyr_wq_obj_s from the static pool, initialises each
@@ -1278,12 +1646,12 @@ extern "C"
     osal::result osal_work_queue_create(osal::active_traits::work_queue_handle_t* handle, void* stack,
                                         std::size_t stack_bytes, std::size_t depth, const char* /*name*/) noexcept
     {
-        if (!handle || !stack || stack_bytes == 0U || depth == 0U)
+        if (handle == nullptr || stack == nullptr || stack_bytes == 0U || depth == 0U)
         {
             return osal::error_code::invalid_argument;
         }
         auto* wq = zephyr_wq_acquire();
-        if (!wq)
+        if (wq == nullptr)
         {
             return osal::error_code::out_of_resources;
         }
@@ -1297,7 +1665,7 @@ extern "C"
         {
             k_work_init(&wq->entries[i].work, zephyr_wq_handler);
             wq->entries[i].parent = wq;
-            wq->entries[i].in_use = false;
+            wq->entries[i].in_use.store(false, std::memory_order_relaxed);
         }
         k_sem_init(&wq->flush_sem, 0, 1);
         k_work_queue_start(&wq->workq, static_cast<k_thread_stack_t*>(stack), stack_bytes,
@@ -1315,7 +1683,7 @@ extern "C"
     /// @return Always @c osal::ok().
     osal::result osal_work_queue_destroy(osal::active_traits::work_queue_handle_t* handle) noexcept
     {
-        if (!handle || !handle->native)
+        if (handle == nullptr || handle->native == nullptr)
         {
             return osal::ok();
         }
@@ -1342,18 +1710,19 @@ extern "C"
     osal::result osal_work_queue_submit(osal::active_traits::work_queue_handle_t* handle, osal_work_func_t func,
                                         void* arg) noexcept
     {
-        if (!handle || !handle->native || !func)
+        if (handle == nullptr || handle->native == nullptr || func == nullptr)
         {
             return osal::error_code::invalid_argument;
         }
         auto* wq = static_cast<zephyr_wq_obj_s*>(handle->native);
         for (std::size_t i = 0U; i < wq->capacity; ++i)
         {
-            if (!wq->entries[i].in_use)
+            bool expected = false;
+            if (wq->entries[i].in_use.compare_exchange_strong(expected, true, std::memory_order_acq_rel,
+                                                              std::memory_order_relaxed))
             {
-                wq->entries[i].func   = func;
-                wq->entries[i].arg    = arg;
-                wq->entries[i].in_use = true;
+                wq->entries[i].func = func;
+                wq->entries[i].arg  = arg;
                 k_work_submit_to_queue(&wq->workq, &wq->entries[i].work);
                 return osal::ok();
             }
@@ -1386,7 +1755,7 @@ extern "C"
     ///         or @c error_code::not_initialized if @p handle is invalid.
     osal::result osal_work_queue_flush(osal::active_traits::work_queue_handle_t* handle, osal::tick_t timeout) noexcept
     {
-        if (!handle || !handle->native)
+        if (handle == nullptr || handle->native == nullptr)
         {
             return osal::error_code::not_initialized;
         }
@@ -1394,13 +1763,15 @@ extern "C"
         // Submit a sentinel item and wait on the semaphore.
         for (std::size_t i = 0U; i < wq->capacity; ++i)
         {
-            if (!wq->entries[i].in_use)
+            bool expected = false;
+            if (wq->entries[i].in_use.compare_exchange_strong(expected, true, std::memory_order_acq_rel,
+                                                              std::memory_order_relaxed))
             {
-                wq->entries[i].func   = nullptr;
-                wq->entries[i].arg    = nullptr;
-                wq->entries[i].in_use = true;
+                wq->entries[i].func = nullptr;
+                wq->entries[i].arg  = nullptr;
                 k_work_submit_to_queue(&wq->workq, &wq->entries[i].work);
-                int rc = k_sem_take(&wq->flush_sem, to_zephyr_timeout(timeout));
+                int rc =
+                    k_sem_take(&wq->flush_sem, to_zephyr_timeout(timeout));  // NOLINT(cppcoreguidelines-init-variables)
                 return (rc == 0) ? osal::ok() : osal::result{osal::error_code::timeout};
             }
         }
@@ -1414,17 +1785,17 @@ extern "C"
     /// @return @c osal::ok() on success, or @c error_code::not_initialized if @p handle is invalid.
     osal::result osal_work_queue_cancel_all(osal::active_traits::work_queue_handle_t* handle) noexcept
     {
-        if (!handle || !handle->native)
+        if (handle == nullptr || handle->native == nullptr)
         {
             return osal::error_code::not_initialized;
         }
         auto* wq = static_cast<zephyr_wq_obj_s*>(handle->native);
         for (std::size_t i = 0U; i < wq->capacity; ++i)
         {
-            if (wq->entries[i].in_use)
+            if (wq->entries[i].in_use.load(std::memory_order_acquire))
             {
                 k_work_cancel(&wq->entries[i].work);
-                wq->entries[i].in_use = false;
+                wq->entries[i].in_use.store(false, std::memory_order_release);
             }
         }
         return osal::ok();
@@ -1436,15 +1807,15 @@ extern "C"
     /// @return Count of in-use entries, or 0 if @p handle is invalid.
     std::size_t osal_work_queue_pending(const osal::active_traits::work_queue_handle_t* handle) noexcept
     {
-        if (!handle || !handle->native)
+        if (handle == nullptr || handle->native == nullptr)
         {
             return 0U;
         }
-        auto*       wq = static_cast<const zephyr_wq_obj_s*>(handle->native);
+        const auto* wq = static_cast<const zephyr_wq_obj_s*>(handle->native);
         std::size_t n  = 0U;
         for (std::size_t i = 0U; i < wq->capacity; ++i)
         {
-            if (wq->entries[i].in_use)
+            if (wq->entries[i].in_use.load(std::memory_order_acquire))
             {
                 ++n;
             }

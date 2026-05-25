@@ -23,6 +23,7 @@
 /// @ingroup osal_notification
 #pragma once
 
+#include "concepts.hpp"
 #include "condvar.hpp"
 #include "error.hpp"
 #include "mutex.hpp"
@@ -48,10 +49,9 @@ enum class notification_action : std::uint8_t
 };
 
 template<std::size_t Slots = 1U>
+    requires valid_notification_slot_count<Slots>
 class notification
 {
-    static_assert(Slots > 0U, "osal::notification: Slots must be > 0.");
-
 public:
     /// @brief Number of notification slots stored in this instance.
     static constexpr std::size_t slot_count = Slots;
@@ -77,7 +77,7 @@ public:
     ///         `notification_action::no_overwrite` when the slot is already
     ///         pending, or `error_code::invalid_argument` for an invalid slot.
     result notify(std::uint32_t value = 0U, notification_action action = notification_action::overwrite,
-                  std::size_t index = 0U) noexcept
+                  std::size_t index = 0U) const noexcept
     {
         if (!valid())
         {
@@ -125,7 +125,7 @@ public:
     /// @param bits Bit mask to clear.
     /// @param index Slot index in the range `[0, Slots)`.
     /// @return `error_code::ok` on success or an argument/init error.
-    result clear(std::uint32_t bits, std::size_t index = 0U) noexcept
+    result clear(std::uint32_t bits, std::size_t index = 0U) const noexcept
     {
         if (!valid())
         {
@@ -144,7 +144,7 @@ public:
     /// @brief Reset a slot to value `0` with no pending notification.
     /// @param index Slot index in the range `[0, Slots)`.
     /// @return `error_code::ok` on success or an argument/init error.
-    result reset(std::size_t index = 0U) noexcept
+    result reset(std::size_t index = 0U) const noexcept
     {
         if (!valid())
         {
@@ -172,7 +172,7 @@ public:
     /// @details A successful wait clears the slot's pending bit before it
     ///          returns.
     result wait(std::size_t index, milliseconds timeout = milliseconds{-1}, std::uint32_t* value_out = nullptr,
-                std::uint32_t clear_on_entry = 0U, std::uint32_t clear_on_exit = 0xFFFFFFFFU) noexcept
+                std::uint32_t clear_on_entry = 0U, std::uint32_t clear_on_exit = 0xFFFFFFFFU) const noexcept
     {
         if (!valid())
         {
@@ -188,24 +188,18 @@ public:
 
         slot.value &= ~clear_on_entry;
 
-        const auto pred  = [&slot]() noexcept { return slot.pending; };
-        bool       ready = true;
+        const auto pred = [&slot]() noexcept { return slot.pending; };
         if (!slot.pending)
         {
             if (timeout.count() < 0)
             {
                 cv_.wait(mtx_, pred);
             }
-            else
+            else if (!cv_.wait_for(mtx_, timeout, pred))
             {
-                ready = cv_.wait_for(mtx_, timeout, pred);
+                mtx_.unlock();
+                return error_code::timeout;
             }
-        }
-
-        if (!ready)
-        {
-            mtx_.unlock();
-            return error_code::timeout;
         }
 
         if (value_out != nullptr)
@@ -229,11 +223,8 @@ public:
             return false;
         }
 
-        auto* self = const_cast<notification*>(this);
-        self->mtx_.lock();
-        const bool is_pending = self->slots_[index].pending;
-        self->mtx_.unlock();
-        return is_pending;
+        mutex::lock_guard lock{mtx_};
+        return slots_[index].pending;
     }
 
     /// @brief Read the current slot value without consuming pending state.
@@ -246,11 +237,8 @@ public:
             return 0U;
         }
 
-        auto* self = const_cast<notification*>(this);
-        self->mtx_.lock();
-        const std::uint32_t value = self->slots_[index].value;
-        self->mtx_.unlock();
-        return value;
+        mutex::lock_guard lock{mtx_};
+        return slots_[index].value;
     }
 
 private:
@@ -262,9 +250,9 @@ private:
 
     [[nodiscard]] static constexpr bool index_valid(std::size_t index) noexcept { return index < Slots; }
 
-    mutable mutex mtx_;
-    condvar       cv_;
-    slot_state    slots_[Slots]{};
+    mutable mutex      mtx_;
+    mutable condvar    cv_;
+    mutable slot_state slots_[Slots]{};
 };
 
 /// @} // osal_notification

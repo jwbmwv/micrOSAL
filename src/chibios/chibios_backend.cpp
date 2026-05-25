@@ -40,54 +40,57 @@
 // ---------------------------------------------------------------------------
 // Static pools
 // ---------------------------------------------------------------------------
-static mutex_t     ch_mutexes[OSAL_CH_MAX_MUTEXES];
-static bool        ch_mutex_used[OSAL_CH_MAX_MUTEXES];
-static semaphore_t ch_sems[OSAL_CH_MAX_SEMS];
-static bool        ch_sem_used[OSAL_CH_MAX_SEMS];
+namespace
+{
+
+mutex_t     ch_mutexes[OSAL_CH_MAX_MUTEXES];
+bool        ch_mutex_used[OSAL_CH_MAX_MUTEXES];
+semaphore_t ch_sems[OSAL_CH_MAX_SEMS];
+bool        ch_sem_used[OSAL_CH_MAX_SEMS];
 
 // ChibiOS thread descriptors
 struct ch_thread_slot
 {
-    thread_t* tp;
-    bool      used;
+    thread_t* tp   = nullptr;
+    bool      used = false;
 };
-static ch_thread_slot ch_threads[OSAL_CH_MAX_THREADS];
+ch_thread_slot ch_threads[OSAL_CH_MAX_THREADS];
 
 // ChibiOS mailbox (queue) slots
 struct ch_mailbox_slot
 {
-    mailbox_t mb;
-    msg_t     buf[OSAL_CH_MAILBOX_DEPTH];
-    bool      used;
+    mailbox_t mb{};
+    msg_t     buf[OSAL_CH_MAILBOX_DEPTH]{};
+    bool      used = false;
 };
-static ch_mailbox_slot ch_mailboxes[OSAL_CH_MAX_QUEUES];
+ch_mailbox_slot ch_mailboxes[OSAL_CH_MAX_QUEUES];
 
 // ChibiOS virtual-timer slots
 struct ch_vt_slot
 {
-    virtual_timer_t       vt;
-    osal_timer_callback_t fn;
-    void*                 arg;
-    sysinterval_t         period;
-    bool                  auto_reload;
-    bool                  used;
+    virtual_timer_t       vt{};
+    osal_timer_callback_t fn          = nullptr;
+    void*                 arg         = nullptr;
+    sysinterval_t         period      = 0;
+    bool                  auto_reload = false;
+    bool                  used        = false;
 };
-static ch_vt_slot ch_timers[OSAL_CH_MAX_TIMERS];
+ch_vt_slot ch_timers[OSAL_CH_MAX_TIMERS];
 
 // ChibiOS event source slots (for event flags)
 struct ch_event_slot
 {
-    event_source_t src;
-    eventflags_t   flags;  // shadow register for get
-    bool           used;
+    event_source_t src{};
+    eventflags_t   flags = 0U;  // shadow register for get
+    bool           used  = false;
 };
-static ch_event_slot ch_events[OSAL_CH_MAX_FLAGS];
+ch_event_slot ch_events[OSAL_CH_MAX_FLAGS];
 
 // ---------------------------------------------------------------------------
 // Generic pool helpers
 // ---------------------------------------------------------------------------
 template<typename T, std::size_t N>
-static T* pool_acquire_by_used(T (&pool)[N]) noexcept
+T* pool_acquire_by_used(T (&pool)[N]) noexcept
 {
     for (std::size_t i = 0; i < N; ++i)
     {
@@ -101,7 +104,7 @@ static T* pool_acquire_by_used(T (&pool)[N]) noexcept
 }
 
 template<typename T, std::size_t N>
-static void pool_release_by_used(T (&pool)[N], T* p) noexcept
+void pool_release_by_used(T (&pool)[N], T* p) noexcept
 {
     for (std::size_t i = 0; i < N; ++i)
     {
@@ -114,7 +117,7 @@ static void pool_release_by_used(T (&pool)[N], T* p) noexcept
 }
 
 template<typename T, std::size_t N>
-static T* pool_simple_acquire(T (&pool)[N], bool (&used)[N]) noexcept
+T* pool_simple_acquire(T (&pool)[N], bool (&used)[N]) noexcept
 {
     for (std::size_t i = 0; i < N; ++i)
     {
@@ -128,7 +131,7 @@ static T* pool_simple_acquire(T (&pool)[N], bool (&used)[N]) noexcept
 }
 
 template<typename T, std::size_t N>
-static void pool_simple_release(T (&pool)[N], bool (&used)[N], T* p) noexcept
+void pool_simple_release(T (&pool)[N], bool (&used)[N], T* p) noexcept
 {
     for (std::size_t i = 0; i < N; ++i)
     {
@@ -145,14 +148,14 @@ static void pool_simple_release(T (&pool)[N], bool (&used)[N], T* p) noexcept
 // ---------------------------------------------------------------------------
 
 /// @brief Map OSAL priority [0=lowest..255=highest] to ChibiOS [LOWPRIO..HIGHPRIO].
-static constexpr tprio_t osal_to_ch_priority(osal::priority_t p) noexcept
+constexpr tprio_t osal_to_ch_priority(osal::priority_t p) noexcept
 {
-    const tprio_t range = HIGHPRIO - LOWPRIO;
+    const tprio_t range = static_cast<tprio_t>(HIGHPRIO - LOWPRIO);
     return LOWPRIO + static_cast<tprio_t>((static_cast<std::uint32_t>(p) * range) / static_cast<std::uint32_t>(255));
 }
 
 /// @brief Convert OSAL ticks to ChibiOS sysinterval_t.
-static constexpr sysinterval_t to_ch_ticks(osal::tick_t t) noexcept
+constexpr sysinterval_t to_ch_ticks(osal::tick_t t) noexcept
 {
     if (t == osal::WAIT_FOREVER)
     {
@@ -162,13 +165,14 @@ static constexpr sysinterval_t to_ch_ticks(osal::tick_t t) noexcept
     {
         return TIME_IMMEDIATE;
     }
-    return static_cast<sysinterval_t>(t);
+    return static_cast<sysinterval_t>(
+        t);  // NOLINT(bugprone-narrowing-conversions,cppcoreguidelines-narrowing-conversions)
 }
 
 // ---------------------------------------------------------------------------
 // Timer callback (virtual-timer callback runs in ISR context)
 // ---------------------------------------------------------------------------
-static void ch_vt_callback(virtual_timer_t* vtp, void* arg) noexcept
+void ch_vt_callback(virtual_timer_t* vtp, void* arg) noexcept
 {
     auto* slot = static_cast<ch_vt_slot*>(arg);
     if (slot != nullptr && slot->fn != nullptr)
@@ -183,6 +187,8 @@ static void ch_vt_callback(virtual_timer_t* vtp, void* arg) noexcept
         chSysUnlockFromISR();
     }
 }
+
+}  // namespace
 
 extern "C"
 {
@@ -667,7 +673,7 @@ extern "C"
         {
             return 0U;
         }
-        auto* slot = static_cast<const ch_mailbox_slot*>(handle->native);
+        const auto* slot = static_cast<const ch_mailbox_slot*>(handle->native);
         return static_cast<std::size_t>(chMBGetUsedCountI(&slot->mb));
     }
 
@@ -680,7 +686,7 @@ extern "C"
         {
             return 0U;
         }
-        auto* slot = static_cast<const ch_mailbox_slot*>(handle->native);
+        const auto* slot = static_cast<const ch_mailbox_slot*>(handle->native);
         return static_cast<std::size_t>(chMBGetFreeCountI(&slot->mb));
     }
 
@@ -1020,23 +1026,32 @@ extern "C"
 
 #define OSAL_CH_MAX_CONDVARS 8
 
+    namespace
+    {
+
     struct ch_condvar_slot
     {
-        condition_variable_t cv;
-        bool                 used;
+        condition_variable_t cv{};
+        bool                 used = false;
     };
-    static ch_condvar_slot ch_condvars[OSAL_CH_MAX_CONDVARS];
+    ch_condvar_slot ch_condvars[OSAL_CH_MAX_CONDVARS];
+
+    }  // namespace
 
     /// @brief Initialise a ChibiOS condition variable via chCondObjectInit().
     /// @param handle Output handle pointing to the ch_condvar_slot.
     /// @return osal::ok() on success; osal::error_code::out_of_resources if no slot is available.
     osal::result osal_condvar_create(osal::active_traits::condvar_handle_t* handle) noexcept
     {
-        if (!handle)
+        if (handle == nullptr)
+        {
             return osal::error_code::invalid_argument;
+        }
         auto* slot = pool_acquire_by_used(ch_condvars);
-        if (!slot)
+        if (slot == nullptr)
+        {
             return osal::error_code::out_of_resources;
+        }
         chCondObjectInit(&slot->cv);
         handle->native = static_cast<void*>(slot);
         return osal::ok();
@@ -1047,8 +1062,10 @@ extern "C"
     /// @return osal::ok() always.
     osal::result osal_condvar_destroy(osal::active_traits::condvar_handle_t* handle) noexcept
     {
-        if (!handle || !handle->native)
+        if (handle == nullptr || handle->native == nullptr)
+        {
             return osal::ok();
+        }
         auto* slot = static_cast<ch_condvar_slot*>(handle->native);
         pool_release_by_used(ch_condvars, slot);
         handle->native = nullptr;
@@ -1064,8 +1081,10 @@ extern "C"
     osal::result osal_condvar_wait(osal::active_traits::condvar_handle_t* handle,
                                    osal::active_traits::mutex_handle_t* mutex, osal::tick_t timeout) noexcept
     {
-        if (!handle || !handle->native || !mutex || !mutex->native)
+        if (handle == nullptr || handle->native == nullptr || mutex == nullptr || mutex->native == nullptr)
+        {
             return osal::error_code::not_initialized;
+        }
         auto* slot = static_cast<ch_condvar_slot*>(handle->native);
         // ChibiOS condvar implicitly unlocks/re-locks the top-of-stack mutex.
         // The caller must have locked the OSAL mutex (via chMtxLock) before calling.
@@ -1087,8 +1106,10 @@ extern "C"
     /// @return osal::ok() on success; osal::error_code::not_initialized if the handle is null.
     osal::result osal_condvar_notify_one(osal::active_traits::condvar_handle_t* handle) noexcept
     {
-        if (!handle || !handle->native)
+        if (handle == nullptr || handle->native == nullptr)
+        {
             return osal::error_code::not_initialized;
+        }
         auto* slot = static_cast<ch_condvar_slot*>(handle->native);
         chCondSignal(&slot->cv);
         return osal::ok();
@@ -1099,8 +1120,10 @@ extern "C"
     /// @return osal::ok() on success; osal::error_code::not_initialized if the handle is null.
     osal::result osal_condvar_notify_all(osal::active_traits::condvar_handle_t* handle) noexcept
     {
-        if (!handle || !handle->native)
+        if (handle == nullptr || handle->native == nullptr)
+        {
             return osal::error_code::not_initialized;
+        }
         auto* slot = static_cast<ch_condvar_slot*>(handle->native);
         chCondBroadcast(&slot->cv);
         return osal::ok();
@@ -1140,8 +1163,10 @@ extern "C"
     osal::result osal_wait_set_wait(osal::active_traits::wait_set_handle_t*, int*, std::size_t, std::size_t* n,
                                     osal::tick_t) noexcept
     {
-        if (n)
+        if (n != nullptr)
+        {
             *n = 0U;
+        }
         return osal::error_code::not_supported;
     }
 

@@ -43,14 +43,16 @@ extern "C"
     osal::event_bits_t osal_event_flags_get(const osal::active_traits::event_flags_handle_t* handle) noexcept;
 
     /// @brief Waits until any of the requested bits are set.
+    // NOLINTNEXTLINE(readability-inconsistent-declaration-parameter-name)
     osal::result osal_event_flags_wait_any(osal::active_traits::event_flags_handle_t* handle,
-                                           osal::event_bits_t wait_bits, osal::event_bits_t* actual_bits,
-                                           bool clear_on_exit, osal::tick_t timeout_ticks) noexcept;
+                                           osal::event_bits_t wait_bits, osal::event_bits_t* actual, bool clear_on_exit,
+                                           osal::tick_t timeout) noexcept;
 
     /// @brief Waits until ALL of the requested bits are set.
+    // NOLINTNEXTLINE(readability-inconsistent-declaration-parameter-name)
     osal::result osal_event_flags_wait_all(osal::active_traits::event_flags_handle_t* handle,
-                                           osal::event_bits_t wait_bits, osal::event_bits_t* actual_bits,
-                                           bool clear_on_exit, osal::tick_t timeout_ticks) noexcept;
+                                           osal::event_bits_t wait_bits, osal::event_bits_t* actual, bool clear_on_exit,
+                                           osal::tick_t timeout) noexcept;
 
     /// @brief ISR-safe set (only on capable backends).
     osal::result osal_event_flags_set_isr(osal::active_traits::event_flags_handle_t* handle,
@@ -68,14 +70,14 @@ namespace osal
 /// @brief OSAL event flag group.
 /// @details Stores 32 independently settable/clearable bits.
 ///          Uses native RTOS event group where available; emulates otherwise.
-class event_flags
+class event_flags  // NOLINT(cppcoreguidelines-pro-type-member-init,hicpp-member-init)
 {
 public:
     // ---- construction / destruction ----------------------------------------
 
     /// @brief Constructs and initialises the event flag group (all bits clear).
     /// @complexity O(1)
-    event_flags() noexcept : valid_(false), handle_{} { valid_ = osal_event_flags_create(&handle_).ok(); }
+    event_flags() noexcept = default;  // NOLINT(cppcoreguidelines-pro-type-member-init,hicpp-member-init)
 
     /// @brief Destructs the event flag group.
     ~event_flags() noexcept
@@ -97,16 +99,18 @@ public:
     /// @brief Sets one or more bits (OR operation).
     /// @param bits  Bitmask of bits to set.
     /// @return result::ok() on success.
-    result set(event_bits_t bits) noexcept { return osal_event_flags_set(&handle_, bits); }
+    [[nodiscard]] result set(event_bits_t bits) noexcept { return osal_event_flags_set(&handle_, bits); }
 
     /// @brief Sets bits from ISR context.
     /// @param bits  Bitmask to set.
-    /// @warning Only safe when capabilities<active_backend>::has_isr_event_flags.
-    result set_isr(event_bits_t bits) noexcept { return osal_event_flags_set_isr(&handle_, bits); }
+    /// @return `error_code::not_supported` when the active backend lacks ISR-safe
+    ///         event-flag support.
+    /// @warning Only call from an ISR when capabilities<active_backend>::has_isr_event_flags.
+    [[nodiscard]] result set_isr(event_bits_t bits) noexcept { return osal_event_flags_set_isr(&handle_, bits); }
 
     /// @brief Clears one or more bits.
     /// @param bits  Bitmask of bits to clear.
-    result clear(event_bits_t bits) noexcept { return osal_event_flags_clear(&handle_, bits); }
+    [[nodiscard]] result clear(event_bits_t bits) noexcept { return osal_event_flags_clear(&handle_, bits); }
 
     /// @brief Returns the current bitmask (non-blocking snapshot).
     [[nodiscard]] event_bits_t get() const noexcept { return osal_event_flags_get(&handle_); }
@@ -121,8 +125,8 @@ public:
     /// @return result::ok() if any bit was set; error_code::timeout on expiry.
     /// @complexity O(1)
     /// @blocking   Potentially blocking.
-    result wait_any(event_bits_t bits, event_bits_t* actual_bits = nullptr, bool clear_on_exit = false,
-                    milliseconds timeout = milliseconds{-1}) noexcept
+    [[nodiscard]] result wait_any(event_bits_t bits, event_bits_t* actual_bits = nullptr, bool clear_on_exit = false,
+                                  milliseconds timeout = milliseconds{-1}) noexcept
     {
         const tick_t  ticks = (timeout.count() < 0) ? WAIT_FOREVER : clock_utils::ms_to_ticks(timeout);
         event_bits_t  dummy{0U};
@@ -136,8 +140,8 @@ public:
     /// @param      clear_on_exit If true, atomically clears the waited bits.
     /// @param      timeout       Maximum wait time.
     /// @return result::ok() if all bits were set; error_code::timeout on expiry.
-    result wait_all(event_bits_t bits, event_bits_t* actual_bits = nullptr, bool clear_on_exit = false,
-                    milliseconds timeout = milliseconds{-1}) noexcept
+    [[nodiscard]] result wait_all(event_bits_t bits, event_bits_t* actual_bits = nullptr, bool clear_on_exit = false,
+                                  milliseconds timeout = milliseconds{-1}) noexcept
     {
         const tick_t  ticks = (timeout.count() < 0) ? WAIT_FOREVER : clock_utils::ms_to_ticks(timeout);
         event_bits_t  dummy{0U};
@@ -151,8 +155,8 @@ public:
     [[nodiscard]] bool valid() const noexcept { return valid_; }
 
 private:
-    bool                                valid_;
-    active_traits::event_flags_handle_t handle_;
+    active_traits::event_flags_handle_t handle_{};
+    bool                                valid_{osal_event_flags_create(&handle_).ok()};
 };
 
 /// @} // osal_event_flags

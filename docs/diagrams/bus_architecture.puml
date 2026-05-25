@@ -1,0 +1,63 @@
+@startuml bus_architecture
+!include _render_profile.puml
+
+title micrOSAL Bus + Signal Layer — Architecture
+left to right direction
+
+actor Producer
+actor Subscriber
+actor Observer
+
+package "Bus / Signal API" {
+    component "osal_bus<T, Capacity>" as BUS
+    component "osal_signal<T, N, M>" as SIGNAL
+    component "osal_signal_premium<T, N, M>" as PREMIUM
+}
+
+package "Implemented Runtime" {
+    component "bus_backend_generic\ncanonical LCD runtime" as GEN
+    component "delegated bus_backend_* tags\n16 tags -> generic" as DEL
+    component "bus_backend_zephyr\ncurrent generic fallback" as ZEP
+    component "bus_backend_mock\ntest-only premium tag" as MOCK
+}
+
+package "Premium Helpers" {
+    component "observer table" as OBS
+    component "publish_zero_copy()\ncopy fallback today" as ZCOPY
+    component "route_to()\nstub today" as ROUTE
+}
+
+package "Planned Zephyr Native Path" {
+    component "future native Zephyr path\n(not implemented)" as ZEP_NATIVE
+    component "zbus_chan_pub()" as ZPUB
+    component "zbus_sub_wait()" as ZWAIT
+}
+
+package "MicrOSAL Primitives" {
+    component "osal_queue_* C ABI" as QABI
+    component "osal::mutex" as MUTEX
+}
+
+Producer --> BUS : try_send() / send()
+Producer --> SIGNAL : publish()
+Subscriber --> SIGNAL : subscribe() / receive()
+Observer --> PREMIUM : subscribe_observer()
+
+PREMIUM --> SIGNAL : extends API
+SIGNAL --> GEN : canonical runtime
+SIGNAL --> DEL : delegated tags
+SIGNAL --> ZEP : Zephyr default tag
+BUS --> QABI : transport path
+GEN --> QABI : queue path
+GEN --> MUTEX : slot guard
+DEL --> GEN : delegates
+ZEP --> GEN : delegates today
+MOCK --> GEN : reuses runtime
+PREMIUM --> OBS : local callbacks
+PREMIUM --> ZCOPY
+PREMIUM --> ROUTE
+ZEP ..> ZEP_NATIVE : future replacement
+ZEP_NATIVE --> ZPUB
+ZEP_NATIVE --> ZWAIT
+
+@enduml

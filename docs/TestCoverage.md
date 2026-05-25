@@ -1,10 +1,11 @@
 # MicrOSAL — Test Coverage
 
-This document catalogues what is and is not tested.  It is updated manually
-whenever new tests are added.  Four independent test suites exist:
+This document catalogues what is and is not tested. It is updated manually
+whenever new tests are added. Four independent test suites exist:
 
-- **Hosted/doctest suite** — 22 test binaries built with CMake, run via CTest; used in CI for Linux,
-  POSIX, Bare-metal, RTEMS, and INTEGRITY backend validation.
+- **Hosted/doctest suite** — 28 test binaries built with CMake, run via CTest; this includes the
+  three bus/pubsub executables under `tests/bus/` and is used in CI for Linux, POSIX, Bare-metal,
+  RTEMS, and INTEGRITY backend validation.
 - **FreeRTOS/doctest suite** — single `tests/freertos/src/main.cpp`, built with CMake, run via
   CTest; uses the FreeRTOS-Kernel v11 POSIX simulation port (runs as a Linux process, no emulator
   required).
@@ -22,24 +23,23 @@ Nine build targets are covered by automated builds or runtime suites:
 
 | Backend | Test suite | Emulator / runner | Coverage |
 | --- | --- | --- | --- |
-| Linux | CMake / CTest (doctest) | None (native process) | ✅ 22 binaries, 22/22 pass |
-| POSIX | CMake / CTest (doctest) | None (native process) | ✅ in CI (`OSAL_BACKEND=POSIX`); same 22 binaries |
-| Bare-metal | CMake / CTest (doctest) | Native process with hosted self-tick/context helper | ✅ in CI (`OSAL_BACKEND=BAREMETAL`); 22/22 pass |
-| RTEMS | CMake / CTest (doctest) | None (native process) | ✅ in CI (`OSAL_BACKEND=RTEMS`); 22/22 pass |
-| INTEGRITY | CMake / CTest (doctest) | None (native process) | ✅ in CI (`OSAL_BACKEND=INTEGRITY`); 22/22 pass |
-| FreeRTOS v11 | CMake / CTest (doctest) | POSIX sim port (no emulator) | ✅ in CI (`freertos-test` job); **36/36 pass** |
-| NuttX (latest main) | NuttX builtin app (printf framework) | NuttX sim/nsh on x86-64 | ✅ in CI; **26/26 pass** |
-| Zephyr (`native_sim`) | west twister (ztest) | Native Linux process | ✅ 75 cases × 2 configs = 150/150 pass |
-| Zephyr (`nrf52840dk`) | west twister (ztest + Renode) | **Renode** v1.15.3 SoC simulation | ✅ **79/79 pass** on nrf52840dk/nrf52840 (Zephyr v4.3.0) |
-| ThreadX / PX5 | — | — | ❌ Not in CI |
-| QNX | — | — | ❌ Not in CI |
-| VxWorks | — | — | ❌ Not in CI |
-| All others | — | — | ❌ Not in CI |
+| Linux | CMake / CTest (doctest) | None (native process) | ✅ 28 binaries, 28/28 locally rerun |
+| POSIX | CMake / CTest (doctest) | None (native process) | ✅ in CI (`OSAL_BACKEND=POSIX`); same 28 binaries |
+| Bare-metal | CMake / CTest (doctest) | Native process with hosted self-tick/context helper | ✅ in CI (`OSAL_BACKEND=BAREMETAL`); same 28 binaries |
+| RTEMS | CMake / CTest (doctest) | None (native process) | ✅ in CI (`OSAL_BACKEND=RTEMS`); same 28 binaries |
+| INTEGRITY | CMake / CTest (doctest) | None (native process) | ✅ in CI (`OSAL_BACKEND=INTEGRITY`); same 28 binaries |
+| FreeRTOS v11 | CMake / CTest (doctest) | POSIX sim port (no emulator) | ✅ in CI (`freertos-test` job); **44/44 pass** locally rerun |
+| NuttX (main / sim:nsh) | NuttX builtin app (printf framework) | NuttX sim/nsh on x86-64 | ✅ in CI; **30/30 pass** last recorded rerun |
+| Zephyr (`native_sim`) | west twister (ztest) | Native Linux process | ✅ Last published isolated Twister rerun passed **2/2** configurations and **194/194** test cases on the pre-bus 97-case suite; the current **101-case / 25-suite** suite also passed in a fresh isolated `west build` + `-t run` rerun |
+| Zephyr (`nrf52840dk`) | west twister (ztest + Renode) | **Renode** v1.15.3 SoC simulation | ⚠️ Last published rerun was **79/79** on the pre-change suite; current **101-case / 25-suite** suite not rerun after the stack-watermark, high-resolution-clock, thread-introspection, and bus-layer additions |
+| ThreadX / PX5 / VxWorks / Micrium / ChibiOS / embOS / CMSIS-RTOS{,2} / QNX | External SDK or BSP integration | External SDK, BSP, simulator, or non-hosted toolchain/environment required | ❌ Not on GitHub-hosted CI |
 
-The FreeRTOS suite was rerun after the mailbox additions in this workspace.
-The NuttX and Zephyr suite source files now contain mailbox cases too, but the
-published pass totals above still reflect the last recorded reruns before that
-expansion.
+GitHub-hosted CI does not attempt to build these external-integration backends
+because the required SDK/header sets, BSPs, simulators, or toolchains are not
+available on Ubuntu runners. Their integration contracts are still documented,
+but validating them requires the corresponding integration environments. Some
+of these backends are open source upstream; the current gap is environment
+availability, not licensing alone.
 
 Hosted bare-metal validation uses a test-only single-process helper that drives
 the bare-metal tick source and cooperative contexts for the doctest binaries.
@@ -87,6 +87,10 @@ ctest --test-dir build-freertos --output-on-failure
 The NuttX test app lives in `tests/nuttx/`.  It is designed to be placed
 (or symlinked) into `nuttx-apps/testing/microsal_test/` of a NuttX workspace:
 
+The `sim/nsh` test build also needs NuttX's toolchain C++ runtime enabled.
+Without those config options, the final link fails on standard C++ runtime
+symbols such as `__cxa_guard_*`, `std::nothrow`, and `operator new/delete`.
+
 ```bash
 git clone https://github.com/apache/nuttx.git
 git clone https://github.com/apache/nuttx-apps.git
@@ -100,8 +104,15 @@ wget https://github.com/doctest/doctest/releases/download/v2.4.11/doctest.h \
 # Configure and build
 cd nuttx
 cmake -B build -DBOARD_CONFIG=sim/nsh -DNUTTX_APPS_DIR=../nuttx-apps
-echo 'CONFIG_TESTING_MICROSAL_TEST=y' >> build/.config
-cmake build && cmake --build build -j$(nproc)
+cat >> build/.config <<'EOF'
+CONFIG_TESTING_MICROSAL_TEST=y
+CONFIG_HAVE_CXX=y
+CONFIG_LIBCXXTOOLCHAIN=y
+CONFIG_LIBSUPCXX_TOOLCHAIN=y
+CONFIG_CXX_STANDARD="gnu++20"
+EOF
+cmake -S . -B build -DBOARD_CONFIG=sim/nsh -DNUTTX_APPS_DIR=../nuttx-apps
+cmake --build build -j$(nproc)
 
 # Run — feed the test command to NSH
 printf 'microsal_test\nexit\n' | ./build/nuttx
@@ -119,61 +130,69 @@ Legend:
 
 | Primitive | Test file | Status | Notable gaps |
 | --- | --- | --- | --- |
-| `osal::clock` | `test_clock.cpp` | ✅ | `osal_clock_tick_period_us` not asserted |
+| `osal::clock` | `test_clock.cpp` | ✅ | Hosted and POSIX suites cover monotonic/system/tick plus capability-gated `high_resolution_clock` plumbing; `osal_clock_tick_period_us` is still not asserted |
 | `osal::mutex` | `test_mutex.cpp` | ✅ | `try_lock_for` timeout path not tested |
 | `osal::semaphore` | `test_semaphore.cpp` | ⚠️ | `give_isr` / `take_isr` not called |
-| `osal::thread` | `test_thread.cpp` | ✅ | Affinity not tested; task-notification native path (FreeRTOS/embOS) not in CI — stub (`not_supported`) path covered |
-| `osal::queue` | `test_queue.cpp` | ⚠️ | `send_isr` / `receive_isr` not tested; overflow behaviour not asserted |
+| `osal::thread` | `test_thread.cpp` | ✅ | Hosted suite now covers capability-gated identity, priority, affinity, current-CPU, execution-time, and stack-watermark queries; FreeRTOS backend suite covers task-notification round-trip plus stack-watermark and identity/priority introspection; Zephyr backend suite covers stack-watermark plus current/worker introspection. Native affinity mutation and embOS task events still lack CI coverage |
+| `osal::queue` | `test_queue.cpp` | ⚠️ | Full detection and `try_send()` failure on a full queue are covered; true ISR-context `send_isr` / `receive_isr` coverage is still missing |
 | `osal::mailbox` | `test_mailbox.cpp` | ✅ | Hosted suite plus FreeRTOS, NuttX, and Zephyr backend suites cover single-slot send/receive, full detection, aliases, and cross-thread handoff |
 | `osal::timer` | `test_timer.cpp` | ✅ | One-shot and periodic both covered |
-| `osal::event_flags` | `test_event_flags.cpp` | ⚠️ | `set_isr` not tested; WAIT_ALL timeout not tested |
-| `osal::wait_set` | `test_wait_set.cpp` | ✅ | Linux epoll path (Linux suite); `not_supported` path asserted on Zephyr |
-| `osal::condvar` | `test_condvar.cpp` | ✅ | `wait_for` timeout, predicate-wait + cross-thread notify covered |
-| `osal::work_queue` | `test_work_queue.cpp` | ✅ | `submit_from_isr` not tested (returns `not_supported` on Linux) |
+| `osal::event_flags` | `test_event_flags.cpp` | ⚠️ | Hosted suite covers `wait_any`/`wait_all` timeout, `clear_on_exit`, support/unsupported `set_isr`, cross-thread signalling, and repeated timeout-then-signal reuse cycles; real ISR-context backend coverage is still limited |
+| `osal::wait_set` | `test_wait_set.cpp` | ✅ | Linux epoll path covered; unsupported native-only path asserted on Zephyr; PX5 native wait-set still lacks CI coverage |
+| `osal::condvar` | `test_condvar.cpp` | ✅ | `wait_for` timeout, predicate waits, cross-thread notify, and repeated late-notify reuse cycles covered |
+| `osal::work_queue` | `test_work_queue.cpp` | ✅ | Zero-depth rejection, overflow, cancel-all, unsupported `submit_from_isr`, and concurrent flush-frontier behaviour covered |
 | `osal::delayable_work` | `test_delayable_work.cpp` | ✅ | Hosted path covers schedule/reschedule/cancel/flush; FreeRTOS suite covers schedule+flush; Zephyr `native_sim` rerun now passes the delayable-work case too |
 | `osal::notification<Slots>` | `test_notification.cpp` | ✅ | Hosted emulation covers overwrite, no-overwrite, set-bits, increment, wait, and slot isolation; FreeRTOS suite covers round-trip and action semantics; Zephyr `native_sim` rerun now passes the equivalent notification cases |
 | `osal::object_wait_set` | `test_object_wait_set.cpp` | ✅ | Hosted polling path covers queue, event_flags, notification, delayable_work, remove, and timeout; FreeRTOS suite covers queue readiness; Zephyr `native_sim` rerun now passes queue and notification cases |
 | `osal::stream_buffer` | `test_stream_buffer.cpp` | ✅ | `send_isr`/`receive_isr` called from task context; trigger-level 1 and 4 tested; cross-thread blocking send/receive covered |
 | `osal::message_buffer` | `test_message_buffer.cpp` | ⚠️ | ISR send/receive not tested; oversized-message truncation not tested |
 | `osal::rwlock` | `test_rwlock.cpp` | ✅ | RAII guards, concurrent readers, timed-lock success+timeout covered on both Linux and Zephyr |
-| `osal::spinlock` | `test_spinlock.cpp` | ✅ | construction, lock/unlock, try_lock, lock_guard RAII, sequential cycles; native path only on Zephyr — stub (`not_supported`) path fully exercised on Linux |
-| `osal::barrier` | `test_barrier.cpp` | ✅ | construction, stub path, count-1 immediate release, two-thread rendezvous, serial-thread identification; native `pthread_barrier_t` path exercised on Linux/POSIX |
+| `osal::spinlock` | `test_spinlock.cpp` | ✅ | Hosted suite covers support-flag plumbing and unsupported-path semantics on Linux; Zephyr backend suite covers native construction, lock/unlock, and try_lock |
+| `osal::barrier` | `test_barrier.cpp` | ✅ | Hosted suite covers invalid count, count-1 immediate release, two-thread rendezvous, and serial-thread identification; FreeRTOS and Zephyr backend suites cover the shared emulated barrier path |
 | `osal::memory_pool` | `test_memory_pool.cpp` | ✅ | Exhaustion, `allocate_for` timeout, cross-thread unblock covered |
 | `osal::ring_buffer` | `test_ring_buffer.cpp` | ✅ | Wrap-around, SPSC producer/consumer stress, capacity-1 covered |
 | `osal::thread_local_data` | `test_thread_local_data.cpp` | ✅ | Per-thread isolation, key reuse, key exhaustion covered |
 | `result` / `error_code` | `test_result.cpp` | ✅ | All error codes and comparison operators covered |
 | C API (`osal_c.h`) | `test_c_api.cpp` | ⚠️ | C11 compilation verified; hosted tests cover notification and delayable_work; Zephyr `native_sim` rerun also passes the C notification and C delayable-work round-trips; ISR variants still not called from C |
 | Integration (multi-primitive) | `test_integration.cpp` | ⚠️ | Producer/consumer with queue+semaphore; no rwlock or memory_pool integration |
-| Thread task notification | `test_thread.cpp` | ⚠️ | Stub path (`not_supported`) verified on Linux; native `xTaskNotify` (FreeRTOS) and `OS_TASKEVENT` (embOS) round-trip covered in concept but not yet wired into the hosted CI suites; richer portable semantics now live in `osal::notification<Slots>` |
+| Thread task notification | `test_thread.cpp` | ⚠️ | Unsupported path verified on Linux; native `xTaskNotify` round-trip now covered in the FreeRTOS suite; embOS task-event coverage still needs a licensed SDK environment |
+| `osal::osal_bus` | `tests/bus/test_osal_signal_backends.cpp` | ✅ | Hosted generic, delegated, and Zephyr-tagged point-to-point channel behavior is covered; the Zephyr ztest suite now also covers the native `k_msgq` channel path |
+| `osal::osal_signal` | `tests/bus/test_osal_signal_lcd.cpp`, `tests/bus/test_osal_signal_backends.cpp` | ✅ | Subscribe/unsubscribe, fan-out, FIFO ordering, full-queue drop semantics, delegated backend compilation, and native Zephyr pub/sub publish/receive are covered |
+| `osal::osal_signal_premium` | `tests/bus/test_osal_signal_premium.cpp`, `tests/bus/test_osal_signal_backends.cpp` | ⚠️ | Mock-backend observers and copy-based `publish_zero_copy()` fallback are covered; the Zephyr suite now covers native observer registration/dispatch on the queue-backed Zephyr backend, but `route_to()` is still a stub and zero-copy publish is still copy-based |
 
 ---
 
 ## Zephyr test suite (`tests/zephyr/src/main.cpp`)
 
-86–90 test cases across 22 ztest suites (count varies by platform — some stream_buffer
-ISR and trigger-level tests only compile on real targets, not on `native_sim`).
-The suite now includes mailbox, notification, delayable-work, object-wait-set,
-and expanded C API coverage.
+101 test cases across 25 ztest suites. The current suite includes mailbox,
+notification, delayable-work, object-wait-set, native Zephyr spinlocks,
+shared-emulated barriers, expanded C API coverage, thread
+stack-watermark queries (with `CONFIG_INIT_STACKS=y` and
+`CONFIG_THREAD_STACK_INFO=y`), thread introspection queries,
+high-resolution clock coverage, and native Zephyr bus-layer coverage.
 
-- **`native_sim`** (Zephyr v4.3.0) — rerun in this workspace after the portable-helper expansion: **86/86 pass**.
-- **`nrf52840dk/nrf52840`** (Zephyr v4.3.0, **Renode** v1.15.3) — last published rerun before the mailbox expansion: **79/79 pass**.
+- **`native_sim`** (Zephyr v4.4.99) — fresh isolated direct `west build -b native_sim/native tests/zephyr && west build -t run` rerun of the current suite passed; the last published 2-configuration Twister rerun on the pre-bus suite was **194/194 pass**.
+- **`nrf52840dk/nrf52840`** (Zephyr v4.3.0, **Renode** v1.15.3) — last published rerun before the thread stack-watermark, high-resolution-clock, thread-introspection, and bus-layer additions: **79/79 pass**.
 
 | ztest suite | Cases | What is covered |
 | --- | --- | --- |
-| `osal_clock` | 2 | Monotonic clock positive, tick counter non-negative |
+| `osal_clock` | 3 | Monotonic clock positive, tick counter non-negative, high-resolution clock support/resolution plumbing |
 | `osal_mutex` | 6 | Construction, lock/unlock, try_lock, recursive, config, lock_guard |
 | `osal_semaphore` | 6 | Binary, counting, initial count, config, `take_for` timeout |
 | `osal_queue` | 5 | Construction, starts empty, send/receive, FIFO order, full detection |
+| `osal_bus_layer` | 4 | Native `osal_bus` send/receive, native `osal_signal` publish/receive, premium observer subscribe/unsubscribe + publish fan-out, and Zephyr capability traits |
 | `osal_mailbox` | 4 | Construction, single-slot send/receive, alias/full detection, cross-thread handoff |
-| `osal_thread` | 4 | Default invalid, create+join, yield, `sleep_for` elapsed check |
+| `osal_thread` | 6 | Default invalid, create+join, yield, `sleep_for` elapsed check, current/target stack-watermark queries, current/worker introspection queries |
 | `osal_timer` | 4 | Construction, one-shot fires once, periodic fires ≥2×, config |
 | `osal_event_flags` | 4 | Construction, set+get, clear, `wait_any` immediate |
 | `osal_condvar` | 4 | Construction, notify-only, cross-thread wait+notify, `wait_for` timeout |
 | `osal_work_queue` | 3 | Construction, submit+flush, config |
 | `osal_delayable_work` | 1 | schedule+flush delayed dispatch |
+| `osal_barrier` | 2 | Count-1 immediate release and two-thread rendezvous through the shared emulation layer |
 | `osal_memory_pool` | 2 | Alloc/free round-trip + count, config construction |
 | `osal_rwlock` | 5 | Basic lock/unlock, concurrent readers, `write_lock_for`, RAII guards |
-| `osal_stream_buffer` | 4 (`native_sim`) / 8 (`nrf52840dk`) | Construction, send/receive, empty receive = 0, reset; + `send_isr`/`receive_isr` round-trip, `receive_isr` empty = 0, trigger-level below/at threshold (nrf52840dk only) |
+| `osal_spinlock` | 2 | Native construction plus lock/unlock/try_lock on Zephyr |
+| `osal_stream_buffer` | 8 | Construction, send/receive, empty receive = 0, reset, `send_isr`/`receive_isr` round-trip, `receive_isr` empty = 0, trigger-level below/at threshold |
 | `osal_message_buffer` | 4 | Construction, send/receive, FIFO ordering, reset |
 | `osal_notification` | 2 | notify/wait round-trip, action semantics |
 | `osal_object_wait_set` | 2 | queue readiness, notification clear-on-exit |
@@ -193,7 +212,9 @@ timed-lock timeout paths for mutex and queue, ISR variants (FreeRTOS-specific
 
 Built with CMake + FreeRTOS-Kernel v11 (GCC/POSIX simulation port).
 Runs as a standard Linux process via CTest — no emulator required.
-FreeRTOS-Kernel and doctest are fetched automatically by FetchContent.
+FreeRTOS-Kernel and doctest are fetched automatically by FetchContent.  The
+current suite registers 44 doctest cases and was rerun in this workspace after
+the thread-introspection addition.
 
 | Primitive | Cases | What is covered |
 | --- | --- | --- |
@@ -206,8 +227,11 @@ FreeRTOS-Kernel and doctest are fetched automatically by FetchContent.
 | `osal::stream_buffer` | 4 | construction, send/receive round-trip, full rejection, reset, `send_isr`/`receive_isr` |
 | `osal::message_buffer` | 2 | send/receive, FIFO order |
 | `osal::ring_buffer` | 1 | push/pop FIFO (header-only, backend-independent) |
-| `osal::thread` | 2 | create+join, sleep_for elapsed |
+| `osal::thread` | 5 | create+join, sleep_for elapsed, native task-notification round-trip, current/target stack-watermark queries, identity/priority introspection |
 | `osal::condvar` | 1 | cross-thread wait+notify |
+| `osal::barrier` | 1 | two-thread rendezvous through the shared emulated barrier |
+| `osal::notification<Slots>` | 2 | portable notification round-trip and action semantics |
+| `osal::object_wait_set` | 1 | queue readiness through the portable polling multiplexer |
 | `osal::thread_local_data` | 1 | per-thread isolation |
 | `osal::memory_pool` | 2 | alloc/free, exhaustion → nullptr |
 | `result`/`error_code` | 1 | ok vs error, code() accessor |
@@ -236,9 +260,8 @@ Built as a NuttX builtin application and run inside the NuttX `sim/nsh`
 simulator (x86-64 Linux process).  The NuttX RTOS and its apps are cloned from
 the latest `apache/nuttx` and `apache/nuttx-apps` main branches.
 
-The suite source now contains 30 test cases including four mailbox checks. The
-last published runtime result in this repo was **26/26 pass** before that
-mailbox expansion.
+The suite source contains 30 test cases including four mailbox checks.  The
+last recorded runtime rerun in this repo passed **30/30** on `sim/nsh`.
 
 | Primitive | Cases | What is covered |
 | --- | --- | --- |
@@ -268,7 +291,7 @@ These paths are difficult to reach on a hosted Linux target and are
 | --- | --- |
 | `nullptr` handle arguments | Error paths tested implicitly via destructors; no explicit null-handle test exists |
 | `out_of_resources` on pool exhaustion (threads, mutexes) | Static pool sizes are large; needs a loop to exhaust |
-| `overflow` on queue / work_queue / stream_buffer | Partially covered in stream_buffer; not systematic |
+| Full-queue / overflow behaviour under native RTOS or ISR paths | Hosted coverage exists for `queue`, `work_queue`, `stream_buffer`, and LCD bus drop-on-full semantics; native ISR-context exhaustion paths are still not systematic |
 | ISR-safe variants (`give_isr`, `send_isr`, etc.) | Linux returns `not_supported`; cannot be exercised meaningfully on a hosted build |
 | `WAIT_FOREVER` combined with thread cancellation | No cancellation support in OSAL |
 | `NO_WAIT` (zero-timeout) fast-fail on every primitive | Not systematically tested |

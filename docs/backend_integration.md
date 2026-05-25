@@ -6,20 +6,31 @@ Follow these steps to integrate a new RTOS or platform.
 
 ---
 
-### Step 1 — Add a backend tag type
+### Step 1 — Add a backend tag and selector
 
-In `include/osal/backends.hpp`, add a new empty struct:
+Add the new backend tag in `include/osal/capabilities.hpp` alongside the
+existing `backend_*` forward declarations:
 
 ```cpp
 struct backend_mynewrtos {};
 ```
 
-Then add it to the macro selector block:
+Then update `include/osal/backends.hpp` so the selector logic recognizes the
+new macro in all three places it is validated:
+
+- `detail::backend_selection_flags`
+- the "define exactly one `OSAL_BACKEND_*` macro" validation block
+- the `active_backend` `#elif` chain
+
+The alias block should gain:
 
 ```cpp
 #elif defined(OSAL_BACKEND_MYNEWRTOS)
 using active_backend = backend_mynewrtos;
 ```
+
+Finally, extend `backend_tag` in `include/osal/concepts.hpp` so the compile-time
+concept checks accept the new tag.
 
 ---
 
@@ -51,7 +62,7 @@ struct capabilities<backend_mynewrtos> {
     static constexpr bool has_native_event_flags    = false;
     static constexpr bool has_isr_event_flags       = false;
     static constexpr bool has_timed_event_flags     = true;
-    static constexpr bool has_wait_set              = false;
+    static constexpr bool has_wait_set              = false;  // native-only; use object_wait_set for portable OSAL-object waiting
     static constexpr bool has_native_work_queue     = false;
     static constexpr bool has_isr_work_queue_submit = false;
     static constexpr bool has_native_condvar        = false;
@@ -61,8 +72,8 @@ struct capabilities<backend_mynewrtos> {
     static constexpr bool has_native_message_buffer = false;  // length-prefixed message buffers
     static constexpr bool has_isr_message_buffer    = false;
     static constexpr bool has_native_rwlock         = false;
-    static constexpr bool has_spinlock              = false;
-    static constexpr bool has_barrier               = false;
+    static constexpr bool has_spinlock              = false;  // native-only; prefer mutex when false
+    static constexpr bool has_barrier               = true;   // prefer shared barrier emulation when mutex + condvar + threads are available
     static constexpr bool has_monotonic_clock       = true;
     static constexpr bool has_system_clock          = false;
     static constexpr bool has_high_resolution       = false;
@@ -74,14 +85,21 @@ invoke callbacks from ISR context, set `timer_callbacks_may_run_in_isr = true`;
 portable `delayable_work` relies on `has_isr_work_queue_submit` to decide
 whether that backend can safely hand timer expiry over to a work queue.
 
-Flags that are `false`
-will produce `error_code::not_supported` at runtime if called, and the
-`if constexpr` guards in application code will skip the code path at
-compile-time.
+Flags that are `false` keep the wrapper on its unsupported runtime path and let
+application code skip the feature with `if constexpr`.  For code that must fail
+the build instead of accepting the runtime `error_code::not_supported` path,
+MicrOSAL also exposes opt-in compile-time requirement helpers such as
+`osal::spinlock::require_support()`, `osal::wait_set::require_support()`, and
+`osal::thread::require_task_notification_support()`.
+
+Whenever a feature can be satisfied by a shared MicrOSAL emulation, prefer
+advertising it as supported.  `osal::barrier` is the clearest example: most
+backends should set `has_barrier = true` and include the shared barrier layer
+rather than leaving it as a stub.
 
 `has_thread_local_data` should be `true` in MicrOSAL backends because the
 portable header-only emulation (`osal::thread_local_data`) is part of the
-baseline C++17 implementation.
+baseline C++20 implementation.
 
 On POSIX-compatible backends (POSIX, Linux, NuttX, QNX, RTEMS, INTEGRITY), define
 `OSAL_THREAD_LOCAL_USE_NATIVE=1` to use pthread TLS instead of the C++
@@ -361,7 +379,7 @@ Current users: Linux, POSIX, QNX, and NuttX backends.
 
 ### Step 5 — Add to CMakeLists.txt
 
-In `osal/CMakeLists.txt`, extend the backend selector block:
+In the repository-root `CMakeLists.txt`, extend the backend selector block:
 
 ```cmake
 elseif(_OSAL_BACKEND_UPPER STREQUAL "MYNEWRTOS")
@@ -556,12 +574,14 @@ The following always return `error_code::not_supported` on bare-metal:
 
 | Feature | Reason |
 | --- | --- |
-| `osal::wait_set` | Requires OS-level event demultiplexing (e.g. epoll) |
-| `osal_semaphore_give_isr` | ISR-safe semaphore requires IRQ-level context tracking |
-| `osal_queue_send_isr` / `receive_isr` | Same |
-| `osal_event_flags_set_isr` | Same |
+| `osal::wait_set` | Requires OS-level event demultiplexing (e.g. epoll); use `osal::object_wait_set` for portable OSAL-object multiplexing |
+| `osal::spinlock` | No native SMP spinlock primitive; use `osal::mutex` or a target-specific IRQ-masked critical section instead |
 | `osal_work_queue_submit_from_isr` | Same |
-| `osal::thread::join_for` (timed join) | No OS join primitive; bare-metal join spins without a deadline |
+
+If a bare-metal code path must refuse those native-only features at compile
+time, call the corresponding helper (`osal::wait_set::require_support()`,
+`osal::spinlock::require_support()`, etc.) instead of relying on the runtime
+error path.
 
 ---
 
@@ -576,6 +596,7 @@ semaphore (which are themselves spin-based):
 | `work_queue` | `emulated_work_queue.inl` (cooperative thread + ring buffer) |
 | `memory_pool` | `emulated_memory_pool.inl` (bitmap + mutex + counting semaphore) |
 | `rwlock` | `emulated_rwlock.inl` (mutex + condvar + reader counter) |
+| `barrier` | `emulated_barrier.inl` (mutex + condvar + generation counter) |
 | `event_flags` | `emulated_event_flags.inl` (mutex + per-waiter semaphore array) |
 | `stream_buffer` | `emulated_stream_buffer.inl` (SPSC ring + binary semaphores) |
 | `message_buffer` | `emulated_message_buffer.inl` (length-prefixed SPSC ring) |

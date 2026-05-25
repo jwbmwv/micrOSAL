@@ -67,7 +67,9 @@ struct backend_timeout_adapter
         const timeout_value value = decode(timeout);
         const std::uint64_t ms    = (value.kind == timeout_kind::finite) ? value.finite_ms : 0U;
 
-        struct timespec ts;
+        struct timespec ts
+        {
+        };
         clock_gettime(clock_id, &ts);
 
         const std::uint64_t ns_add = ms * 1'000'000ULL;

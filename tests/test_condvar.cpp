@@ -11,9 +11,8 @@ alignas(16) static std::uint8_t t_stack[65536];
 alignas(16) static std::uint8_t t_stack2[65536];
 
 // Helper to create a thread_config quickly.
-static osal::thread_config make_cfg(void (*entry)(void*), void* arg,
-                                     void* stack, std::size_t stack_sz,
-                                     const char* name)
+static osal::thread_config make_cfg(void (*entry)(void*), void* arg, void* stack, std::size_t stack_sz,
+                                    const char* name)
 {
     osal::thread_config cfg{};
     cfg.entry       = entry;
@@ -40,23 +39,21 @@ TEST_CASE("condvar: construction succeeds")
 
 TEST_CASE("condvar: notify_one wakes one waiting thread")
 {
-    static osal::mutex mtx;
+    static osal::mutex   mtx;
     static osal::condvar cv;
     REQUIRE(mtx.valid());
     REQUIRE(cv.valid());
 
-    static volatile bool data_ready = false;
-    static volatile bool consumed   = false;
-    data_ready = false;
-    consumed   = false;
+    static bool data_ready = false;
+    static bool consumed   = false;
+    data_ready             = false;
+    consumed               = false;
 
     // Consumer thread: wait for the flag.
-    auto consumer = [](void*) {
+    auto consumer = [](void*)
+    {
         mtx.lock();
-        while (!data_ready)
-        {
-            cv.wait(mtx);
-        }
+        cv.wait(mtx, [] { return data_ready; });
         consumed = true;
         mtx.unlock();
     };
@@ -83,27 +80,26 @@ TEST_CASE("condvar: notify_one wakes one waiting thread")
 
 TEST_CASE("condvar: notify_all wakes all waiting threads")
 {
-    static osal::mutex mtx;
+    static osal::mutex   mtx;
     static osal::condvar cv;
     REQUIRE(mtx.valid());
     REQUIRE(cv.valid());
 
-    static volatile bool go          = false;
+    static bool             go = false;
     static std::atomic<int> woke_up{0};
     go = false;
     woke_up.store(0);
 
-    auto waiter = [](void*) {
+    auto waiter = [](void*)
+    {
         mtx.lock();
-        while (!go)
-        {
-            cv.wait(mtx);
-        }
+        cv.wait(mtx, [] { return go; });
         woke_up.fetch_add(1);
         mtx.unlock();
     };
 
-    osal::thread t1, t2;
+    osal::thread t1;
+    osal::thread t2;
     REQUIRE(t1.create(make_cfg(waiter, nullptr, t_stack, sizeof(t_stack), "cv_w1")).ok());
     REQUIRE(t2.create(make_cfg(waiter, nullptr, t_stack2, sizeof(t_stack2), "cv_w2")).ok());
 
@@ -125,7 +121,7 @@ TEST_CASE("condvar: notify_all wakes all waiting threads")
 
 TEST_CASE("condvar: wait_for times out")
 {
-    static osal::mutex mtx;
+    static osal::mutex   mtx;
     static osal::condvar cv;
     REQUIRE(mtx.valid());
     REQUIRE(cv.valid());
@@ -143,17 +139,18 @@ TEST_CASE("condvar: wait_for times out")
 
 TEST_CASE("condvar: wait_for succeeds on notify before timeout")
 {
-    static osal::mutex mtx;
+    static osal::mutex   mtx;
     static osal::condvar cv;
     REQUIRE(mtx.valid());
     REQUIRE(cv.valid());
 
-    static volatile bool result_ok = false;
-    result_ok = false;
+    static std::atomic<bool> result_ok{false};
+    result_ok.store(false);
 
-    auto waiter_fn = [](void*) {
+    auto waiter_fn = [](void*)
+    {
         mtx.lock();
-        result_ok = cv.wait_for(mtx, osal::milliseconds{2000});
+        result_ok.store(cv.wait_for(mtx, osal::milliseconds{2000}));
         mtx.unlock();
     };
 
@@ -164,7 +161,57 @@ TEST_CASE("condvar: wait_for succeeds on notify before timeout")
     cv.notify_one();
 
     t.join();
-    CHECK(result_ok);
+    CHECK(result_ok.load());
+}
+
+TEST_CASE("condvar: repeated late notifications do not wake a later waiter")
+{
+    osal::mutex   mtx;
+    osal::condvar cv;
+    REQUIRE(mtx.valid());
+    REQUIRE(cv.valid());
+
+    static osal::condvar* active_cv = nullptr;
+    active_cv                       = &cv;
+
+    constexpr int kIterations = 128;
+    int           timed_out   = 0;
+
+    auto notifier = [](void*)
+    {
+        osal::thread::sleep_for(osal::milliseconds{1});
+        for (int i = 0; i < 8; ++i)
+        {
+            active_cv->notify_one();
+        }
+    };
+
+    for (int iter = 0; iter < kIterations; ++iter)
+    {
+        CAPTURE(iter);
+
+        osal::thread t;
+        REQUIRE(t.create(make_cfg(notifier, nullptr, t_stack, sizeof(t_stack), "cv_race")).ok());
+
+        mtx.lock();
+        const bool first = cv.wait_for(mtx, osal::milliseconds{1});
+        mtx.unlock();
+
+        REQUIRE(t.join().ok());
+
+        mtx.lock();
+        const bool second = cv.wait_for(mtx, osal::milliseconds{1});
+        mtx.unlock();
+
+        if (!first)
+        {
+            ++timed_out;
+        }
+
+        CHECK_FALSE(second);
+    }
+
+    CHECK(timed_out > 0);
 }
 
 // ---------------------------------------------------------------------------
@@ -173,23 +220,24 @@ TEST_CASE("condvar: wait_for succeeds on notify before timeout")
 
 TEST_CASE("condvar: multiple cycles")
 {
-    static osal::mutex mtx;
+    static osal::mutex   mtx;
     static osal::condvar cv;
     REQUIRE(mtx.valid());
     REQUIRE(cv.valid());
 
-    static volatile int step = 0;
-    step = 0;
+    static std::atomic<int> step{0};
+    step.store(0);
 
-    auto worker = [](void*) {
+    auto worker = [](void*)
+    {
         for (int i = 0; i < 3; ++i)
         {
             mtx.lock();
-            while (step != i * 2 + 1)
+            while (step.load() != i * 2 + 1)
             {
                 cv.wait(mtx);
             }
-            ++step;
+            step.fetch_add(1);
             mtx.unlock();
             cv.notify_one();
         }
@@ -201,7 +249,7 @@ TEST_CASE("condvar: multiple cycles")
     for (int i = 0; i < 3; ++i)
     {
         mtx.lock();
-        step = i * 2 + 1;
+        step.store(i * 2 + 1);
         mtx.unlock();
         cv.notify_one();
 
@@ -209,12 +257,12 @@ TEST_CASE("condvar: multiple cycles")
         for (int j = 0; j < 200; ++j)
         {
             osal::thread::sleep_for(osal::milliseconds{5});
-            if (step == i * 2 + 2)
+            if (step.load() == i * 2 + 2)
             {
                 break;
             }
         }
-        CHECK(step == i * 2 + 2);
+        CHECK(step.load() == i * 2 + 2);
     }
 
     t.join();
@@ -226,15 +274,16 @@ TEST_CASE("condvar: multiple cycles")
 
 TEST_CASE("condvar: wait with predicate blocks until predicate is true")
 {
-    static osal::mutex mtx;
+    static osal::mutex   mtx;
     static osal::condvar cv;
     REQUIRE(mtx.valid());
     REQUIRE(cv.valid());
 
-    static volatile bool ready = false;
-    ready = false;
+    static bool ready = false;
+    ready             = false;
 
-    auto setter = [](void*) {
+    auto setter = [](void*)
+    {
         osal::thread::sleep_for(osal::milliseconds{40});
         {
             osal::mutex::lock_guard lg{mtx};
@@ -248,7 +297,7 @@ TEST_CASE("condvar: wait with predicate blocks until predicate is true")
 
     {
         osal::mutex::lock_guard lg{mtx};
-        cv.wait(mtx, [] { return ready == true; });
+        cv.wait(mtx, [] { return ready; });
     }
     CHECK(ready);
 
@@ -261,7 +310,7 @@ TEST_CASE("condvar: wait with predicate blocks until predicate is true")
 
 TEST_CASE("condvar: wait_for with predicate times out when predicate stays false")
 {
-    static osal::mutex mtx;
+    static osal::mutex   mtx;
     static osal::condvar cv;
     REQUIRE(mtx.valid());
     REQUIRE(cv.valid());
@@ -279,15 +328,16 @@ TEST_CASE("condvar: wait_for with predicate times out when predicate stays false
 
 TEST_CASE("condvar: wait_for with predicate succeeds before timeout")
 {
-    static osal::mutex mtx;
+    static osal::mutex   mtx;
     static osal::condvar cv;
     REQUIRE(mtx.valid());
     REQUIRE(cv.valid());
 
-    static volatile bool flag = false;
-    flag = false;
+    static bool flag = false;
+    flag             = false;
 
-    auto setter = [](void*) {
+    auto setter = [](void*)
+    {
         osal::thread::sleep_for(osal::milliseconds{20});
         {
             osal::mutex::lock_guard lg{mtx};
@@ -299,10 +349,10 @@ TEST_CASE("condvar: wait_for with predicate succeeds before timeout")
     osal::thread t;
     REQUIRE(t.create(make_cfg(setter, nullptr, t_stack, sizeof(t_stack), "pred_wf")).ok());
 
-    bool ok;
+    bool ok = false;
     {
         mtx.lock();
-        ok = cv.wait_for(mtx, osal::milliseconds{2000}, [] { return flag == true; });
+        ok = cv.wait_for(mtx, osal::milliseconds{2000}, [] { return flag; });
         mtx.unlock();
     }
     CHECK(ok);
@@ -316,7 +366,7 @@ TEST_CASE("condvar: wait_for with predicate succeeds before timeout")
 
 TEST_CASE("condvar: wait_until times out at deadline")
 {
-    static osal::mutex mtx;
+    static osal::mutex   mtx;
     static osal::condvar cv;
     REQUIRE(mtx.valid());
     REQUIRE(cv.valid());
@@ -336,15 +386,16 @@ TEST_CASE("condvar: wait_until times out at deadline")
 
 TEST_CASE("condvar: wait_until with predicate succeeds before deadline")
 {
-    static osal::mutex mtx;
+    static osal::mutex   mtx;
     static osal::condvar cv;
     REQUIRE(mtx.valid());
     REQUIRE(cv.valid());
 
-    static volatile bool ready2 = false;
-    ready2 = false;
+    static bool ready2 = false;
+    ready2             = false;
 
-    auto setter = [](void*) {
+    auto setter = [](void*)
+    {
         osal::thread::sleep_for(osal::milliseconds{20});
         {
             osal::mutex::lock_guard lg{mtx};
@@ -357,10 +408,10 @@ TEST_CASE("condvar: wait_until with predicate succeeds before deadline")
     REQUIRE(t.create(make_cfg(setter, nullptr, t_stack, sizeof(t_stack), "wuntil_pred")).ok());
 
     const auto deadline = osal::monotonic_clock::now() + osal::milliseconds{2000};
-    bool ok;
+    bool       ok       = false;
     {
         mtx.lock();
-        ok = cv.wait_until(mtx, deadline, [] { return ready2 == true; });
+        ok = cv.wait_until(mtx, deadline, [] { return ready2; });
         mtx.unlock();
     }
     CHECK(ok);

@@ -40,8 +40,8 @@ TEST_CASE("message_buffer: send and receive single byte message")
     CHECK_FALSE(mb.empty());
     CHECK(mb.next_message_size() == 1U);
 
-    std::uint8_t rx = 0U;
-    const std::size_t n = mb.try_receive(&rx, sizeof(rx));
+    std::uint8_t      rx = 0U;
+    const std::size_t n  = mb.try_receive(&rx, sizeof(rx));
     CHECK(n == 1U);
     CHECK(rx == 0x5AU);
     CHECK(mb.empty());
@@ -62,7 +62,7 @@ TEST_CASE("message_buffer: send and receive struct message")
     REQUIRE(mb.try_send(&tx, sizeof(tx)));
     CHECK(mb.next_message_size() == sizeof(tx));
 
-    Packet rx{};
+    Packet            rx{};
     const std::size_t n = mb.try_receive(&rx, sizeof(rx));
     REQUIRE(n == sizeof(Packet));
     CHECK(rx.id == 0x1234U);
@@ -87,8 +87,8 @@ TEST_CASE("message_buffer: FIFO ordering of multiple messages")
     for (std::uint8_t expected = 1U; expected <= 4U; ++expected)
     {
         CHECK(mb.next_message_size() == 1U);
-        std::uint8_t rx = 0U;
-        const std::size_t n = mb.try_receive(&rx, sizeof(rx));
+        std::uint8_t      rx = 0U;
+        const std::size_t n  = mb.try_receive(&rx, sizeof(rx));
         CHECK(n == 1U);
         CHECK(rx == expected);
     }
@@ -164,7 +164,7 @@ TEST_CASE("message_buffer: receive truncates excess bytes silently")
     REQUIRE(mb.try_send(tx, sizeof(tx)));
 
     // Supply a smaller buffer — only get 4 bytes back; excess discarded.
-    std::uint8_t rx[4]{};
+    std::uint8_t      rx[4]{};
     const std::size_t n = mb.try_receive(rx, sizeof(rx));
     CHECK(n == 4U);
     CHECK(rx[0] == 1U);
@@ -186,8 +186,8 @@ TEST_CASE("message_buffer: variable-length messages interleaved")
     const std::uint8_t long_msg[6]   = {0xAAU, 0xBBU, 0xCCU, 0xDDU, 0xEEU, 0xFFU};
     const std::uint8_t medium_msg[4] = {0x10U, 0x20U, 0x30U, 0x40U};
 
-    REQUIRE(mb.try_send(short_msg,  sizeof(short_msg)));
-    REQUIRE(mb.try_send(long_msg,   sizeof(long_msg)));
+    REQUIRE(mb.try_send(short_msg, sizeof(short_msg)));
+    REQUIRE(mb.try_send(long_msg, sizeof(long_msg)));
     REQUIRE(mb.try_send(medium_msg, sizeof(medium_msg)));
 
     // Receive and verify each in order.
@@ -235,7 +235,7 @@ TEST_CASE("message_buffer: cross-thread send/receive")
         }
     };
 
-    constexpr std::size_t kStackSize = 65536U;
+    constexpr std::size_t           kStackSize = 65536U;
     alignas(16) static std::uint8_t stack[kStackSize];
 
     osal::thread_config cfg{};
@@ -251,7 +251,7 @@ TEST_CASE("message_buffer: cross-thread send/receive")
 
     for (std::uint32_t expected = 0U; expected < 4U; ++expected)
     {
-        Msg rx{};
+        Msg               rx{};
         const std::size_t n = mb.receive(&rx, sizeof(rx));
         CHECK(n == sizeof(Msg));
         CHECK(rx.seq == expected);

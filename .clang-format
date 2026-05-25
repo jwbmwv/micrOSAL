@@ -1,11 +1,11 @@
 # .clang-format for MicrOSAL
 # Canonical formatter: clang-format-18  (matches ubuntu-24.04 CI default)
-# Run:  find include src -type f \( -name '*.hpp' -o -name '*.cpp' \) -print0 \
-#         | xargs -0 clang-format-18 -i
+# Run:  ./scripts/format.sh
+# Check: CLANG_FORMAT=clang-format-18 ./scripts/format.sh --check
 
 ---
 Language: Cpp
-Standard: c++17
+Standard: c++20
 BasedOnStyle: LLVM
 
 # Indentation

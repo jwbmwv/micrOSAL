@@ -7,7 +7,7 @@
 DOXYFILE_ENCODING      = UTF-8
 PROJECT_NAME           = "MicrOSAL"
 PROJECT_NUMBER         = 0.0.1
-PROJECT_BRIEF          = "Thin, zero-overhead C++17 operating-system abstraction layer for embedded and hosted targets"
+PROJECT_BRIEF          = "Thin, zero-overhead C++20 operating-system abstraction layer for embedded and hosted targets"
 PROJECT_LOGO           =
 OUTPUT_DIRECTORY       = docs/doxygen
 CREATE_SUBDIRS         = NO
@@ -119,6 +119,7 @@ WARN_LOGFILE           =
 #---------------------------------------------------------------------------
 
 INPUT                  = include/osal \
+                         include/microsal \
                          README.md \
                          docs
 INPUT_ENCODING         = UTF-8

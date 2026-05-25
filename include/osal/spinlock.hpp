@@ -9,7 +9,8 @@
 ///          - Native spinlock: capabilities<active_backend>::has_spinlock == true
 ///            (currently Zephyr, via k_spinlock, and FreeRTOS SMP builds).
 ///          - On all other backends lock() returns error_code::not_supported;
-///            use a mutex instead.
+///            use a mutex instead. For a hard compile-time requirement, call
+///            osal::spinlock::require_support().
 ///
 ///          @warning Holding a spinlock for long durations starves other CPUs.
 ///                   Use only to protect the minimum possible number of
@@ -46,18 +47,30 @@ namespace osal
 ///          maps directly to the backend primitive.  On all other backends,
 ///          lock() / try_lock() return error_code::not_supported so that
 ///          callers can use @c if constexpr to provide an alternative path.
+///          For code that must not build without a native spinlock, use
+///          require_support().
 ///
 /// @note  No dynamic allocation.  The OS handle is stored inline.
 /// @note  Non-copyable and non-movable.
 class spinlock
 {
 public:
+    /// @brief True when the active backend provides a native spinlock.
+    static constexpr bool is_supported = supports_requirement<support_requirement::spinlock>;
+
+    /// @brief Enforce native spinlock support at compile time.
+    template<typename Backend = active_backend>
+    static consteval void require_support()
+    {
+        require_backend_support<support_requirement::spinlock, Backend>();
+    }
+
     // ---- construction / destruction ----------------------------------------
 
     /// @brief Default-constructs and initialises the spinlock.
     /// @complexity O(1)
     /// @blocking   Never.
-    spinlock() noexcept : valid_(false), handle_{}
+    spinlock() noexcept
     {
         if constexpr (active_capabilities::has_spinlock)
         {
@@ -91,7 +104,7 @@ public:
     /// @warning Do NOT call from interrupt context on all backends.
     /// @complexity O(1) amortised (busy-waits until acquired).
     /// @blocking   Spins until acquired.
-    result lock() noexcept
+    [[nodiscard]] result lock() noexcept
     {
         if constexpr (active_capabilities::has_spinlock)
         {
@@ -157,8 +170,8 @@ public:
     [[nodiscard]] bool valid() const noexcept { return valid_; }
 
 private:
-    bool                             valid_;
-    active_traits::spinlock_handle_t handle_;
+    bool                             valid_{false};
+    active_traits::spinlock_handle_t handle_{};
 };
 
 /// @} // osal_spinlock

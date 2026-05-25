@@ -12,6 +12,8 @@
 ///
 ///          Prerequisites: <time.h> included, extern "C" scope active.
 
+#pragma once
+
 /// @brief Return the monotonic wall time in milliseconds.
 /// @details Uses `clock_gettime(CLOCK_MONOTONIC)`.  The reference epoch is
 ///          undefined but the value is strictly monotonically increasing.

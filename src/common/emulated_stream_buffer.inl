@@ -8,7 +8,7 @@
 ///          Design overview
 ///          ──────────────────────────────────────────────────────────────────
 ///          Internal ring (same SPSC pattern as ring_buffer.hpp, extended to
-///          multi-byte operations):
+///          multi-byte operations with two-chunk std::memcpy across wrap):
 ///          • head_ — write index, producer-owned (std::atomic, release on
 ///            store).
 ///          • tail_ — read index,  consumer-owned (std::atomic, release on
@@ -40,6 +40,8 @@
 ///
 /// @copyright Copyright (c) 2026 James Baldwin. AI-assisted — see NOTICE.
 
+#pragma once
+
 // These headers define C++ templates and must never be included inside an
 // extern "C" { } block.  If this .inl file is included from within such a
 // block (as all backends do), temporarily close it, pull in the headers,
@@ -47,7 +49,7 @@
 #ifdef __cplusplus
 }  // temporarily close extern "C" (opened by the including backend)
 #endif
-#include <atomic>
+#include <osal/detail/atomic_compat.hpp>
 #include <algorithm>
 #include <cstring>
 #ifdef __cplusplus
@@ -89,16 +91,15 @@ extern "C"
         osal::active_traits::semaphore_handle_t space_sem;
     };
 
-    static emu_sb_obj emu_sb_pool[OSAL_EMULATED_STREAM_BUFFER_POOL_SIZE];
-    static bool       emu_sb_used[OSAL_EMULATED_STREAM_BUFFER_POOL_SIZE];
+    static emu_sb_obj       emu_sb_pool[OSAL_EMULATED_STREAM_BUFFER_POOL_SIZE];
+    static std::atomic_bool emu_sb_used[OSAL_EMULATED_STREAM_BUFFER_POOL_SIZE];
 
     static emu_sb_obj* emu_sb_acquire() noexcept
     {
         for (std::size_t i = 0U; i < OSAL_EMULATED_STREAM_BUFFER_POOL_SIZE; ++i)
         {
-            if (!emu_sb_used[i])
+            if (!emu_sb_used[i].exchange(true, std::memory_order_acq_rel))
             {
-                emu_sb_used[i] = true;
                 return &emu_sb_pool[i];
             }
         }
@@ -111,7 +112,7 @@ extern "C"
         {
             if (&emu_sb_pool[i] == p)
             {
-                emu_sb_used[i] = false;
+                emu_sb_used[i].store(false, std::memory_order_release);
                 return;
             }
         }
@@ -140,15 +141,14 @@ extern "C"
     /// @pre   sb_free(s) >= len.  Call only from the producer.
     static void sb_write(emu_sb_obj* s, const std::uint8_t* data, std::size_t len) noexcept
     {
-        std::size_t h = s->head.load(std::memory_order_relaxed);
-        for (std::size_t i = 0U; i < len; ++i)
+        std::size_t       h     = s->head.load(std::memory_order_relaxed);
+        const std::size_t first = std::min(len, s->ring_size - h);
+        std::memcpy(s->buf + h, data, first);
+        if (first < len)
         {
-            s->buf[h] = data[i];
-            if (++h == s->ring_size)
-            {
-                h = 0U;
-            }
+            std::memcpy(s->buf, data + first, len - first);
         }
+        h = (h + len < s->ring_size) ? (h + len) : (h + len - s->ring_size);
         s->head.store(h, std::memory_order_release);
     }
 
@@ -156,15 +156,14 @@ extern "C"
     /// @pre   sb_available(s) >= len.  Call only from the consumer.
     static void sb_read(emu_sb_obj* s, std::uint8_t* buf, std::size_t len) noexcept
     {
-        std::size_t t = s->tail.load(std::memory_order_relaxed);
-        for (std::size_t i = 0U; i < len; ++i)
+        std::size_t       t     = s->tail.load(std::memory_order_relaxed);
+        const std::size_t first = std::min(len, s->ring_size - t);
+        std::memcpy(buf, s->buf + t, first);
+        if (first < len)
         {
-            buf[i] = s->buf[t];
-            if (++t == s->ring_size)
-            {
-                t = 0U;
-            }
+            std::memcpy(buf + first, s->buf, len - first);
         }
+        t = (t + len < s->ring_size) ? (t + len) : (t + len - s->ring_size);
         s->tail.store(t, std::memory_order_release);
     }
 
@@ -173,13 +172,7 @@ extern "C"
     [[maybe_unused]] static void sb_skip(emu_sb_obj* s, std::size_t len) noexcept
     {
         std::size_t t = s->tail.load(std::memory_order_relaxed);
-        for (std::size_t i = 0U; i < len; ++i)
-        {
-            if (++t == s->ring_size)
-            {
-                t = 0U;
-            }
-        }
+        t             = (t + len < s->ring_size) ? (t + len) : (t + len - s->ring_size);
         s->tail.store(t, std::memory_order_release);
     }
 
@@ -187,14 +180,12 @@ extern "C"
     /// @pre   sb_available(s) >= len.  Call only from the consumer.
     [[maybe_unused]] static void sb_peek(const emu_sb_obj* s, std::uint8_t* buf, std::size_t len) noexcept
     {
-        std::size_t t = s->tail.load(std::memory_order_relaxed);
-        for (std::size_t i = 0U; i < len; ++i)
+        const std::size_t t     = s->tail.load(std::memory_order_relaxed);
+        const std::size_t first = std::min(len, s->ring_size - t);
+        std::memcpy(buf, s->buf + t, first);
+        if (first < len)
         {
-            buf[i] = s->buf[t];
-            if (++t == s->ring_size)
-            {
-                t = 0U;
-            }
+            std::memcpy(buf + first, s->buf, len - first);
         }
     }
 
@@ -218,7 +209,7 @@ extern "C"
     osal::result osal_stream_buffer_create(osal::active_traits::stream_buffer_handle_t* handle, void* buffer,
                                            std::size_t capacity, std::size_t trigger_level) noexcept
     {
-        if (!handle || !buffer || capacity == 0U)
+        if (!handle || !buffer || capacity == 0U) [[unlikely]]
         {
             return osal::error_code::invalid_argument;
         }
@@ -258,7 +249,7 @@ extern "C"
     /// @return `osal::ok()` on success, `error_code::not_initialized` if null.
     osal::result osal_stream_buffer_destroy(osal::active_traits::stream_buffer_handle_t* handle) noexcept
     {
-        if (!handle || !handle->native)
+        if (!handle || !handle->native) [[unlikely]]
         {
             return osal::error_code::not_initialized;
         }
@@ -285,11 +276,11 @@ extern "C"
     osal::result osal_stream_buffer_send(osal::active_traits::stream_buffer_handle_t* handle, const void* data,
                                          std::size_t len, osal::tick_t timeout_ticks) noexcept
     {
-        if (!handle || !handle->native)
+        if (!handle || !handle->native) [[unlikely]]
         {
             return osal::error_code::not_initialized;
         }
-        if (!data || len == 0U)
+        if (!data || len == 0U) [[unlikely]]
         {
             return osal::error_code::invalid_argument;
         }
@@ -331,11 +322,11 @@ extern "C"
     osal::result osal_stream_buffer_send_isr(osal::active_traits::stream_buffer_handle_t* handle, const void* data,
                                              std::size_t len) noexcept
     {
-        if (!handle || !handle->native)
+        if (!handle || !handle->native) [[unlikely]]
         {
             return osal::error_code::not_initialized;
         }
-        if (!data || len == 0U)
+        if (!data || len == 0U) [[unlikely]]
         {
             return osal::error_code::invalid_argument;
         }
@@ -364,7 +355,7 @@ extern "C"
     std::size_t osal_stream_buffer_receive(osal::active_traits::stream_buffer_handle_t* handle, void* buf,
                                            std::size_t max_len, osal::tick_t timeout_ticks) noexcept
     {
-        if (!handle || !handle->native || !buf || max_len == 0U)
+        if (!handle || !handle->native || !buf || max_len == 0U) [[unlikely]]
         {
             return 0U;
         }
@@ -404,7 +395,7 @@ extern "C"
     std::size_t osal_stream_buffer_receive_isr(osal::active_traits::stream_buffer_handle_t* handle, void* buf,
                                                std::size_t max_len) noexcept
     {
-        if (!handle || !handle->native || !buf || max_len == 0U)
+        if (!handle || !handle->native || !buf || max_len == 0U) [[unlikely]]
         {
             return 0U;
         }
@@ -431,7 +422,7 @@ extern "C"
     /// @return Byte count, or 0 if @p handle is null.
     std::size_t osal_stream_buffer_available(const osal::active_traits::stream_buffer_handle_t* handle) noexcept
     {
-        if (!handle || !handle->native)
+        if (!handle || !handle->native) [[unlikely]]
         {
             return 0U;
         }
@@ -443,7 +434,7 @@ extern "C"
     /// @return Free byte count, or 0 if @p handle is null.
     std::size_t osal_stream_buffer_free_space(const osal::active_traits::stream_buffer_handle_t* handle) noexcept
     {
-        if (!handle || !handle->native)
+        if (!handle || !handle->native) [[unlikely]]
         {
             return 0U;
         }
@@ -459,7 +450,7 @@ extern "C"
     /// @return `osal::ok()` on success, `error_code::not_initialized` if null.
     osal::result osal_stream_buffer_reset(osal::active_traits::stream_buffer_handle_t* handle) noexcept
     {
-        if (!handle || !handle->native)
+        if (!handle || !handle->native) [[unlikely]]
         {
             return osal::error_code::not_initialized;
         }

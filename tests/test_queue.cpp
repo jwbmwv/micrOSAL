@@ -111,7 +111,8 @@ TEST_CASE("queue: cross-thread send/receive")
     static osal::queue<std::uint32_t, 4> q;
     REQUIRE(q.valid());
 
-    auto producer = [](void*) {
+    auto producer = [](void*)
+    {
         for (std::uint32_t i = 1; i <= 3; ++i)
         {
             (void)q.send(i);
@@ -119,13 +120,13 @@ TEST_CASE("queue: cross-thread send/receive")
     };
 
     alignas(16) static std::uint8_t stack[65536];
-    osal::thread t;
-    osal::thread_config cfg{};
-    cfg.entry = producer;
-    cfg.arg = nullptr;
-    cfg.stack = stack;
+    osal::thread                    t;
+    osal::thread_config             cfg{};
+    cfg.entry       = producer;
+    cfg.arg         = nullptr;
+    cfg.stack       = stack;
     cfg.stack_bytes = sizeof(stack);
-    cfg.name = "q_prod";
+    cfg.name        = "q_prod";
     REQUIRE(t.create(cfg).ok());
 
     std::uint32_t val = 0;

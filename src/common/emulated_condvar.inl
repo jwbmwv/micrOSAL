@@ -16,6 +16,8 @@
 ///
 /// @copyright Copyright (c) 2026 James Baldwin. AI-assisted — see NOTICE.
 
+#pragma once
+
 #include <atomic>
 
 // ---------------------------------------------------------------------------
@@ -88,7 +90,7 @@ static void emu_cv_release(emulated_condvar_obj* p) noexcept
 ///         `error_code::out_of_resources` if the pool is exhausted.
 osal::result osal_condvar_create(osal::active_traits::condvar_handle_t* handle) noexcept
 {
-    if (!handle)
+    if (!handle) [[unlikely]]
     {
         return osal::error_code::invalid_argument;
     }
@@ -141,7 +143,7 @@ osal::result osal_condvar_create(osal::active_traits::condvar_handle_t* handle) 
 /// @return Always `osal::ok()`.
 osal::result osal_condvar_destroy(osal::active_traits::condvar_handle_t* handle) noexcept
 {
-    if (!handle || !handle->native)
+    if (!handle || !handle->native) [[unlikely]]
     {
         return osal::ok();
     }
@@ -170,7 +172,7 @@ osal::result osal_condvar_destroy(osal::active_traits::condvar_handle_t* handle)
 osal::result osal_condvar_wait(osal::active_traits::condvar_handle_t* handle,
                                osal::active_traits::mutex_handle_t* mutex, osal::tick_t timeout) noexcept
 {
-    if (!handle || !handle->native || !mutex)
+    if (!handle || !handle->native || !mutex) [[unlikely]]
     {
         return osal::error_code::not_initialized;
     }
@@ -184,6 +186,7 @@ osal::result osal_condvar_wait(osal::active_traits::condvar_handle_t* handle,
     {
         if (!w.in_use)
         {
+            (void)osal_semaphore_try_take(&w.sem);
             w.in_use = true;
             my_slot  = &w;
             break;
@@ -221,13 +224,18 @@ osal::result osal_condvar_wait(osal::active_traits::condvar_handle_t* handle,
 /// @return `osal::ok()` on success, `error_code::not_initialized` if null.
 osal::result osal_condvar_notify_one(osal::active_traits::condvar_handle_t* handle) noexcept
 {
-    if (!handle || !handle->native)
+    if (!handle || !handle->native) [[unlikely]]
     {
         return osal::error_code::not_initialized;
     }
     auto* cv = static_cast<emulated_condvar_obj*>(handle->native);
 
     osal_mutex_lock(&cv->guard, osal::WAIT_FOREVER);
+    if (cv->n_waiters == 0U)
+    {
+        osal_mutex_unlock(&cv->guard);
+        return osal::ok();
+    }
     for (auto& w : cv->waiters)
     {
         if (w.in_use)
@@ -245,13 +253,18 @@ osal::result osal_condvar_notify_one(osal::active_traits::condvar_handle_t* hand
 /// @return `osal::ok()` on success, `error_code::not_initialized` if null.
 osal::result osal_condvar_notify_all(osal::active_traits::condvar_handle_t* handle) noexcept
 {
-    if (!handle || !handle->native)
+    if (!handle || !handle->native) [[unlikely]]
     {
         return osal::error_code::not_initialized;
     }
     auto* cv = static_cast<emulated_condvar_obj*>(handle->native);
 
     osal_mutex_lock(&cv->guard, osal::WAIT_FOREVER);
+    if (cv->n_waiters == 0U)
+    {
+        osal_mutex_unlock(&cv->guard);
+        return osal::ok();
+    }
     for (auto& w : cv->waiters)
     {
         if (w.in_use)

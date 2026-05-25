@@ -11,9 +11,9 @@
 // #include_next which skips past the GCC include dir and finds glibc's
 // stdlib.h instead of NuttX's.  We pre-include NuttX's stdlib.h here and
 // then set glibc's guard macro so the glibc copy is elided.
-#include <stdlib.h>          // NuttX's stdlib.h (found first in -isystem order)
-#define _STDLIB_H 1          // Block glibc's /usr/include/stdlib.h
-#include <string.h>          // NuttX's string.h (avoids <cstring> pulling glibc's)
-#define _STRING_H 1          // Block glibc's /usr/include/string.h (same pattern)
+#include <stdlib.h>  // NuttX's stdlib.h (found first in -isystem order)
+#define _STDLIB_H 1  // Block glibc's /usr/include/stdlib.h
+#include <string.h>  // NuttX's string.h (avoids <cstring> pulling glibc's)
+#define _STRING_H 1  // Block glibc's /usr/include/string.h (same pattern)
 
 #include "../../../src/nuttx/nuttx_backend.cpp"

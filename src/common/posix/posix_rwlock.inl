@@ -18,6 +18,8 @@
 ///          Prerequisites: <pthread.h> included, extern "C" scope active,
 ///                         OSAL_POSIX_RW_ABS(t) defined.
 
+#pragma once
+
 // -------------------------------------------------------------------------
 // Read-write lock (native — pthread_rwlock_t)
 // -------------------------------------------------------------------------

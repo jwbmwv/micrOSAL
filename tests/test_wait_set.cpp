@@ -7,6 +7,8 @@
 
 #include <unistd.h>  // pipe(), close()
 
+static_assert(osal::wait_set::is_supported == osal::active_capabilities::has_wait_set);
+
 // ---------------------------------------------------------------------------
 // Construction
 // ---------------------------------------------------------------------------
@@ -71,9 +73,9 @@ TEST_CASE("wait_set: wait times out with no events")
     REQUIRE(::pipe(pipefd) == 0);
     REQUIRE(ws.add(pipefd[0], osal::wait_events::readable).ok());
 
-    int ready[4]{};
+    int         ready[4]{};
     std::size_t n_ready = 99;
-    auto r = ws.wait(ready, 4, n_ready, osal::milliseconds{20});
+    auto        r       = ws.wait(ready, 4, n_ready, osal::milliseconds{20});
 
     ::close(pipefd[0]);
     ::close(pipefd[1]);
@@ -101,9 +103,9 @@ TEST_CASE("wait_set: unsupported backend returns not_supported")
     CHECK(ws.add(0).code() == osal::error_code::not_supported);
     CHECK(ws.remove(0).code() == osal::error_code::not_supported);
 
-    int ready[4]{};
+    int         ready[4]{};
     std::size_t n_ready = 99;
-    auto r = ws.wait(ready, 4, n_ready, osal::milliseconds{10});
+    auto        r       = ws.wait(ready, 4, n_ready, osal::milliseconds{10});
     CHECK(r.code() == osal::error_code::not_supported);
     CHECK(n_ready == 0);
 }

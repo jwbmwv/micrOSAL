@@ -14,7 +14,7 @@ participant "Worker Thread\n(internal)" as worker #FFEBEE
 
 == Create ==
 
-app -> wq : work_queue(stack, 16, "my_wq")
+app -> wq : work_queue(stack, stack_bytes, depth, "my_wq")
 activate wq
 wq -> bridge : osal_work_queue_create(...)
 bridge -> worker : spawn worker thread
@@ -27,7 +27,7 @@ deactivate wq
 app -> wq : submit(handler_A, ctx_A)
 activate wq
 wq -> bridge : osal_work_queue_submit(...)
-bridge -> bridge : enqueue {handler_A, ctx_A}
+bridge -> bridge : enqueue {handler_A, ctx_A, seq=1}
 bridge -> bridge : signal worker
 wq --> app : result{ok}
 deactivate wq
@@ -35,7 +35,7 @@ deactivate wq
 app -> wq : submit(handler_B, ctx_B)
 activate wq
 wq -> bridge : osal_work_queue_submit(...)
-bridge -> bridge : enqueue {handler_B, ctx_B}
+bridge -> bridge : enqueue {handler_B, ctx_B, seq=2}
 wq --> app : result{ok}
 deactivate wq
 
@@ -55,8 +55,10 @@ app -> wq : flush(5000ms)
 activate wq
 wq -> bridge : osal_work_queue_flush(...)
 note right of bridge
-  blocks until queue
-  is drained or timeout
+  captures the last queued
+  work-item sequence at call time
+  and waits until execution
+  reaches that frontier or timeout
 end note
 bridge --> wq : result{ok}
 wq --> app : result{ok}

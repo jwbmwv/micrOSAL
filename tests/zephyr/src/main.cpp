@@ -16,7 +16,10 @@
 
 #include <zephyr/ztest.h>
 #include <zephyr/kernel.h>
+#include <osal/bus/osal_bus.hpp>
+#include <osal/bus/osal_signal_premium.hpp>
 #include <osal/osal.hpp>
+#include <atomic>
 #include <cstring>
 #include <cstdint>
 
@@ -33,6 +36,9 @@ K_THREAD_STACK_DEFINE(z_tld_stack, 2048);
 K_THREAD_STACK_DEFINE(z_rwlock_ra_stack, 2048);
 K_THREAD_STACK_DEFINE(z_rwlock_rb_stack, 2048);
 K_THREAD_STACK_DEFINE(z_note_stack, 2048);
+K_THREAD_STACK_DEFINE(z_barrier_a_stack, 2048);
+K_THREAD_STACK_DEFINE(z_barrier_b_stack, 2048);
+K_THREAD_STACK_DEFINE(z_barrier_c_stack, 2048);
 alignas(std::uint32_t) static std::uint8_t z_pool_buf[sizeof(std::uint32_t) * 16U];
 
 // =========================================================================
@@ -53,6 +59,30 @@ ZTEST(osal_clock, test_ticks_nonzero)
     // that the function returns without error.
     osal::tick_t t = osal::clock_utils::now_ticks();
     zassert_true(t >= 0, "ticks should be >= 0 on a running kernel");
+}
+
+ZTEST(osal_clock, test_high_resolution_clock)
+{
+    auto before = osal::high_resolution_clock::now();
+    osal::thread::sleep_for(osal::milliseconds{5});
+    auto after = osal::high_resolution_clock::now();
+    zassert_true(after >= before, "high-resolution clock should be monotonic");
+
+    const auto resolution = osal::high_resolution_clock::resolution();
+    zassert_true(resolution.count() > 0, "high-resolution resolution should be positive");
+
+    const auto tick_resolution =
+        std::chrono::duration_cast<osal::nanoseconds>(osal::microseconds{osal_clock_tick_period_us()});
+    if constexpr (osal::high_resolution_clock::is_supported)
+    {
+        zassert_true(resolution <= tick_resolution,
+                     "native high-resolution source should not report a coarser resolution than the OSAL tick");
+    }
+    else
+    {
+        zassert_equal(resolution.count(), tick_resolution.count(),
+                      "fallback high-resolution clock should report tick resolution");
+    }
 }
 
 ZTEST_SUITE(osal_clock, NULL, NULL, NULL, NULL, NULL);
@@ -244,6 +274,106 @@ ZTEST(osal_queue, test_full_detection)
 ZTEST_SUITE(osal_queue, NULL, NULL, NULL, NULL, NULL);
 
 // =========================================================================
+// Bus + Signal
+// =========================================================================
+
+static std::atomic<std::uint32_t> g_bus_observer_last{0U};
+static std::atomic<std::size_t>   g_bus_observer_calls{0U};
+
+static void reset_bus_observer_state() noexcept
+{
+    g_bus_observer_last.store(0U, std::memory_order_relaxed);
+    g_bus_observer_calls.store(0U, std::memory_order_relaxed);
+}
+
+static void zephyr_bus_observer(const std::uint32_t& value) noexcept
+{
+    g_bus_observer_last.store(value, std::memory_order_relaxed);
+    g_bus_observer_calls.fetch_add(1U, std::memory_order_relaxed);
+}
+
+ZTEST(osal_bus_layer, test_channel_send_receive)
+{
+    osal::osal_bus<std::uint32_t, 4U, osal::bus_backend_zephyr> channel;
+    zassert_true(channel.valid(), "channel construction should succeed");
+    zassert_true(channel.try_send(42U), "try_send should succeed");
+
+    std::uint32_t value = 0U;
+    zassert_true(channel.try_receive(value), "try_receive should succeed");
+    zassert_equal(value, 42U, NULL);
+}
+
+ZTEST(osal_bus_layer, test_signal_publish_receive)
+{
+    osal::osal_signal<std::uint32_t, 4U, 4U, osal::bus_backend_zephyr> topic;
+    osal::subscriber_id                                                sub{osal::invalid_subscriber_id};
+
+    zassert_true(topic.subscribe(sub), "subscribe should succeed");
+    zassert_true(topic.publish(77U), "publish should reach the subscriber");
+
+    std::uint32_t value = 0U;
+    zassert_true(topic.try_receive(sub, value), "subscriber should receive the message");
+    zassert_equal(value, 77U, NULL);
+    zassert_true(topic.unsubscribe(sub), "unsubscribe should succeed");
+}
+
+ZTEST(osal_bus_layer, test_signal_slot_reuse_clears_stale_messages)
+{
+    osal::osal_signal<std::uint32_t, 2U, 2U, osal::bus_backend_zephyr> topic;
+    osal::subscriber_id                                                first{osal::invalid_subscriber_id};
+
+    zassert_true(topic.subscribe(first), "initial subscribe should succeed");
+    zassert_true(topic.publish(17U), "publish should enqueue for the subscriber");
+    zassert_true(topic.unsubscribe(first), "unsubscribe should succeed");
+
+    osal::subscriber_id reused{osal::invalid_subscriber_id};
+    zassert_true(topic.subscribe(reused), "reused subscribe should succeed");
+    zassert_not_equal(reused, first, "reused slot must get a fresh subscriber token");
+
+    std::uint32_t value = 0U;
+    zassert_false(topic.try_receive(first, value), "stale subscriber token should be rejected");
+    zassert_false(topic.try_receive(reused, value), "reused slot should not inherit stale messages");
+
+    zassert_true(topic.publish(23U), "publish should reach the active subscriber");
+    zassert_false(topic.try_receive(first, value), "stale subscriber token must stay invalid");
+    zassert_true(topic.try_receive(reused, value), "fresh subscriber token should receive new messages");
+    zassert_equal(value, 23U, NULL);
+    zassert_true(topic.unsubscribe(reused), NULL);
+}
+
+ZTEST(osal_bus_layer, test_premium_queue_and_observer)
+{
+    reset_bus_observer_state();
+
+    osal::osal_signal_premium<std::uint32_t, 4U, 4U, osal::bus_backend_zephyr> topic;
+    osal::subscriber_id                                                        sub{osal::invalid_subscriber_id};
+
+    zassert_true(topic.subscribe(sub), NULL);
+    zassert_true(topic.subscribe_observer(zephyr_bus_observer), NULL);
+    zassert_equal(topic.observer_count(), 1U, NULL);
+    zassert_true(topic.publish(123U), NULL);
+
+    std::uint32_t value = 0U;
+    zassert_true(topic.try_receive(sub, value), NULL);
+    zassert_equal(value, 123U, NULL);
+    zassert_equal(g_bus_observer_calls.load(std::memory_order_relaxed), 1U, NULL);
+    zassert_equal(g_bus_observer_last.load(std::memory_order_relaxed), 123U, NULL);
+    zassert_true(topic.unsubscribe_observer(zephyr_bus_observer), NULL);
+    zassert_equal(topic.observer_count(), 0U, NULL);
+}
+
+ZTEST(osal_bus_layer, test_capabilities)
+{
+    static_assert(osal::native_pubsub_backend<osal::bus_backend_zephyr>);
+    static_assert(osal::native_observer_backend<osal::bus_backend_zephyr>);
+    static_assert(!osal::zero_copy_backend<osal::bus_backend_zephyr>);
+    static_assert(!osal::native_routing_backend<osal::bus_backend_zephyr>);
+    zassert_true(true, NULL);
+}
+
+ZTEST_SUITE(osal_bus_layer, NULL, NULL, NULL, NULL, NULL);
+
+// =========================================================================
 // Mailbox
 // =========================================================================
 
@@ -322,11 +452,11 @@ ZTEST_SUITE(osal_mailbox, NULL, NULL, NULL, NULL, NULL);
 // Thread
 // =========================================================================
 
-static volatile bool g_thread_ran = false;
+static std::atomic_bool g_thread_ran{false};
 
 static void thread_entry_basic(void*)
 {
-    g_thread_ran = true;
+    g_thread_ran.store(true, std::memory_order_release);
 }
 
 ZTEST(osal_thread, test_default_not_valid)
@@ -337,7 +467,7 @@ ZTEST(osal_thread, test_default_not_valid)
 
 ZTEST(osal_thread, test_create_join)
 {
-    g_thread_ran = false;
+    g_thread_ran.store(false, std::memory_order_relaxed);
 
     osal::thread        t;
     osal::thread_config cfg{};
@@ -350,7 +480,7 @@ ZTEST(osal_thread, test_create_join)
     zassert_true(t.valid(), NULL);
 
     zassert_true(t.join().ok(), "join should succeed");
-    zassert_true(g_thread_ran, "thread entry should have executed");
+    zassert_true(g_thread_ran.load(std::memory_order_acquire), "thread entry should have executed");
 }
 
 ZTEST(osal_thread, test_yield_no_crash)
@@ -368,17 +498,135 @@ ZTEST(osal_thread, test_sleep_for)
     zassert_true(elapsed.count() >= 20, "sleep_for should have waited >= 20 ms");
 }
 
+ZTEST(osal_thread, test_stack_low_watermark)
+{
+    if constexpr (!osal::thread::supports_stack_watermark)
+    {
+        std::size_t unused = 0U;
+        zassert_equal(static_cast<int>(osal::this_thread::stack_low_watermark_bytes(unused).code()),
+                      static_cast<int>(osal::error_code::not_supported),
+                      "stack watermark should report not_supported when unavailable");
+        return;
+    }
+
+    osal::semaphore ready{osal::semaphore_type::binary, 0U};
+    osal::semaphore release{osal::semaphore_type::binary, 0U};
+    zassert_true(ready.valid(), NULL);
+    zassert_true(release.valid(), NULL);
+
+    struct ctx_t
+    {
+        osal::semaphore* ready;
+        osal::semaphore* release;
+    } ctx{&ready, &release};
+
+    osal::thread        t;
+    osal::thread_config cfg{};
+    cfg.entry = [](void* arg)
+    {
+        auto* c = static_cast<ctx_t*>(arg);
+        c->ready->give();
+        (void)c->release->take();
+    };
+    cfg.arg         = &ctx;
+    cfg.stack       = z_xthread_stack;
+    cfg.stack_bytes = K_THREAD_STACK_SIZEOF(z_xthread_stack);
+    cfg.name        = "z_stackdiag";
+    zassert_true(t.create(cfg).ok(), "thread create should succeed");
+    zassert_true(ready.take_for(osal::milliseconds{2000}), "worker should signal readiness");
+
+    std::size_t current_unused = 0U;
+    std::size_t worker_unused  = 0U;
+    zassert_true(osal::this_thread::stack_low_watermark_bytes(current_unused).ok(),
+                 "current thread stack query should succeed");
+    zassert_true(t.stack_low_watermark_bytes(worker_unused).ok(), "worker stack query should succeed");
+    zassert_true(current_unused > 0U, "current thread should report free stack bytes");
+    zassert_true(worker_unused > 0U, "worker thread should report free stack bytes");
+
+    release.give();
+    zassert_true(t.join().ok(), "join should succeed");
+}
+
+ZTEST(osal_thread, test_introspection)
+{
+    zassert_true(osal::this_thread::get_id() != osal::INVALID_THREAD_ID,
+                 "current thread id should be available on Zephyr");
+
+    osal::priority_t current_priority = osal::PRIORITY_LOWEST;
+    zassert_true(osal::this_thread::get_priority(current_priority).ok(),
+                 "current thread priority query should succeed");
+    zassert_true(current_priority >= osal::PRIORITY_LOWEST, NULL);
+    zassert_true(current_priority <= osal::PRIORITY_HIGHEST, NULL);
+
+    if constexpr (osal::thread::supports_current_cpu)
+    {
+        std::uint32_t cpu = 0U;
+        zassert_true(osal::this_thread::get_cpu(cpu).ok(), "current cpu query should succeed");
+    }
+
+    osal::semaphore ready{osal::semaphore_type::binary, 0U};
+    osal::semaphore release{osal::semaphore_type::binary, 0U};
+    zassert_true(ready.valid(), NULL);
+    zassert_true(release.valid(), NULL);
+
+    struct ctx_t
+    {
+        osal::semaphore*   ready;
+        osal::semaphore*   release;
+        osal::thread_id_t* worker_id;
+    };
+
+    osal::thread_id_t worker_id = osal::INVALID_THREAD_ID;
+    ctx_t             ctx{&ready, &release, &worker_id};
+
+    osal::thread        t;
+    osal::thread_config cfg{};
+    cfg.entry = [](void* arg)
+    {
+        auto* c       = static_cast<ctx_t*>(arg);
+        *c->worker_id = osal::this_thread::get_id();
+        c->ready->give();
+        (void)c->release->take();
+    };
+    cfg.arg         = &ctx;
+    cfg.priority    = osal::PRIORITY_NORMAL;
+    cfg.stack       = z_xthread_stack;
+    cfg.stack_bytes = K_THREAD_STACK_SIZEOF(z_xthread_stack);
+    cfg.name        = "z_introspect";
+    zassert_true(t.create(cfg).ok(), "thread create should succeed");
+    zassert_true(ready.take_for(osal::milliseconds{2000}), "worker should signal readiness");
+
+    zassert_true(t.id() != osal::INVALID_THREAD_ID, "worker id should be available");
+    zassert_equal(t.id(), worker_id, "worker thread id should match the running thread token");
+
+    osal::priority_t worker_priority = osal::PRIORITY_LOWEST;
+    zassert_true(t.get_priority(worker_priority).ok(), "worker priority query should succeed");
+    zassert_true(worker_priority >= osal::PRIORITY_LOWEST, NULL);
+    zassert_true(worker_priority <= osal::PRIORITY_HIGHEST, NULL);
+
+    if constexpr (osal::thread_affinity_query_capability<osal::active_backend>::value)
+    {
+        osal::affinity_t current_affinity = osal::AFFINITY_ANY;
+        osal::affinity_t worker_affinity  = osal::AFFINITY_ANY;
+        zassert_true(osal::this_thread::get_affinity(current_affinity).ok(), "current affinity query should succeed");
+        zassert_true(t.get_affinity(worker_affinity).ok(), "worker affinity query should succeed");
+    }
+
+    release.give();
+    zassert_true(t.join().ok(), "join should succeed");
+}
+
 ZTEST_SUITE(osal_thread, NULL, NULL, NULL, NULL, NULL);
 
 // =========================================================================
 // Timer
 // =========================================================================
 
-static volatile uint32_t g_timer_count = 0;
+static std::atomic<std::uint32_t> g_timer_count{0U};
 
 static void timer_callback_ztest(void*)
 {
-    ++g_timer_count;
+    (void)g_timer_count.fetch_add(1U, std::memory_order_relaxed);
 }
 
 ZTEST(osal_timer, test_construction)
@@ -389,33 +637,34 @@ ZTEST(osal_timer, test_construction)
 
 ZTEST(osal_timer, test_one_shot_fires)
 {
-    g_timer_count = 0;
+    g_timer_count.store(0U, std::memory_order_relaxed);
     osal::timer t{timer_callback_ztest, nullptr, osal::milliseconds{30}, osal::timer_mode::one_shot};
     zassert_true(t.valid(), NULL);
 
     zassert_true(t.start().ok(), NULL);
     osal::thread::sleep_for(osal::milliseconds{200});
-    t.stop();
+    (void)t.stop();
 
-    zassert_equal(g_timer_count, 1U, "one-shot timer should fire exactly once");
+    zassert_equal(g_timer_count.load(std::memory_order_relaxed), 1U, "one-shot timer should fire exactly once");
 }
 
 ZTEST(osal_timer, test_periodic_fires_multiple)
 {
-    g_timer_count = 0;
+    g_timer_count.store(0U, std::memory_order_relaxed);
     osal::timer t{timer_callback_ztest, nullptr, osal::milliseconds{25}, osal::timer_mode::periodic};
     zassert_true(t.valid(), NULL);
 
     zassert_true(t.start().ok(), NULL);
     osal::thread::sleep_for(osal::milliseconds{200});
-    t.stop();
+    (void)t.stop();
 
-    zassert_true(g_timer_count >= 2, "periodic timer should fire >= 2 times in 200 ms");
+    zassert_true(g_timer_count.load(std::memory_order_relaxed) >= 2U,
+                 "periodic timer should fire >= 2 times in 200 ms");
 }
 
 ZTEST(osal_timer, test_config_construction)
 {
-    g_timer_count = 0;
+    g_timer_count.store(0U, std::memory_order_relaxed);
     const osal::timer_config cfg{timer_callback_ztest, nullptr, osal::milliseconds{30}, osal::timer_mode::one_shot,
                                  "cfg_tmr"};
     osal::timer              t{cfg};
@@ -423,8 +672,8 @@ ZTEST(osal_timer, test_config_construction)
 
     zassert_true(t.start().ok(), NULL);
     osal::thread::sleep_for(osal::milliseconds{200});
-    t.stop();
-    zassert_equal(g_timer_count, 1U, NULL);
+    (void)t.stop();
+    zassert_equal(g_timer_count.load(std::memory_order_relaxed), 1U, NULL);
 }
 
 ZTEST_SUITE(osal_timer, NULL, NULL, NULL, NULL, NULL);
@@ -500,9 +749,9 @@ ZTEST_SUITE(osal_condvar, NULL, NULL, NULL, NULL, NULL);
 // Notification
 // =========================================================================
 
-static osal::notification<2>* g_z_note = nullptr;
-static volatile std::uint32_t g_z_note_value = 0U;
-static int g_z_c_delayable_count = 0;
+static osal::notification<2>*     g_z_note = nullptr;
+static std::atomic<std::uint32_t> g_z_note_value{0U};
+static int                        g_z_c_delayable_count = 0;
 
 static void zephyr_notification_waiter(void*)
 {
@@ -511,7 +760,7 @@ static void zephyr_notification_waiter(void*)
         std::uint32_t value = 0U;
         if (g_z_note->wait(1U, osal::milliseconds{2000}, &value).ok())
         {
-            g_z_note_value = value;
+            g_z_note_value.store(value, std::memory_order_release);
         }
     }
 }
@@ -527,7 +776,7 @@ ZTEST(osal_notification, test_notify_and_wait_round_trip)
     osal::notification<2> note;
     zassert_true(note.valid(), NULL);
     g_z_note = &note;
-    g_z_note_value = 0U;
+    g_z_note_value.store(0U, std::memory_order_relaxed);
 
     osal::thread        t;
     osal::thread_config cfg{};
@@ -541,7 +790,7 @@ ZTEST(osal_notification, test_notify_and_wait_round_trip)
     osal::thread::sleep_for(osal::milliseconds{20});
     zassert_true(note.notify(0xCAFEU, osal::notification_action::overwrite, 1U).ok(), NULL);
     zassert_true(t.join().ok(), NULL);
-    zassert_equal(g_z_note_value, 0xCAFEU, NULL);
+    zassert_equal(g_z_note_value.load(std::memory_order_acquire), 0xCAFEU, NULL);
     zassert_false(note.pending(1U), NULL);
     g_z_note = nullptr;
 }
@@ -554,8 +803,8 @@ ZTEST(osal_notification, test_set_bits_increment_and_no_overwrite)
     zassert_true(note.notify(0x04U, osal::notification_action::set_bits, 0U).ok(), NULL);
     zassert_true(note.notify(0U, osal::notification_action::increment, 0U).ok(), NULL);
     zassert_equal(note.peek(0U), 0x06U, NULL);
-    zassert_equal(note.notify(0x08U, osal::notification_action::no_overwrite, 0U).code(),
-                  osal::error_code::would_block, NULL);
+    zassert_equal(note.notify(0x08U, osal::notification_action::no_overwrite, 0U).code(), osal::error_code::would_block,
+                  NULL);
 }
 
 ZTEST_SUITE(osal_notification, NULL, NULL, NULL, NULL, NULL);
@@ -564,7 +813,7 @@ ZTEST_SUITE(osal_notification, NULL, NULL, NULL, NULL, NULL);
 // Work Queue
 // =========================================================================
 
-static volatile bool g_wq_executed = false;
+static std::atomic_bool g_wq_executed{false};
 
 ZTEST(osal_work_queue, test_construction)
 {
@@ -577,11 +826,11 @@ ZTEST(osal_work_queue, test_submit_and_flush)
     osal::work_queue wq{z_wq_stack, K_THREAD_STACK_SIZEOF(z_wq_stack), 8, "z_wq"};
     zassert_true(wq.valid(), NULL);
 
-    g_wq_executed = false;
-    auto cb       = [](void*) { g_wq_executed = true; };
+    g_wq_executed.store(false, std::memory_order_relaxed);
+    auto cb = [](void*) { g_wq_executed.store(true, std::memory_order_release); };
     zassert_true(wq.submit(cb).ok(), "submit should succeed");
     zassert_true(wq.flush(osal::milliseconds{2000}).ok(), "flush should succeed");
-    zassert_true(g_wq_executed, "work item should have executed");
+    zassert_true(g_wq_executed.load(std::memory_order_acquire), "work item should have executed");
 }
 
 ZTEST(osal_work_queue, test_config_construction)
@@ -590,11 +839,11 @@ ZTEST(osal_work_queue, test_config_construction)
     osal::work_queue              wq{cfg};
     zassert_true(wq.valid(), "config-constructed work_queue should be valid");
 
-    g_wq_executed = false;
-    auto cb       = [](void*) { g_wq_executed = true; };
+    g_wq_executed.store(false, std::memory_order_relaxed);
+    auto cb = [](void*) { g_wq_executed.store(true, std::memory_order_release); };
     zassert_true(wq.submit(cb).ok(), NULL);
     zassert_true(wq.flush(osal::milliseconds{2000}).ok(), NULL);
-    zassert_true(g_wq_executed, NULL);
+    zassert_true(g_wq_executed.load(std::memory_order_acquire), NULL);
 }
 
 ZTEST_SUITE(osal_work_queue, NULL, NULL, NULL, NULL, NULL);
@@ -603,7 +852,7 @@ ZTEST_SUITE(osal_work_queue, NULL, NULL, NULL, NULL, NULL);
 // Delayable Work
 // =========================================================================
 
-static volatile int g_delayable_count = 0;
+static std::atomic<int> g_delayable_count{0};
 
 ZTEST(osal_delayable_work, test_schedule_and_flush)
 {
@@ -615,12 +864,13 @@ ZTEST(osal_delayable_work, test_schedule_and_flush)
     osal::work_queue wq{z_wq_stack, K_THREAD_STACK_SIZEOF(z_wq_stack), 8U, "z_dwq"};
     zassert_true(wq.valid(), NULL);
 
-    g_delayable_count = 0;
-    osal::delayable_work work{wq, +[](void*) { ++g_delayable_count; }, nullptr, "z_dw"};
+    g_delayable_count.store(0, std::memory_order_relaxed);
+    osal::delayable_work work{wq, +[](void*) { (void)g_delayable_count.fetch_add(1, std::memory_order_relaxed); },
+                              nullptr, "z_dw"};
     zassert_true(work.valid(), NULL);
     zassert_true(work.schedule(osal::milliseconds{25}).ok(), NULL);
     zassert_true(work.flush(osal::milliseconds{2000}).ok(), NULL);
-    zassert_equal(g_delayable_count, 1, NULL);
+    zassert_equal(g_delayable_count.load(std::memory_order_relaxed), 1, NULL);
     zassert_false(work.pending(), NULL);
 }
 
@@ -632,7 +882,7 @@ ZTEST_SUITE(osal_delayable_work, NULL, NULL, NULL, NULL, NULL);
 
 ZTEST(osal_object_wait_set, test_queue_readiness_returns_registered_id)
 {
-    osal::object_wait_set      ws;
+    osal::object_wait_set         ws;
     osal::queue<std::uint32_t, 4> q;
     zassert_true(q.valid(), NULL);
     zassert_true(ws.add(q, 17).ok(), NULL);
@@ -647,7 +897,7 @@ ZTEST(osal_object_wait_set, test_queue_readiness_returns_registered_id)
 
 ZTEST(osal_object_wait_set, test_notification_clear_on_exit)
 {
-    osal::object_wait_set  ws;
+    osal::object_wait_set ws;
     osal::notification<2> note;
     zassert_true(note.valid(), NULL);
     zassert_true(ws.add(note, 1U, 29, true).ok(), NULL);
@@ -951,8 +1201,8 @@ ZTEST(osal_c_api, test_message_buffer_round_trip)
 
 ZTEST(osal_c_api, test_notification_round_trip)
 {
-    std::uint32_t             values[2]{};
-    std::uint8_t              pending[2]{};
+    std::uint32_t            values[2]{};
+    std::uint8_t             pending[2]{};
     osal_notification_handle note;
     zassert_equal(osal_c_notification_create(&note, values, pending, 2U), OSAL_OK, NULL);
     zassert_equal(osal_c_notification_notify(&note, 0xBEEFU, OSAL_NOTIFICATION_OVERWRITE, 1U), OSAL_OK, NULL);
@@ -1026,14 +1276,14 @@ static osal::event_flags* g_xthread_ef;
 static void xthread_ef_setter(void*)
 {
     osal::thread::sleep_for(osal::milliseconds{20});
-    g_xthread_ef->set(0x03);
+    (void)g_xthread_ef->set(0x03);
 }
 
 ZTEST(osal_integration, test_cross_thread_event_flags)
 {
     osal::event_flags ef;
     zassert_true(ef.valid(), NULL);
-    ef.clear(0xFFFFFFFFU);
+    (void)ef.clear(0xFFFFFFFFU);
     g_xthread_ef = &ef;
 
     osal::thread        t;
@@ -1059,7 +1309,7 @@ static void xthread_sb_producer(void*)
 {
     osal::thread::sleep_for(osal::milliseconds{20});
     const std::uint8_t data[4] = {0x11, 0x22, 0x33, 0x44};
-    g_xthread_sb->send(data, sizeof(data));
+    (void)g_xthread_sb->send(data, sizeof(data));
 }
 
 ZTEST(osal_integration, test_cross_thread_stream_buffer)
@@ -1092,7 +1342,7 @@ static void xthread_mb_producer(void*)
 {
     osal::thread::sleep_for(osal::milliseconds{20});
     const std::uint8_t msg[4] = {0xDE, 0xAD, 0xBE, 0xEF};
-    g_xthread_mb->send(msg, sizeof(msg));
+    (void)g_xthread_mb->send(msg, sizeof(msg));
 }
 
 ZTEST(osal_integration, test_cross_thread_message_buffer)
@@ -1126,7 +1376,7 @@ ZTEST_SUITE(osal_integration, NULL, NULL, NULL, NULL, NULL);
 
 static osal::mutex*   g_cv_ext_mtx   = nullptr;
 static osal::condvar* g_cv_ext_cv    = nullptr;
-static volatile bool  g_cv_ext_ready = false;
+static bool           g_cv_ext_ready = false;
 
 static void cv_notifier_thread(void*)
 {
@@ -1183,17 +1433,17 @@ ZTEST(osal_condvar, test_wait_for_timeout)
 
 static osal::rwlock*    g_rw_ext = nullptr;
 static std::atomic<int> g_rw_readers_inside{0};
-static volatile bool    g_rw_reader_saw_overlap = false;
+static std::atomic_bool g_rw_reader_saw_overlap{false};
 
 static void rw_concurrent_reader(void*)
 {
-    g_rw_ext->read_lock();
+    (void)g_rw_ext->read_lock();
     g_rw_readers_inside.fetch_add(1, std::memory_order_relaxed);
     osal::thread::sleep_for(osal::milliseconds{40});
     if (g_rw_readers_inside.load(std::memory_order_relaxed) >= 2)
-        g_rw_reader_saw_overlap = true;
+        g_rw_reader_saw_overlap.store(true, std::memory_order_relaxed);
     g_rw_readers_inside.fetch_sub(1, std::memory_order_relaxed);
-    g_rw_ext->read_unlock();
+    (void)g_rw_ext->read_unlock();
 }
 
 ZTEST(osal_rwlock, test_concurrent_readers)
@@ -1202,7 +1452,7 @@ ZTEST(osal_rwlock, test_concurrent_readers)
     zassert_true(rw.valid(), NULL);
     g_rw_ext = &rw;
     g_rw_readers_inside.store(0);
-    g_rw_reader_saw_overlap = false;
+    g_rw_reader_saw_overlap.store(false, std::memory_order_relaxed);
 
     osal::thread        ta, tb;
     osal::thread_config ca{}, cb{};
@@ -1218,7 +1468,8 @@ ZTEST(osal_rwlock, test_concurrent_readers)
     zassert_true(tb.create(cb).ok(), NULL);
     zassert_true(ta.join().ok(), NULL);
     zassert_true(tb.join().ok(), NULL);
-    zassert_true(g_rw_reader_saw_overlap, "two readers should hold read_lock concurrently");
+    zassert_true(g_rw_reader_saw_overlap.load(std::memory_order_relaxed),
+                 "two readers should hold read_lock concurrently");
 }
 
 ZTEST(osal_rwlock, test_write_lock_for_success)
@@ -1227,7 +1478,7 @@ ZTEST(osal_rwlock, test_write_lock_for_success)
     zassert_true(rw.valid(), NULL);
     auto r = rw.write_lock_for(osal::milliseconds{50});
     zassert_true(r.ok(), "write_lock_for on free rwlock should succeed");
-    rw.write_unlock();
+    (void)rw.write_unlock();
 }
 
 ZTEST(osal_rwlock, test_read_guard_write_guard)
@@ -1242,7 +1493,7 @@ ZTEST(osal_rwlock, test_read_guard_write_guard)
     }
     // Both guards released — write_lock should succeed immediately.
     zassert_true(rw.write_lock().ok(), "rwlock should be free after guards destroyed");
-    rw.write_unlock();
+    (void)rw.write_unlock();
 }
 
 // =========================================================================
@@ -1320,13 +1571,11 @@ ZTEST_SUITE(osal_ring_buffer, NULL, NULL, NULL, NULL, NULL);
 
 static osal::thread_local_data* g_tld_obj       = nullptr;
 static int                      g_tld_child_val = 200;
-static volatile bool            g_tld_done      = false;
 
 static void tld_isolation_entry(void*)
 {
     g_tld_obj->set(&g_tld_child_val);
     osal::thread::sleep_for(osal::milliseconds{20});
-    g_tld_done = true;
 }
 
 ZTEST(osal_thread_local_data, test_construction)
@@ -1357,8 +1606,7 @@ ZTEST(osal_thread_local_data, test_per_thread_isolation)
     zassert_true(tld.valid(), NULL);
     int parent_val = 100;
     tld.set(&parent_val);
-    g_tld_obj  = &tld;
-    g_tld_done = false;
+    g_tld_obj = &tld;
 
     osal::thread        t;
     osal::thread_config cfg{};
@@ -1376,11 +1624,91 @@ ZTEST(osal_thread_local_data, test_per_thread_isolation)
 ZTEST_SUITE(osal_thread_local_data, NULL, NULL, NULL, NULL, NULL);
 
 // =========================================================================
-// Wait set (has_wait_set == false on Zephyr — emulated mode)
+// Spinlock (native on Zephyr)
+// =========================================================================
+
+ZTEST(osal_spinlock, test_construction)
+{
+    zassert_true(osal::spinlock::is_supported, "spinlock should advertise native support on Zephyr");
+    osal::spinlock sl;
+    zassert_true(sl.valid(), "spinlock construction should succeed");
+}
+
+ZTEST(osal_spinlock, test_lock_unlock_and_try_lock)
+{
+    osal::spinlock sl;
+    zassert_true(sl.valid(), NULL);
+    zassert_true(sl.lock().ok(), "lock should succeed");
+    sl.unlock();
+    zassert_true(sl.try_lock(), "try_lock should succeed after unlock");
+    sl.unlock();
+}
+
+ZTEST_SUITE(osal_spinlock, NULL, NULL, NULL, NULL, NULL);
+
+// =========================================================================
+// Barrier (shared emulation on Zephyr)
+// =========================================================================
+
+ZTEST(osal_barrier, test_count_one_returns_immediately)
+{
+    osal::barrier barr{1U};
+    zassert_true(barr.valid(), "barrier construction should succeed");
+    const osal::result r = barr.wait();
+    zassert_true(r.ok() || (r == osal::error_code::barrier_serial), "count-1 barrier should release immediately");
+}
+
+ZTEST(osal_barrier, test_two_thread_rendezvous)
+{
+    osal::barrier    barr{2U};
+    std::atomic<int> passed{0};
+    struct ctx_t
+    {
+        osal::barrier*    barrier;
+        std::atomic<int>* passed;
+    } ctx{&barr, &passed};
+
+    zassert_true(barr.valid(), NULL);
+
+    auto worker = [](void* arg)
+    {
+        auto*              ctx = static_cast<ctx_t*>(arg);
+        const osal::result r   = ctx->barrier->wait();
+        if (r.ok() || (r == osal::error_code::barrier_serial))
+        {
+            ctx->passed->fetch_add(1);
+        }
+    };
+
+    osal::thread        ta;
+    osal::thread        tb;
+    osal::thread_config cfg{};
+    cfg.entry       = worker;
+    cfg.arg         = &ctx;
+    cfg.stack       = z_barrier_a_stack;
+    cfg.stack_bytes = K_THREAD_STACK_SIZEOF(z_barrier_a_stack);
+    cfg.name        = "zbarr_a";
+    zassert_true(ta.create(cfg).ok(), NULL);
+
+    cfg.stack       = z_barrier_b_stack;
+    cfg.stack_bytes = K_THREAD_STACK_SIZEOF(z_barrier_b_stack);
+    cfg.name        = "zbarr_b";
+    zassert_true(tb.create(cfg).ok(), NULL);
+
+    zassert_true(ta.join().ok(), NULL);
+    zassert_true(tb.join().ok(), NULL);
+    zassert_equal(passed.load(), 2, "both threads should pass the barrier");
+}
+
+ZTEST_SUITE(osal_barrier, NULL, NULL, NULL, NULL, NULL);
+
+// =========================================================================
+// Wait set (native-only API unsupported on Zephyr)
 // =========================================================================
 
 ZTEST(osal_wait_set, test_construction_valid)
 {
+    zassert_false(osal::wait_set::is_supported, "wait_set should report unsupported on Zephyr");
     osal::wait_set ws;
     // has_wait_set == false → emulated mode → valid_ = true
     zassert_true(ws.valid(), "wait_set should be valid in emulated mode");

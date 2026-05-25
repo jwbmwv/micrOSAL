@@ -24,7 +24,7 @@ namespace osal
 /// @brief Single-slot typed mailbox built on top of osal::queue.
 /// @{
 
-template<typename T>
+template<queue_element T>
 class mailbox
 {
 public:

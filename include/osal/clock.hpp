@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 /// @file clock.hpp
-/// @brief OSAL clock API — monotonic and system clocks
-/// @details Exposes osal::monotonic_clock and osal::system_clock.
+/// @brief OSAL clock API — monotonic, system, and high-resolution clocks
+/// @details Exposes osal::monotonic_clock, osal::system_clock, and the draft
+///          osal::high_resolution_clock API.
 ///          The monotonic clock is always available and guaranteed non-decreasing.
 ///          The system (wall) clock is available on backends with has_system_clock.
 ///
@@ -21,9 +22,9 @@
 /// @ingroup osal_clock
 #pragma once
 
+#include "backends.hpp"
 #include "types.hpp"
 #include <cstdint>
-#include <chrono>
 
 extern "C"
 {
@@ -35,6 +36,10 @@ extern "C"
     osal::tick_t osal_clock_ticks() noexcept;
     /// @brief Returns the duration of one RTOS tick in microseconds.
     std::uint32_t osal_clock_tick_period_us() noexcept;
+    /// @brief Returns the backend high-resolution time source in nanoseconds.
+    std::int64_t osal_clock_high_resolution_ns() noexcept;
+    /// @brief Returns the nominal resolution of the backend high-resolution source in nanoseconds.
+    std::int64_t osal_clock_high_resolution_resolution_ns() noexcept;
 }  // extern "C"
 
 namespace osal
@@ -43,6 +48,129 @@ namespace osal
 /// @defgroup osal_clock OSAL Clock
 /// @brief Monotonic and system clocks with chrono integration.
 /// @{
+
+/// @brief Draft high-resolution clock API.
+/// @details Backends that opt into @c support_requirement::high_resolution_clock
+///          provide a native nanosecond-resolution source. Unsupported backends
+///          fall back to promoted monotonic-clock values. Use require_support()
+///          when a true high-resolution source is mandatory.
+struct high_resolution_clock
+{
+    using rep        = std::int64_t;
+    using period     = std::nano;
+    using duration   = nanoseconds;
+    using time_point = std::chrono::time_point<high_resolution_clock>;
+
+    static constexpr bool is_steady    = true;
+    static constexpr bool is_supported = supports_requirement<support_requirement::high_resolution_clock>;
+
+    /// @brief Enforce high-resolution clock support at compile time.
+    template<typename Backend = active_backend>
+    static consteval void require_support()
+    {
+        require_backend_support<support_requirement::high_resolution_clock, Backend>();
+    }
+
+    /// @brief Returns the current timestamp using the best available draft source.
+    static time_point now() noexcept;
+
+    /// @brief Returns the nominal resolution of the draft source.
+    static duration resolution() noexcept;
+};
+
+namespace detail
+{
+
+template<typename ToDuration, typename Rep, typename Period>
+inline ToDuration ceil_duration(std::chrono::duration<Rep, Period> value) noexcept
+{
+    const ToDuration casted = std::chrono::duration_cast<ToDuration>(value);
+    if (casted < value)
+    {
+        return casted + ToDuration{1};
+    }
+    return casted;
+}
+
+template<typename TimePoint>
+inline TimePoint saturating_add(TimePoint base, typename TimePoint::duration delta) noexcept
+{
+    const auto max_delta = TimePoint::max() - base;
+    return (delta >= max_delta) ? TimePoint::max() : (base + delta);
+}
+
+}  // namespace detail
+
+/// @brief Absolute deadline helper for polling loops and cooperative work slices.
+/// @details Stores an absolute expiry on a steady clock and exposes wrap-safe
+///          expiry and remaining-time queries. The default public alias is
+///          @c osal::monotonic_deadline; @c high_resolution_deadline uses
+///          @c high_resolution_clock and inherits its support/fallback semantics.
+template<typename Clock>
+class basic_deadline
+{
+    static_assert(Clock::is_steady, "osal::basic_deadline requires a steady clock");
+
+public:
+    using clock      = Clock;
+    using duration   = typename clock::duration;
+    using time_point = typename clock::time_point;
+
+    constexpr basic_deadline() noexcept = default;
+
+    /// @brief Creates a deadline relative to @c clock::now().
+    /// @details Positive durations are rounded up to the clock resolution so a
+    ///          non-zero timeout never expires early due to truncation.
+    template<typename Rep, typename Period>
+    static basic_deadline after(std::chrono::duration<Rep, Period> timeout) noexcept
+    {
+        const time_point now = clock::now();
+        if (timeout <= timeout.zero())
+        {
+            return at(now);
+        }
+        return at(detail::saturating_add(now, detail::ceil_duration<duration>(timeout)));
+    }
+
+    /// @brief Creates a deadline that expires at an absolute time point.
+    static constexpr basic_deadline at(time_point when) noexcept { return basic_deadline{when}; }
+
+    /// @brief Returns true when the deadline has expired.
+    bool expired() const noexcept { return expired(clock::now()); }
+
+    /// @brief Returns true when the provided time point reaches or exceeds the deadline.
+    constexpr bool expired(time_point now) const noexcept { return now >= expiry_; }
+
+    /// @brief Returns the remaining time until expiry, saturating at zero.
+    duration remaining() const noexcept { return remaining(clock::now()); }
+
+    /// @brief Returns the remaining time from a supplied time point.
+    constexpr duration remaining(time_point now) const noexcept
+    {
+        return expired(now) ? duration::zero() : (expiry_ - now);
+    }
+
+    /// @brief Returns the absolute expiry time.
+    constexpr time_point expires_at() const noexcept { return expiry_; }
+
+    /// @brief Restarts the deadline relative to @c clock::now().
+    template<typename Rep, typename Period>
+    void restart(std::chrono::duration<Rep, Period> timeout) noexcept
+    {
+        expiry_ = after(timeout).expiry_;
+    }
+
+private:
+    explicit constexpr basic_deadline(time_point when) noexcept : expiry_{when} {}
+
+    time_point expiry_{time_point::min()};
+};
+
+/// @brief Explicit steady deadline alias bound to @c monotonic_clock.
+using monotonic_deadline = basic_deadline<monotonic_clock>;
+
+/// @brief Deadline alias bound to the draft high-resolution clock.
+using high_resolution_deadline = basic_deadline<high_resolution_clock>;
 
 // ---------------------------------------------------------------------------
 // monotonic_clock::now() implementation
@@ -63,6 +191,29 @@ inline system_clock::time_point system_clock::now() noexcept
     // osal_clock_system_ms() returns monotonic ms on backends that lack a
     // wall clock, so no capability check is needed here.
     return time_point{duration{osal_clock_system_ms()}};
+}
+
+// ---------------------------------------------------------------------------
+// high_resolution_clock draft implementation
+// ---------------------------------------------------------------------------
+
+inline high_resolution_clock::time_point high_resolution_clock::now() noexcept
+{
+    if constexpr (is_supported)
+    {
+        return time_point{duration{osal_clock_high_resolution_ns()}};
+    }
+    const auto since_epoch = monotonic_clock::now().time_since_epoch();
+    return time_point{std::chrono::duration_cast<high_resolution_clock::duration>(since_epoch)};
+}
+
+inline high_resolution_clock::duration high_resolution_clock::resolution() noexcept
+{
+    if constexpr (is_supported)
+    {
+        return duration{osal_clock_high_resolution_resolution_ns()};
+    }
+    return std::chrono::duration_cast<high_resolution_clock::duration>(microseconds{osal_clock_tick_period_us()});
 }
 
 // ---------------------------------------------------------------------------

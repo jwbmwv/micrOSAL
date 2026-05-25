@@ -12,6 +12,8 @@
 ///
 /// @copyright Copyright (c) 2026 James Baldwin. AI-assisted — see NOTICE.
 
+#pragma once
+
 // ---------------------------------------------------------------------------
 // Task notification (stub — not natively supported on this backend)
 // ---------------------------------------------------------------------------

@@ -13,7 +13,8 @@
 ///          Availability:
 ///          - Natively supported on POSIX, Linux, NuttX, QNX, RTEMS, and
 ///            INTEGRITY (pthread_barrier_t).
-///          - On all other backends wait() returns error_code::not_supported.
+///          - All other current backends use the shared emulated barrier built
+///            from osal::mutex + osal::condvar.
 ///
 /// @copyright Copyright (c) 2026 James Baldwin. AI-assisted — see NOTICE.
 /// @author James Baldwin
@@ -60,7 +61,7 @@ public:
     ///               are released.  Must be >= 1.
     /// @complexity O(1)
     /// @blocking   Never.
-    explicit barrier(unsigned count) noexcept : valid_(false), handle_{}
+    explicit barrier(unsigned count) noexcept
     {
         if constexpr (active_capabilities::has_barrier)
         {
@@ -93,19 +94,15 @@ public:
     ///         result(error_code::barrier_serial) for the last thread (the
     ///         "serial" thread — conventionally responsible for resetting shared
     ///         state before others proceed);
-    ///         error_code::not_supported on backends without native barrier support.
     /// @complexity O(1)
-    /// @blocking   Until all participants arrive (or not_supported).
-    result wait() noexcept
+    /// @blocking   Until all participants arrive.
+    [[nodiscard]] result wait() noexcept
     {
         if constexpr (active_capabilities::has_barrier)
         {
             return osal_barrier_wait(&handle_);
         }
-        else
-        {
-            return error_code::not_supported;
-        }
+        return error_code::not_supported;
     }
 
     // ---- query -------------------------------------------------------------
@@ -114,8 +111,8 @@ public:
     [[nodiscard]] bool valid() const noexcept { return valid_; }
 
 private:
-    bool                            valid_;
-    active_traits::barrier_handle_t handle_;
+    bool                            valid_{false};
+    active_traits::barrier_handle_t handle_{};
 };
 
 /// @} // osal_barrier

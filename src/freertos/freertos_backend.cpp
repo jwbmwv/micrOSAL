@@ -43,14 +43,53 @@
 #include <cstring>
 #include <new>
 
+#if defined(OSAL_FREERTOS_DYNAMIC_ALLOC)
+#if !defined(configSUPPORT_DYNAMIC_ALLOCATION) || (configSUPPORT_DYNAMIC_ALLOCATION != 1)
+#error "MicrOSAL FreeRTOS backend with OSAL_FREERTOS_DYNAMIC_ALLOC requires configSUPPORT_DYNAMIC_ALLOCATION == 1."
+#endif
+#else
+#if !defined(configSUPPORT_STATIC_ALLOCATION) || (configSUPPORT_STATIC_ALLOCATION != 1)
+#error "MicrOSAL FreeRTOS backend requires configSUPPORT_STATIC_ALLOCATION == 1 for its static object pools."
+#endif
+#endif
+
+#if !defined(configUSE_MUTEXES) || (configUSE_MUTEXES != 1)
+#error "MicrOSAL FreeRTOS backend requires configUSE_MUTEXES == 1."
+#endif
+
+#if !defined(configUSE_RECURSIVE_MUTEXES) || (configUSE_RECURSIVE_MUTEXES != 1)
+#error "MicrOSAL FreeRTOS backend requires configUSE_RECURSIVE_MUTEXES == 1."
+#endif
+
+#if !defined(configUSE_COUNTING_SEMAPHORES) || (configUSE_COUNTING_SEMAPHORES != 1)
+#error "MicrOSAL FreeRTOS backend requires configUSE_COUNTING_SEMAPHORES == 1."
+#endif
+
+#if !defined(configUSE_TIMERS) || (configUSE_TIMERS != 1)
+#error "MicrOSAL FreeRTOS backend requires configUSE_TIMERS == 1."
+#endif
+
+#if !defined(configUSE_EVENT_GROUPS) || (configUSE_EVENT_GROUPS != 1)
+#error "MicrOSAL FreeRTOS backend requires configUSE_EVENT_GROUPS == 1."
+#endif
+
+#if !defined(configUSE_TASK_NOTIFICATIONS) || (configUSE_TASK_NOTIFICATIONS != 1)
+#error "MicrOSAL FreeRTOS backend requires configUSE_TASK_NOTIFICATIONS == 1."
+#endif
+
+static_assert(configMAX_PRIORITIES >= 2, "MicrOSAL FreeRTOS backend requires configMAX_PRIORITIES >= 2.");
+static_assert(configTICK_RATE_HZ > 0, "MicrOSAL FreeRTOS backend requires configTICK_RATE_HZ > 0.");
+
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
 
+namespace
+{
 /// @brief Converts OSAL priority (0–255) to FreeRTOS priority.
 /// @param p OSAL priority value in the range [PRIORITY_LOWEST, PRIORITY_HIGHEST].
 /// @return Equivalent FreeRTOS priority in [0, configMAX_PRIORITIES-1].
-static constexpr UBaseType_t osal_to_freertos_priority(osal::priority_t p) noexcept
+constexpr UBaseType_t osal_to_freertos_priority(osal::priority_t p) noexcept
 {
     // FreeRTOS priority range: 0 (idle) to configMAX_PRIORITIES-1.
     constexpr osal::priority_t OSAL_MAX = osal::PRIORITY_HIGHEST;
@@ -61,14 +100,33 @@ static constexpr UBaseType_t osal_to_freertos_priority(osal::priority_t p) noexc
 /// @brief Converts an OSAL tick count to a FreeRTOS @c TickType_t, mapping @c WAIT_FOREVER to @c portMAX_DELAY.
 /// @param t OSAL tick count or @c osal::WAIT_FOREVER.
 /// @return Equivalent @c TickType_t for use with FreeRTOS blocking APIs.
-static constexpr TickType_t to_freertos_ticks(osal::tick_t t) noexcept
+constexpr TickType_t to_freertos_ticks(osal::tick_t t) noexcept
 {
     if (t == osal::WAIT_FOREVER)
     {
         return portMAX_DELAY;
     }
-    return static_cast<TickType_t>(t);
+    return static_cast<TickType_t>(
+        t);  // NOLINT(bugprone-narrowing-conversions,cppcoreguidelines-narrowing-conversions)
 }
+
+/// @brief Converts a FreeRTOS priority back into the OSAL 0..255 range.
+constexpr osal::priority_t freertos_to_osal_priority(UBaseType_t priority) noexcept
+{
+    constexpr UBaseType_t fr_max = static_cast<UBaseType_t>(configMAX_PRIORITIES - 1U);
+    if (fr_max == 0U)
+    {
+        return osal::PRIORITY_NORMAL;
+    }
+
+    if (priority > fr_max)
+    {
+        priority = fr_max;
+    }
+
+    return static_cast<osal::priority_t>((static_cast<std::uint32_t>(priority) * osal::PRIORITY_HIGHEST) / fr_max);
+}
+}  // namespace
 
 // ---------------------------------------------------------------------------
 // Timer callback pair pool (used in both static and dynamic allocation modes)
@@ -77,6 +135,8 @@ static constexpr TickType_t to_freertos_ticks(osal::tick_t t) noexcept
 #define OSAL_FREERTOS_MAX_TIMERS 8
 #endif
 
+static_assert(OSAL_FREERTOS_MAX_TIMERS > 0, "OSAL_FREERTOS_MAX_TIMERS must be > 0.");
+
 namespace
 {
 struct fr_cb_pair
@@ -84,7 +144,7 @@ struct fr_cb_pair
     osal_timer_callback_t fn{nullptr};
     void*                 a{nullptr};
 };
-static fr_cb_pair fr_cb_pairs[OSAL_FREERTOS_MAX_TIMERS];
+fr_cb_pair fr_cb_pairs[OSAL_FREERTOS_MAX_TIMERS];
 }  // namespace
 
 // ---------------------------------------------------------------------------
@@ -117,30 +177,40 @@ static fr_cb_pair fr_cb_pairs[OSAL_FREERTOS_MAX_TIMERS];
 #define OSAL_FREERTOS_MAX_THREADS 8
 #endif
 
-static StaticSemaphore_t fr_mutex_pool[OSAL_FREERTOS_MAX_MUTEXES];
-static bool              fr_mutex_used[OSAL_FREERTOS_MAX_MUTEXES];
+static_assert(OSAL_FREERTOS_MAX_MUTEXES > 0, "OSAL_FREERTOS_MAX_MUTEXES must be > 0.");
+static_assert(OSAL_FREERTOS_MAX_SEMAPHORES > 0, "OSAL_FREERTOS_MAX_SEMAPHORES must be > 0.");
+static_assert(OSAL_FREERTOS_MAX_TIMERS > 0, "OSAL_FREERTOS_MAX_TIMERS must be > 0.");
+static_assert(OSAL_FREERTOS_MAX_EVENT_GROUPS > 0, "OSAL_FREERTOS_MAX_EVENT_GROUPS must be > 0.");
+static_assert(OSAL_FREERTOS_MAX_STREAM_BUFFERS > 0, "OSAL_FREERTOS_MAX_STREAM_BUFFERS must be > 0.");
+static_assert(OSAL_FREERTOS_MAX_MESSAGE_BUFFERS > 0, "OSAL_FREERTOS_MAX_MESSAGE_BUFFERS must be > 0.");
+static_assert(OSAL_FREERTOS_MAX_THREADS > 0, "OSAL_FREERTOS_MAX_THREADS must be > 0.");
 
-static StaticSemaphore_t fr_sem_pool[OSAL_FREERTOS_MAX_SEMAPHORES];
-static bool              fr_sem_used[OSAL_FREERTOS_MAX_SEMAPHORES];
+namespace
+{
+StaticSemaphore_t fr_mutex_pool[OSAL_FREERTOS_MAX_MUTEXES];
+bool              fr_mutex_used[OSAL_FREERTOS_MAX_MUTEXES];
 
-static StaticTimer_t fr_timer_pool[OSAL_FREERTOS_MAX_TIMERS];
-static bool          fr_timer_used[OSAL_FREERTOS_MAX_TIMERS];
+StaticSemaphore_t fr_sem_pool[OSAL_FREERTOS_MAX_SEMAPHORES];
+bool              fr_sem_used[OSAL_FREERTOS_MAX_SEMAPHORES];
 
-static StaticEventGroup_t fr_event_pool[OSAL_FREERTOS_MAX_EVENT_GROUPS];
-static bool               fr_event_used[OSAL_FREERTOS_MAX_EVENT_GROUPS];
+StaticTimer_t fr_timer_pool[OSAL_FREERTOS_MAX_TIMERS];
+bool          fr_timer_used[OSAL_FREERTOS_MAX_TIMERS];
 
-static StaticStreamBuffer_t fr_sbuf_pool[OSAL_FREERTOS_MAX_STREAM_BUFFERS];
-static bool                 fr_sbuf_used[OSAL_FREERTOS_MAX_STREAM_BUFFERS];
+StaticEventGroup_t fr_event_pool[OSAL_FREERTOS_MAX_EVENT_GROUPS];
+bool               fr_event_used[OSAL_FREERTOS_MAX_EVENT_GROUPS];
+
+StaticStreamBuffer_t fr_sbuf_pool[OSAL_FREERTOS_MAX_STREAM_BUFFERS];
+bool                 fr_sbuf_used[OSAL_FREERTOS_MAX_STREAM_BUFFERS];
 
 // Note: MessageBufferHandle_t == StreamBufferHandle_t in FreeRTOS; we use a
 // separate pool of StaticStreamBuffer_t for message buffers so the pool slots
 // remain disjoint (prevents accidental aliasing between the two object types).
-static StaticStreamBuffer_t fr_mbuf_pool[OSAL_FREERTOS_MAX_MESSAGE_BUFFERS];
-static bool                 fr_mbuf_used[OSAL_FREERTOS_MAX_MESSAGE_BUFFERS];
+StaticStreamBuffer_t fr_mbuf_pool[OSAL_FREERTOS_MAX_MESSAGE_BUFFERS];
+bool                 fr_mbuf_used[OSAL_FREERTOS_MAX_MESSAGE_BUFFERS];
 
 /// @brief Acquire a free slot from a static pool.
 template<typename T, std::size_t N>
-static T* fr_pool_acquire(T (&pool)[N], bool (&used)[N]) noexcept
+T* fr_pool_acquire(T (&pool)[N], bool (&used)[N]) noexcept
 {
     for (std::size_t i = 0U; i < N; ++i)
     {
@@ -155,7 +225,7 @@ static T* fr_pool_acquire(T (&pool)[N], bool (&used)[N]) noexcept
 
 /// @brief Release a slot back to a static pool.
 template<typename T, std::size_t N>
-static void fr_pool_release(T (&pool)[N], bool (&used)[N], T* p) noexcept
+void fr_pool_release(T (&pool)[N], bool (&used)[N], T* p) noexcept
 {
     for (std::size_t i = 0U; i < N; ++i)
     {
@@ -166,6 +236,7 @@ static void fr_pool_release(T (&pool)[N], bool (&used)[N], T* p) noexcept
         }
     }
 }
+}  // namespace
 
 #endif  // !OSAL_FREERTOS_DYNAMIC_ALLOC
 
@@ -187,10 +258,12 @@ struct fr_thread_ctx_t
 };
 
 #if !defined(OSAL_FREERTOS_DYNAMIC_ALLOC)
-static fr_thread_ctx_t  fr_thread_ctx_pool[OSAL_FREERTOS_MAX_THREADS];
-static std::atomic_bool fr_thread_ctx_used[OSAL_FREERTOS_MAX_THREADS];
+namespace
+{
+fr_thread_ctx_t  fr_thread_ctx_pool[OSAL_FREERTOS_MAX_THREADS];
+std::atomic_bool fr_thread_ctx_used[OSAL_FREERTOS_MAX_THREADS];
 
-static fr_thread_ctx_t* fr_thread_ctx_acquire() noexcept
+fr_thread_ctx_t* fr_thread_ctx_acquire() noexcept
 {
     for (std::size_t i = 0U; i < OSAL_FREERTOS_MAX_THREADS; ++i)
     {
@@ -202,7 +275,7 @@ static fr_thread_ctx_t* fr_thread_ctx_acquire() noexcept
     return nullptr;
 }
 
-static void fr_thread_ctx_release(fr_thread_ctx_t* ctx) noexcept
+void fr_thread_ctx_release(fr_thread_ctx_t* ctx) noexcept
 {
     for (std::size_t i = 0U; i < OSAL_FREERTOS_MAX_THREADS; ++i)
     {
@@ -213,9 +286,12 @@ static void fr_thread_ctx_release(fr_thread_ctx_t* ctx) noexcept
         }
     }
 }
+}  // namespace
 #endif
 
-static void fr_thread_ctx_destroy(fr_thread_ctx_t* ctx) noexcept
+namespace
+{
+void fr_thread_ctx_destroy(fr_thread_ctx_t* ctx) noexcept
 {
     if (ctx == nullptr)
     {
@@ -235,7 +311,7 @@ static void fr_thread_ctx_destroy(fr_thread_ctx_t* ctx) noexcept
 #endif
 }
 
-static fr_thread_ctx_t* fr_thread_ctx_from_handle(osal::active_traits::thread_handle_t* handle) noexcept
+fr_thread_ctx_t* fr_thread_ctx_from_handle(osal::active_traits::thread_handle_t* handle) noexcept
 {
     if (handle == nullptr || handle->native == nullptr)
     {
@@ -244,7 +320,26 @@ static fr_thread_ctx_t* fr_thread_ctx_from_handle(osal::active_traits::thread_ha
     return static_cast<fr_thread_ctx_t*>(handle->native);
 }
 
-static TaskHandle_t fr_task_from_handle(osal::active_traits::thread_handle_t* handle) noexcept
+const fr_thread_ctx_t* fr_thread_ctx_from_handle(const osal::active_traits::thread_handle_t* handle) noexcept
+{
+    if (handle == nullptr || handle->native == nullptr)
+    {
+        return nullptr;
+    }
+    return static_cast<const fr_thread_ctx_t*>(handle->native);
+}
+
+TaskHandle_t fr_task_from_handle(osal::active_traits::thread_handle_t* handle) noexcept
+{
+    auto* ctx = fr_thread_ctx_from_handle(handle);
+    if (ctx == nullptr || ctx->finished.load(std::memory_order_acquire))
+    {
+        return nullptr;
+    }
+    return ctx->task;
+}
+
+TaskHandle_t fr_task_from_handle(const osal::active_traits::thread_handle_t* handle) noexcept
 {
     auto* ctx = fr_thread_ctx_from_handle(handle);
     if (ctx == nullptr || ctx->finished.load(std::memory_order_acquire))
@@ -255,7 +350,7 @@ static TaskHandle_t fr_task_from_handle(osal::active_traits::thread_handle_t* ha
 }
 
 /// @brief FreeRTOS task body: runs user_entry then signals done_sem.
-static void fr_thread_wrapper_fn(void* arg) noexcept
+void fr_thread_wrapper_fn(void* arg) noexcept
 {
     auto* ctx = static_cast<fr_thread_ctx_t*>(arg);
     ctx->user_entry(ctx->user_arg);
@@ -274,6 +369,7 @@ static void fr_thread_wrapper_fn(void* arg) noexcept
 
     vTaskDelete(nullptr);  // self-delete
 }
+}  // namespace
 
 // ---------------------------------------------------------------------------
 // Clock
@@ -407,7 +503,8 @@ extern "C"
 
         auto* tcb = static_cast<StaticTask_t*>(stack);  // first sizeof(StaticTask_t) bytes
         auto* stk = reinterpret_cast<StackType_t*>(static_cast<std::uint8_t*>(stack) + sizeof(StaticTask_t));
-        const std::uint32_t real_words = (stack_bytes - sizeof(StaticTask_t)) / sizeof(StackType_t);
+        const std::uint32_t real_words =  // NOLINT(cppcoreguidelines-init-variables)
+            static_cast<std::uint32_t>((stack_bytes - sizeof(StaticTask_t)) / sizeof(StackType_t));
 
         th = xTaskCreateStatic(fr_thread_wrapper_fn, (name != nullptr) ? name : "osal", real_words, ctx, fr_prio, stk,
                                tcb);
@@ -497,6 +594,119 @@ extern "C"
         return osal::error_code::not_supported;
     }
 
+    /// @brief Return a comparable opaque identifier for a FreeRTOS task.
+    osal::result osal_thread_get_id(const osal::active_traits::thread_handle_t* handle,
+                                    osal::thread_id_t*                          out_id) noexcept
+    {
+        if (out_id == nullptr)
+        {
+            return osal::error_code::invalid_argument;
+        }
+
+#if defined(INCLUDE_xTaskGetCurrentTaskHandle) && (INCLUDE_xTaskGetCurrentTaskHandle == 1)
+        TaskHandle_t task = xTaskGetCurrentTaskHandle();
+        if (handle != nullptr)
+        {
+            task = fr_task_from_handle(handle);
+            if (task == nullptr)
+            {
+                return osal::error_code::not_initialized;
+            }
+        }
+
+        *out_id = reinterpret_cast<osal::thread_id_t>(task);
+        return osal::ok();
+#else
+        (void)handle;
+        *out_id = osal::INVALID_THREAD_ID;
+        return osal::error_code::not_supported;
+#endif
+    }
+
+    /// @brief Query the current priority of a FreeRTOS task.
+    osal::result osal_thread_get_priority(const osal::active_traits::thread_handle_t* handle,
+                                          osal::priority_t*                           out_priority) noexcept
+    {
+        if (out_priority == nullptr)
+        {
+            return osal::error_code::invalid_argument;
+        }
+
+#if defined(INCLUDE_uxTaskPriorityGet) && (INCLUDE_uxTaskPriorityGet == 1)
+        TaskHandle_t task = nullptr;
+        if (handle != nullptr)
+        {
+            task = fr_task_from_handle(handle);
+            if (task == nullptr)
+            {
+                return osal::error_code::not_initialized;
+            }
+        }
+
+        *out_priority = freertos_to_osal_priority(uxTaskPriorityGet(task));
+        return osal::ok();
+#else
+        (void)handle;
+        *out_priority = osal::PRIORITY_NORMAL;
+        return osal::error_code::not_supported;
+#endif
+    }
+
+    /// @brief Returns the stack low-watermark for a FreeRTOS task.
+    /// @details Uses the best available FreeRTOS high-water-mark API and
+    ///          converts the returned word count to bytes.
+    osal::result osal_thread_stack_low_watermark_bytes(const osal::active_traits::thread_handle_t* handle,
+                                                       std::size_t*                                out_bytes) noexcept
+    {
+        if (out_bytes == nullptr)
+        {
+            return osal::error_code::invalid_argument;
+        }
+
+#if (defined(INCLUDE_uxTaskGetStackHighWaterMark2) && (INCLUDE_uxTaskGetStackHighWaterMark2 == 1)) || \
+    (defined(INCLUDE_uxTaskGetStackHighWaterMark) && (INCLUDE_uxTaskGetStackHighWaterMark == 1))
+        TaskHandle_t task = nullptr;
+        if (handle != nullptr)
+        {
+            if (handle->native == nullptr)
+            {
+                return osal::error_code::not_initialized;
+            }
+
+            auto* const ctx = static_cast<const fr_thread_ctx_t*>(handle->native);
+            if (ctx->finished.load(std::memory_order_acquire) || ctx->task == nullptr)
+            {
+                return osal::error_code::not_initialized;
+            }
+            task = ctx->task;
+        }
+
+#if defined(INCLUDE_uxTaskGetStackHighWaterMark2) && (INCLUDE_uxTaskGetStackHighWaterMark2 == 1)
+        const auto watermark_words = uxTaskGetStackHighWaterMark2(task);
+#else
+        const auto watermark_words = uxTaskGetStackHighWaterMark(task);
+#endif
+        *out_bytes = static_cast<std::size_t>(watermark_words) * sizeof(StackType_t);
+        return osal::ok();
+#else
+        (void)handle;
+        *out_bytes = 0U;
+        return osal::error_code::not_supported;
+#endif
+    }
+
+    /// @brief Returns the execution time for a FreeRTOS task.
+    /// @details Runtime-stat collection is disabled in the current test config.
+    osal::result osal_thread_execution_time_us(const osal::active_traits::thread_handle_t* /*handle*/,
+                                               std::int64_t* out_us) noexcept
+    {
+        if (out_us != nullptr)
+        {
+            *out_us = 0;
+        }
+        return osal::error_code::not_supported;
+    }
+
     /// @brief Suspends a task, preventing it from being scheduled.
     /// @details Requires @c INCLUDE_vTaskSuspend == 1 in @c FreeRTOSConfig.h.
     /// @param handle Handle of the task to suspend.
@@ -567,7 +777,7 @@ extern "C"
     osal::result osal_mutex_create(osal::active_traits::mutex_handle_t* handle, bool recursive) noexcept
     {
         assert(handle != nullptr);
-        SemaphoreHandle_t sem;
+        SemaphoreHandle_t sem = nullptr;
         if (recursive)
         {
 #if defined(OSAL_FREERTOS_DYNAMIC_ALLOC)
@@ -674,7 +884,7 @@ extern "C"
                                        unsigned max_count) noexcept
     {
         assert(handle != nullptr);
-        SemaphoreHandle_t sem;
+        SemaphoreHandle_t sem = nullptr;
 #if defined(OSAL_FREERTOS_DYNAMIC_ALLOC)
         if (max_count == 1U)
         {
@@ -1000,7 +1210,7 @@ extern "C"
 
         auto fr_callback = [](TimerHandle_t th)
         {
-            auto* pair = static_cast<fr_cb_pair*>(pvTimerGetTimerID(th));
+            const auto* pair = static_cast<fr_cb_pair*>(pvTimerGetTimerID(th));
             if (pair != nullptr && pair->fn != nullptr)
             {
                 pair->fn(pair->a);
@@ -1036,7 +1246,7 @@ extern "C"
     {
         if (handle != nullptr && handle->native != nullptr)
         {
-            auto th = static_cast<TimerHandle_t>(handle->native);
+            auto* th = static_cast<TimerHandle_t>(handle->native);
             // Release the callback pair slot.
             auto* pair = static_cast<fr_cb_pair*>(pvTimerGetTimerID(th));
             if (pair != nullptr)
@@ -1372,7 +1582,7 @@ extern "C"
     osal::result osal_stream_buffer_create(osal::active_traits::stream_buffer_handle_t* handle, void* buffer,
                                            std::size_t capacity, std::size_t trigger_level) noexcept
     {
-        if (!handle || !buffer || capacity == 0U)
+        if (handle == nullptr || buffer == nullptr || capacity == 0U)
         {
             return osal::error_code::invalid_argument;
         }
@@ -1380,14 +1590,14 @@ extern "C"
 
 #if !defined(OSAL_FREERTOS_DYNAMIC_ALLOC)
         StaticStreamBuffer_t* scb = fr_pool_acquire(fr_sbuf_pool, fr_sbuf_used);
-        if (!scb)
+        if (scb == nullptr)
         {
             return osal::error_code::out_of_resources;
         }
         // storage must be capacity+1 bytes (one sentinel slot for the SPSC ring).
         StreamBufferHandle_t h = xStreamBufferCreateStatic(static_cast<std::size_t>(capacity), trig,
                                                            static_cast<std::uint8_t*>(buffer), scb);
-        if (!h)
+        if (h == nullptr)
         {
             fr_pool_release(fr_sbuf_pool, fr_sbuf_used, scb);
             return osal::error_code::out_of_resources;
@@ -1395,7 +1605,7 @@ extern "C"
 #else
         (void)buffer;
         StreamBufferHandle_t h = xStreamBufferCreate(static_cast<std::size_t>(capacity), trig);
-        if (!h)
+        if (h == nullptr)
         {
             return osal::error_code::out_of_resources;
         }
@@ -1409,7 +1619,7 @@ extern "C"
     /// @return @c osal::ok() on success; @c error_code::not_initialized if the handle is null.
     osal::result osal_stream_buffer_destroy(osal::active_traits::stream_buffer_handle_t* handle) noexcept
     {
-        if (!handle || !handle->native)
+        if (handle == nullptr || handle->native == nullptr)
         {
             return osal::error_code::not_initialized;
         }
@@ -1432,12 +1642,13 @@ extern "C"
     osal::result osal_stream_buffer_send(osal::active_traits::stream_buffer_handle_t* handle, const void* data,
                                          std::size_t len, osal::tick_t timeout_ticks) noexcept
     {
-        if (!handle || !handle->native || !data || len == 0U)
+        if (handle == nullptr || handle->native == nullptr || data == nullptr || len == 0U)
         {
             return osal::error_code::invalid_argument;
         }
         auto*             h    = static_cast<StreamBufferHandle_t>(handle->native);
-        const std::size_t sent = xStreamBufferSend(h, data, len, to_freertos_ticks(timeout_ticks));
+        const std::size_t sent = xStreamBufferSend(
+            h, data, len, to_freertos_ticks(timeout_ticks));  // NOLINT(cppcoreguidelines-init-variables)
         return (sent == len) ? osal::ok() : osal::error_code::timeout;
     }
 
@@ -1451,7 +1662,7 @@ extern "C"
     osal::result osal_stream_buffer_send_isr(osal::active_traits::stream_buffer_handle_t* handle, const void* data,
                                              std::size_t len) noexcept
     {
-        if (!handle || !handle->native || !data || len == 0U)
+        if (handle == nullptr || handle->native == nullptr || data == nullptr || len == 0U)
         {
             return osal::error_code::invalid_argument;
         }
@@ -1471,7 +1682,7 @@ extern "C"
     std::size_t osal_stream_buffer_receive(osal::active_traits::stream_buffer_handle_t* handle, void* buf,
                                            std::size_t max_len, osal::tick_t timeout_ticks) noexcept
     {
-        if (!handle || !handle->native || !buf || max_len == 0U)
+        if (handle == nullptr || handle->native == nullptr || buf == nullptr || max_len == 0U)
         {
             return 0U;
         }
@@ -1488,7 +1699,7 @@ extern "C"
     std::size_t osal_stream_buffer_receive_isr(osal::active_traits::stream_buffer_handle_t* handle, void* buf,
                                                std::size_t max_len) noexcept
     {
-        if (!handle || !handle->native || !buf || max_len == 0U)
+        if (handle == nullptr || handle->native == nullptr || buf == nullptr || max_len == 0U)
         {
             return 0U;
         }
@@ -1504,7 +1715,7 @@ extern "C"
     /// @return Bytes available, or 0 if the handle is null.
     std::size_t osal_stream_buffer_available(const osal::active_traits::stream_buffer_handle_t* handle) noexcept
     {
-        if (!handle || !handle->native)
+        if (handle == nullptr || handle->native == nullptr)
         {
             return 0U;
         }
@@ -1516,7 +1727,7 @@ extern "C"
     /// @return Free bytes, or 0 if the handle is null.
     std::size_t osal_stream_buffer_free_space(const osal::active_traits::stream_buffer_handle_t* handle) noexcept
     {
-        if (!handle || !handle->native)
+        if (handle == nullptr || handle->native == nullptr)
         {
             return 0U;
         }
@@ -1530,7 +1741,7 @@ extern "C"
     /// @return @c osal::ok() on success; @c error_code::not_initialized if the handle is null.
     osal::result osal_stream_buffer_reset(osal::active_traits::stream_buffer_handle_t* handle) noexcept
     {
-        if (!handle || !handle->native)
+        if (handle == nullptr || handle->native == nullptr)
         {
             return osal::error_code::not_initialized;
         }
@@ -1554,20 +1765,20 @@ extern "C"
     osal::result osal_message_buffer_create(osal::active_traits::message_buffer_handle_t* handle, void* buffer,
                                             std::size_t capacity) noexcept
     {
-        if (!handle || !buffer || capacity == 0U)
+        if (handle == nullptr || buffer == nullptr || capacity == 0U)
         {
             return osal::error_code::invalid_argument;
         }
 
 #if !defined(OSAL_FREERTOS_DYNAMIC_ALLOC)
         StaticStreamBuffer_t* scb = fr_pool_acquire(fr_mbuf_pool, fr_mbuf_used);
-        if (!scb)
+        if (scb == nullptr)
         {
             return osal::error_code::out_of_resources;
         }
         MessageBufferHandle_t h =
             xMessageBufferCreateStatic(static_cast<std::size_t>(capacity), static_cast<std::uint8_t*>(buffer), scb);
-        if (!h)
+        if (h == nullptr)
         {
             fr_pool_release(fr_mbuf_pool, fr_mbuf_used, scb);
             return osal::error_code::out_of_resources;
@@ -1575,7 +1786,7 @@ extern "C"
 #else
         (void)buffer;
         MessageBufferHandle_t h = xMessageBufferCreate(static_cast<std::size_t>(capacity));
-        if (!h)
+        if (h == nullptr)
         {
             return osal::error_code::out_of_resources;
         }
@@ -1589,7 +1800,7 @@ extern "C"
     /// @return @c osal::ok() on success; @c error_code::not_initialized if the handle is null.
     osal::result osal_message_buffer_destroy(osal::active_traits::message_buffer_handle_t* handle) noexcept
     {
-        if (!handle || !handle->native)
+        if (handle == nullptr || handle->native == nullptr)
         {
             return osal::error_code::not_initialized;
         }
@@ -1613,12 +1824,13 @@ extern "C"
     osal::result osal_message_buffer_send(osal::active_traits::message_buffer_handle_t* handle, const void* msg,
                                           std::size_t len, osal::tick_t timeout_ticks) noexcept
     {
-        if (!handle || !handle->native || !msg || len == 0U)
+        if (handle == nullptr || handle->native == nullptr || msg == nullptr || len == 0U)
         {
             return osal::error_code::invalid_argument;
         }
         auto*             h    = static_cast<MessageBufferHandle_t>(handle->native);
-        const std::size_t sent = xMessageBufferSend(h, msg, len, to_freertos_ticks(timeout_ticks));
+        const std::size_t sent = xMessageBufferSend(
+            h, msg, len, to_freertos_ticks(timeout_ticks));  // NOLINT(cppcoreguidelines-init-variables)
         return (sent == len) ? osal::ok() : osal::error_code::timeout;
     }
 
@@ -1632,7 +1844,7 @@ extern "C"
     osal::result osal_message_buffer_send_isr(osal::active_traits::message_buffer_handle_t* handle, const void* msg,
                                               std::size_t len) noexcept
     {
-        if (!handle || !handle->native || !msg || len == 0U)
+        if (handle == nullptr || handle->native == nullptr || msg == nullptr || len == 0U)
         {
             return osal::error_code::invalid_argument;
         }
@@ -1652,7 +1864,7 @@ extern "C"
     std::size_t osal_message_buffer_receive(osal::active_traits::message_buffer_handle_t* handle, void* buf,
                                             std::size_t max_len, osal::tick_t timeout_ticks) noexcept
     {
-        if (!handle || !handle->native || !buf || max_len == 0U)
+        if (handle == nullptr || handle->native == nullptr || buf == nullptr || max_len == 0U)
         {
             return 0U;
         }
@@ -1669,7 +1881,7 @@ extern "C"
     std::size_t osal_message_buffer_receive_isr(osal::active_traits::message_buffer_handle_t* handle, void* buf,
                                                 std::size_t max_len) noexcept
     {
-        if (!handle || !handle->native || !buf || max_len == 0U)
+        if (handle == nullptr || handle->native == nullptr || buf == nullptr || max_len == 0U)
         {
             return 0U;
         }
@@ -1686,7 +1898,7 @@ extern "C"
     /// @return Byte count of the next message, or 0 if the buffer is empty or the handle is null.
     std::size_t osal_message_buffer_available(const osal::active_traits::message_buffer_handle_t* handle) noexcept
     {
-        if (!handle || !handle->native)
+        if (handle == nullptr || handle->native == nullptr)
         {
             return 0U;
         }
@@ -1700,7 +1912,7 @@ extern "C"
     /// @return Free bytes, or 0 if the handle is null.
     std::size_t osal_message_buffer_free_space(const osal::active_traits::message_buffer_handle_t* handle) noexcept
     {
-        if (!handle || !handle->native)
+        if (handle == nullptr || handle->native == nullptr)
         {
             return 0U;
         }
@@ -1713,7 +1925,7 @@ extern "C"
     /// @return @c osal::ok() on success; @c error_code::not_initialized if the handle is null.
     osal::result osal_message_buffer_reset(osal::active_traits::message_buffer_handle_t* handle) noexcept
     {
-        if (!handle || !handle->native)
+        if (handle == nullptr || handle->native == nullptr)
         {
             return osal::error_code::not_initialized;
         }

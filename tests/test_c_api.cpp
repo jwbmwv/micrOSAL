@@ -55,6 +55,41 @@ TEST_CASE("c_api: clock ticks returns non-zero value")
     CHECK(t >= 0);
 }
 
+TEST_CASE("c_api: monotonic deadline helper expires and saturates as expected")
+{
+    const osal_monotonic_deadline immediate = osal_c_monotonic_deadline_after_ms(0);
+    CHECK(osal_c_monotonic_deadline_expired(immediate) == 1);
+    CHECK(osal_c_monotonic_deadline_remaining_ms(immediate) == 0);
+
+    const osal_monotonic_deadline future = osal_c_monotonic_deadline_after_ms(100);
+    CHECK(osal_c_monotonic_deadline_expired(future) == 0);
+    CHECK(osal_c_monotonic_deadline_remaining_ms(future) > 0);
+
+    osal_monotonic_deadline restarted = osal_c_monotonic_deadline_at_ms(osal_c_clock_monotonic_ms());
+    osal_c_monotonic_deadline_restart_ms(&restarted, 50);
+    CHECK(osal_c_monotonic_deadline_remaining_ms(restarted) > 0);
+}
+
+TEST_CASE("c_api: high-resolution clock and deadline helper mirror C++ support")
+{
+    CHECK(osal_c_clock_high_resolution_supported() == static_cast<int>(osal::high_resolution_clock::is_supported));
+    CHECK(osal_c_clock_high_resolution_resolution_ns() == osal::high_resolution_clock::resolution().count());
+
+    const osal_high_resolution_deadline immediate = osal_c_high_resolution_deadline_after_us(0);
+    CHECK(osal_c_high_resolution_deadline_expired(immediate) == 1);
+    CHECK(osal_c_high_resolution_deadline_remaining_ns(immediate) == 0);
+    CHECK(osal_c_high_resolution_deadline_remaining_us(immediate) == 0);
+
+    const osal_high_resolution_deadline future = osal_c_high_resolution_deadline_after_us(2000);
+    CHECK(osal_c_high_resolution_deadline_expired(future) == 0);
+    CHECK(osal_c_high_resolution_deadline_remaining_ns(future) > 0);
+    CHECK(osal_c_high_resolution_deadline_remaining_us(future) > 0);
+
+    osal_high_resolution_deadline restarted = osal_c_high_resolution_deadline_at_ns(osal_c_clock_high_resolution_ns());
+    osal_c_high_resolution_deadline_restart_us(&restarted, 1000);
+    CHECK(osal_c_high_resolution_deadline_remaining_us(restarted) > 0);
+}
+
 // =========================================================================
 // Mutex
 // =========================================================================
@@ -116,7 +151,7 @@ TEST_CASE("c_api: semaphore round-trip")
 TEST_CASE("c_api: queue send / receive / count / free")
 {
     osal_queue_handle q;
-    int queue_buf[4]; // backing storage
+    int               queue_buf[4];  // backing storage
     REQUIRE(osal_c_queue_create(&q, queue_buf, sizeof(int), 4) == OSAL_OK);
 
     int val = 99;
@@ -149,16 +184,16 @@ alignas(16) static std::uint8_t c_api_cfg_thread_stack[65536];
 
 TEST_CASE("c_api: thread create / join")
 {
-    std::atomic<int> flag{0};
+    std::atomic<int>   flag{0};
     osal_thread_handle thr;
-    void*  stack       = nullptr;
-    size_t stack_bytes = 0U;
+    void*              stack       = nullptr;
+    size_t             stack_bytes = 0U;
 #if defined(OSAL_BACKEND_BAREMETAL)
     stack       = c_api_thread_stack;
     stack_bytes = sizeof(c_api_thread_stack);
 #endif
-    osal_result_t rc = osal_c_thread_create(&thr, thread_entry, &flag, OSAL_PRIORITY_NORMAL, 0, stack, stack_bytes,
-                                            "c_test");
+    osal_result_t rc =
+        osal_c_thread_create(&thr, thread_entry, &flag, OSAL_PRIORITY_NORMAL, 0, stack, stack_bytes, "c_test");
     REQUIRE(rc == OSAL_OK);
     CHECK(osal_c_thread_join(&thr, OSAL_WAIT_FOREVER) == OSAL_OK);
     CHECK(flag.load() == 1);
@@ -201,16 +236,18 @@ TEST_CASE("c_api: tls values are isolated per thread")
     }
     REQUIRE(create_rc == OSAL_OK);
 
-    int main_value = 1;
+    int main_value   = 1;
     int worker_value = 2;
     REQUIRE(osal_c_tls_set(&tls, &main_value) == OSAL_OK);
     REQUIRE(osal_c_tls_get(&tls) == &main_value);
 
-    std::thread worker([&]() {
-        CHECK(osal_c_tls_get(&tls) == nullptr);
-        CHECK(osal_c_tls_set(&tls, &worker_value) == OSAL_OK);
-        CHECK(osal_c_tls_get(&tls) == &worker_value);
-    });
+    std::thread worker(
+        [&]()
+        {
+            CHECK(osal_c_tls_get(&tls) == nullptr);
+            CHECK(osal_c_tls_set(&tls, &worker_value) == OSAL_OK);
+            CHECK(osal_c_tls_get(&tls) == &worker_value);
+        });
     worker.join();
 
     CHECK(osal_c_tls_get(&tls) == &main_value);
@@ -229,9 +266,9 @@ static void timer_cb(void* arg)
 
 TEST_CASE("c_api: timer one-shot fires")
 {
-    std::atomic<int> count{0};
+    std::atomic<int>  count{0};
     osal_timer_handle tmr;
-    osal_tick_t period = 10; // 10 ticks
+    osal_tick_t       period = 10;  // 10 ticks
     REQUIRE(osal_c_timer_create(&tmr, "c_tmr", timer_cb, &count, period, 0) == OSAL_OK);
     CHECK(osal_c_timer_start(&tmr) == OSAL_OK);
     osal_c_thread_sleep_ms(200);
@@ -277,8 +314,8 @@ TEST_CASE("c_api: condvar notify without waiters succeeds")
 
 TEST_CASE("c_api: notification create / notify / wait / destroy")
 {
-    std::uint32_t             values[2]{};
-    std::uint8_t              pending[2]{};
+    std::uint32_t            values[2]{};
+    std::uint8_t             pending[2]{};
     osal_notification_handle note{};
 
     REQUIRE(osal_c_notification_create(&note, values, pending, 2U) == OSAL_OK);
@@ -306,10 +343,10 @@ TEST_CASE("c_api: delayable_work schedule / flush / destroy")
     }
 
     osal_work_queue_handle wq{};
-    REQUIRE(osal_c_work_queue_create(&wq, c_api_delayable_wq_stack, sizeof(c_api_delayable_wq_stack), 8U, "c_dw_wq")
-            == OSAL_OK);
+    REQUIRE(osal_c_work_queue_create(&wq, c_api_delayable_wq_stack, sizeof(c_api_delayable_wq_stack), 8U, "c_dw_wq") ==
+            OSAL_OK);
 
-    std::atomic<int>          count{0};
+    std::atomic<int>           count{0};
     osal_delayable_work_handle work{};
     REQUIRE(osal_c_delayable_work_create(&work, &wq, c_api_delayable_work_cb, &count, "c_dw") == OSAL_OK);
 
@@ -348,7 +385,7 @@ TEST_CASE("c_api: rwlock read-then-write")
 TEST_CASE("c_api: mutex create_with_cfg — normal")
 {
     const osal_mutex_config cfg = {0};
-    osal_mutex_handle mtx;
+    osal_mutex_handle       mtx;
     CHECK(osal_c_mutex_create_with_cfg(&mtx, &cfg) == OSAL_OK);
     CHECK(osal_c_mutex_lock(&mtx, OSAL_WAIT_FOREVER) == OSAL_OK);
     osal_c_mutex_unlock(&mtx);
@@ -364,7 +401,7 @@ TEST_CASE("c_api: mutex create_with_cfg — recursive")
     }
 
     const osal_mutex_config cfg = {1};
-    osal_mutex_handle mtx;
+    osal_mutex_handle       mtx;
     CHECK(osal_c_mutex_create_with_cfg(&mtx, &cfg) == OSAL_OK);
     CHECK(osal_c_mutex_lock(&mtx, OSAL_WAIT_FOREVER) == OSAL_OK);
     CHECK(osal_c_mutex_lock(&mtx, OSAL_WAIT_FOREVER) == OSAL_OK);
@@ -376,7 +413,7 @@ TEST_CASE("c_api: mutex create_with_cfg — recursive")
 TEST_CASE("c_api: semaphore create_with_cfg")
 {
     const osal_semaphore_config cfg = {2, 5};
-    osal_semaphore_handle sem;
+    osal_semaphore_handle       sem;
     CHECK(osal_c_semaphore_create_with_cfg(&sem, &cfg) == OSAL_OK);
     CHECK(osal_c_semaphore_take(&sem, OSAL_NO_WAIT) == OSAL_OK);
     CHECK(osal_c_semaphore_take(&sem, OSAL_NO_WAIT) == OSAL_OK);
@@ -386,9 +423,9 @@ TEST_CASE("c_api: semaphore create_with_cfg")
 
 TEST_CASE("c_api: queue create_with_cfg")
 {
-    int buf[4];
+    int                     buf[4];
     const osal_queue_config cfg = {buf, sizeof(int), 4};
-    osal_queue_handle q;
+    osal_queue_handle       q;
     CHECK(osal_c_queue_create_with_cfg(&q, &cfg) == OSAL_OK);
 
     int val = 77;
@@ -407,7 +444,7 @@ static void cfg_thread_entry(void* arg)
 
 TEST_CASE("c_api: thread create_with_cfg")
 {
-    std::atomic<int> flag{0};
+    std::atomic<int>   flag{0};
     osal_thread_config cfg;
     cfg.entry       = cfg_thread_entry;
     cfg.arg         = &flag;
@@ -419,7 +456,7 @@ TEST_CASE("c_api: thread create_with_cfg")
     cfg.stack       = c_api_cfg_thread_stack;
     cfg.stack_bytes = sizeof(c_api_cfg_thread_stack);
 #endif
-    cfg.name        = "cfg_t";
+    cfg.name = "cfg_t";
 
     osal_thread_handle thr;
     CHECK(osal_c_thread_create_with_cfg(&thr, &cfg) == OSAL_OK);
@@ -435,9 +472,9 @@ static void cfg_timer_cb(void* arg)
 
 TEST_CASE("c_api: timer create_with_cfg")
 {
-    std::atomic<int> count{0};
+    std::atomic<int>        count{0};
     const osal_timer_config cfg = {"cfg_tmr", cfg_timer_cb, &count, 10, 0};
-    osal_timer_handle tmr;
+    osal_timer_handle       tmr;
     CHECK(osal_c_timer_create_with_cfg(&tmr, &cfg) == OSAL_OK);
     CHECK(osal_c_timer_start(&tmr) == OSAL_OK);
     osal_c_thread_sleep_ms(200);
@@ -453,7 +490,7 @@ TEST_CASE("c_api: timer create_with_cfg")
 TEST_CASE("c_api: stream_buffer create / send / receive / destroy")
 {
     // capacity=32, backing storage must be 33 bytes (capacity + 1 sentinel)
-    static std::uint8_t sbuf[33];
+    static std::uint8_t       sbuf[33];
     osal_stream_buffer_handle sb;
     REQUIRE(osal_c_stream_buffer_create(&sb, sbuf, 32, 1) == OSAL_OK);
 
@@ -463,7 +500,7 @@ TEST_CASE("c_api: stream_buffer create / send / receive / destroy")
     CHECK(osal_c_stream_buffer_free_space(&sb) == 24);
 
     std::uint8_t rx[8]{};
-    size_t n = osal_c_stream_buffer_receive(&sb, rx, sizeof(rx), OSAL_NO_WAIT);
+    size_t       n = osal_c_stream_buffer_receive(&sb, rx, sizeof(rx), OSAL_NO_WAIT);
     CHECK(n == 8);
     CHECK(std::memcmp(tx, rx, 8) == 0);
 
@@ -473,7 +510,7 @@ TEST_CASE("c_api: stream_buffer create / send / receive / destroy")
 
 TEST_CASE("c_api: stream_buffer try-receive on empty returns 0")
 {
-    static std::uint8_t sbuf[17];
+    static std::uint8_t       sbuf[17];
     osal_stream_buffer_handle sb;
     REQUIRE(osal_c_stream_buffer_create(&sb, sbuf, 16, 1) == OSAL_OK);
 
@@ -485,7 +522,7 @@ TEST_CASE("c_api: stream_buffer try-receive on empty returns 0")
 
 TEST_CASE("c_api: stream_buffer reset clears data")
 {
-    static std::uint8_t sbuf[17];
+    static std::uint8_t       sbuf[17];
     osal_stream_buffer_handle sb;
     REQUIRE(osal_c_stream_buffer_create(&sb, sbuf, 16, 1) == OSAL_OK);
 
@@ -501,9 +538,9 @@ TEST_CASE("c_api: stream_buffer reset clears data")
 
 TEST_CASE("c_api: stream_buffer create_with_cfg")
 {
-    static std::uint8_t sbuf[33];
+    static std::uint8_t             sbuf[33];
     const osal_stream_buffer_config cfg = {sbuf, 32, 1};
-    osal_stream_buffer_handle sb;
+    osal_stream_buffer_handle       sb;
     CHECK(osal_c_stream_buffer_create_with_cfg(&sb, &cfg) == OSAL_OK);
 
     const std::uint8_t byte = 0x42;
@@ -523,7 +560,7 @@ TEST_CASE("c_api: stream_buffer create_with_cfg")
 TEST_CASE("c_api: message_buffer create / send / receive / destroy")
 {
     // capacity=64, backing storage must be 65 bytes
-    static std::uint8_t mbuf[65];
+    static std::uint8_t        mbuf[65];
     osal_message_buffer_handle mb;
     REQUIRE(osal_c_message_buffer_create(&mb, mbuf, 64) == OSAL_OK);
 
@@ -532,7 +569,7 @@ TEST_CASE("c_api: message_buffer create / send / receive / destroy")
     CHECK(osal_c_message_buffer_available(&mb) == sizeof(msg));
 
     std::uint8_t rx[16]{};
-    size_t n = osal_c_message_buffer_receive(&mb, rx, sizeof(rx), OSAL_NO_WAIT);
+    size_t       n = osal_c_message_buffer_receive(&mb, rx, sizeof(rx), OSAL_NO_WAIT);
     REQUIRE(n == sizeof(msg));
     CHECK(std::memcmp(msg, rx, sizeof(msg)) == 0);
 
@@ -542,7 +579,7 @@ TEST_CASE("c_api: message_buffer create / send / receive / destroy")
 
 TEST_CASE("c_api: message_buffer FIFO ordering")
 {
-    static std::uint8_t mbuf[65];
+    static std::uint8_t        mbuf[65];
     osal_message_buffer_handle mb;
     REQUIRE(osal_c_message_buffer_create(&mb, mbuf, 64) == OSAL_OK);
 
@@ -562,7 +599,7 @@ TEST_CASE("c_api: message_buffer FIFO ordering")
 
 TEST_CASE("c_api: message_buffer reset clears messages")
 {
-    static std::uint8_t mbuf[33];
+    static std::uint8_t        mbuf[33];
     osal_message_buffer_handle mb;
     REQUIRE(osal_c_message_buffer_create(&mb, mbuf, 32) == OSAL_OK);
 
@@ -578,9 +615,9 @@ TEST_CASE("c_api: message_buffer reset clears messages")
 
 TEST_CASE("c_api: message_buffer create_with_cfg")
 {
-    static std::uint8_t mbuf[65];
+    static std::uint8_t              mbuf[65];
     const osal_message_buffer_config cfg = {mbuf, 64};
-    osal_message_buffer_handle mb;
+    osal_message_buffer_handle       mb;
     CHECK(osal_c_message_buffer_create_with_cfg(&mb, &cfg) == OSAL_OK);
 
     const std::uint8_t msg[4] = {0xAA, 0xBB, 0xCC, 0xDD};

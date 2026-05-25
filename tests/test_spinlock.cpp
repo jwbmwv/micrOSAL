@@ -11,6 +11,8 @@
 #include <doctest/doctest.h>
 #include <osal/osal.hpp>
 
+static_assert(osal::spinlock::is_supported == osal::active_capabilities::has_spinlock);
+
 // ---------------------------------------------------------------------------
 // Construction
 // ---------------------------------------------------------------------------

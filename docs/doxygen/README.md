@@ -51,7 +51,7 @@ start docs/doxygen/html/index.html
 
 ## What Gets Documented
 
-- Public C++ headers under `include/osal/`
+- Public C++ headers under `include/osal/` and `include/microsal/`
 - The C API surface in `include/osal/osal_c.h`
 - Top-level guides under `docs/`
 - Referenced architecture and sequence diagrams from `docs/diagrams/`

@@ -5,7 +5,7 @@ usage() {
   cat <<'EOF'
 Usage: ./scripts/generate_diagrams_print.sh [OPTIONS]
 
-Generate PRINT-optimized PNG and SVG files from all PlantUML (.puml) files.
+Generate PRINT-optimized PNG, SVG, and PDF files from all PlantUML (.puml) files.
 Uses docs/diagrams/_render_profile_print.puml for rendering.
 
 Options:
@@ -24,6 +24,7 @@ ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 INPUT_DIR="$ROOT_DIR/docs/diagrams"
 OUTPUT_DIR="$ROOT_DIR/docs/diagrams/print"
 PRINT_PROFILE="$ROOT_DIR/docs/diagrams/_render_profile_print.puml"
+SVG_TO_PDF="$ROOT_DIR/scripts/svg_to_pdf.py"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -77,7 +78,7 @@ TMP_DIR="$(mktemp -d)"
 trap 'rm -rf "$TMP_DIR"' EXIT
 
 echo "Found ${#PUML_FILES[@]} .puml files under: $INPUT_DIR"
-echo "Generating PRINT PNG and SVG files into: $OUTPUT_DIR"
+echo "Generating PRINT PNG, SVG, and PDF files into: $OUTPUT_DIR"
 
 for file in "${PUML_FILES[@]}"; do
   base="$(basename "$file")"
@@ -112,6 +113,15 @@ for file in "${PUML_FILES[@]}"; do
   echo "  - $base"
   plantuml -failfast2 --format png --output-dir "$OUTPUT_DIR" "$tmp_file"
   plantuml -failfast2 --format svg --output-dir "$OUTPUT_DIR" "$tmp_file"
+  if command -v python3 >/dev/null 2>&1; then
+    svg_file="$OUTPUT_DIR/${base%.puml}.svg"
+    pdf_file="$OUTPUT_DIR/${base%.puml}.pdf"
+    if ! python3 "$SVG_TO_PDF" "$svg_file" "$pdf_file" >/dev/null 2>&1; then
+      echo "    warning: PDF conversion unavailable for $base" >&2
+    fi
+  else
+    echo "    warning: python3 not found; PDF conversion skipped for $base" >&2
+  fi
 done
 
-echo "Done. Print-optimized .png and .svg files are in: $OUTPUT_DIR"
+echo "Done. Print-optimized .png/.svg files are in: $OUTPUT_DIR; .pdf files are generated when conversion support is available."

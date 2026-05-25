@@ -100,7 +100,7 @@ public:
     ///          state; check valid() before use in safety-critical code.
     /// @complexity O(1)
     /// @blocking   Never — initialisation uses static storage only.
-    explicit mutex(mutex_type type = mutex_type::normal) noexcept : valid_(false), handle_{}
+    explicit mutex(mutex_type type = mutex_type::normal) noexcept : valid_(false)
     {
         valid_ = osal_mutex_create(&handle_, type == mutex_type::recursive).ok();
     }
@@ -109,7 +109,7 @@ public:
     /// @param cfg  Configuration — typically declared @c const / @c constexpr.
     /// @complexity O(1)
     /// @blocking   Never.
-    explicit mutex(const mutex_config& cfg) noexcept : valid_(false), handle_{}
+    explicit mutex(const mutex_config& cfg) noexcept : valid_(false)
     {
         valid_ = osal_mutex_create(&handle_, cfg.type == mutex_type::recursive).ok();
     }
@@ -205,6 +205,8 @@ public:
 
         lock_guard(const lock_guard&)            = delete;
         lock_guard& operator=(const lock_guard&) = delete;
+        lock_guard(lock_guard&&)                 = delete;
+        lock_guard& operator=(lock_guard&&)      = delete;
 
     private:
         mutex& m_;
@@ -212,8 +214,8 @@ public:
 
 private:
     // ---- data members (mutable runtime state only — config is consumed at init)
-    bool                          valid_;   ///< Initialisation succeeded.
-    active_traits::mutex_handle_t handle_;  ///< Opaque backend handle.
+    bool                          valid_;     ///< Initialisation succeeded.
+    active_traits::mutex_handle_t handle_{};  ///< Opaque backend handle.
 };
 
 /// @} // osal_mutex

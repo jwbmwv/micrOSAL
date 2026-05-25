@@ -17,6 +17,8 @@
 ///
 /// @copyright Copyright (c) 2026 James Baldwin. AI-assisted — see NOTICE.
 
+#pragma once
+
 #include <atomic>
 
 // ---------------------------------------------------------------------------
@@ -78,7 +80,7 @@ static void emu_rw_release(emulated_rwlock_obj* p) noexcept
 ///         `error_code::out_of_resources` if the pool is exhausted.
 osal::result osal_rwlock_create(osal::active_traits::rwlock_handle_t* handle) noexcept
 {
-    if (!handle)
+    if (!handle) [[unlikely]]
     {
         return osal::error_code::invalid_argument;
     }
@@ -114,7 +116,7 @@ osal::result osal_rwlock_create(osal::active_traits::rwlock_handle_t* handle) no
 /// @return Always `osal::ok()`.
 osal::result osal_rwlock_destroy(osal::active_traits::rwlock_handle_t* handle) noexcept
 {
-    if (!handle || !handle->native)
+    if (!handle || !handle->native) [[unlikely]]
     {
         return osal::ok();
     }
@@ -135,7 +137,7 @@ osal::result osal_rwlock_destroy(osal::active_traits::rwlock_handle_t* handle) n
 ///         `error_code::not_initialized` if @p handle is null.
 osal::result osal_rwlock_read_lock(osal::active_traits::rwlock_handle_t* handle, osal::tick_t timeout_ticks) noexcept
 {
-    if (!handle || !handle->native)
+    if (!handle || !handle->native) [[unlikely]]
     {
         return osal::error_code::not_initialized;
     }
@@ -192,7 +194,7 @@ osal::result osal_rwlock_read_lock(osal::active_traits::rwlock_handle_t* handle,
 ///         `error_code::not_initialized` if null.
 osal::result osal_rwlock_read_unlock(osal::active_traits::rwlock_handle_t* handle) noexcept
 {
-    if (!handle || !handle->native)
+    if (!handle || !handle->native) [[unlikely]]
     {
         return osal::error_code::not_initialized;
     }
@@ -221,7 +223,7 @@ osal::result osal_rwlock_read_unlock(osal::active_traits::rwlock_handle_t* handl
 ///         `error_code::not_initialized` if @p handle is null.
 osal::result osal_rwlock_write_lock(osal::active_traits::rwlock_handle_t* handle, osal::tick_t timeout_ticks) noexcept
 {
-    if (!handle || !handle->native)
+    if (!handle || !handle->native) [[unlikely]]
     {
         return osal::error_code::not_initialized;
     }
@@ -274,7 +276,7 @@ osal::result osal_rwlock_write_lock(osal::active_traits::rwlock_handle_t* handle
 ///         `error_code::not_initialized` if null.
 osal::result osal_rwlock_write_unlock(osal::active_traits::rwlock_handle_t* handle) noexcept
 {
-    if (!handle || !handle->native)
+    if (!handle || !handle->native) [[unlikely]]
     {
         return osal::error_code::not_initialized;
     }

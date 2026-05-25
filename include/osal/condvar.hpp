@@ -76,13 +76,13 @@ namespace osal
 ///          The caller is responsible for holding an osal::mutex when calling
 ///          wait() / wait_for().  The mutex is atomically released during the
 ///          wait and re-acquired before the call returns.
-class condvar
+class condvar  // NOLINT(cppcoreguidelines-pro-type-member-init,hicpp-member-init)
 {
 public:
     // ---- construction / destruction ----------------------------------------
 
     /// @brief Constructs a condition variable.
-    condvar() noexcept : valid_(false), handle_{} { valid_ = osal_condvar_create(&handle_).ok(); }
+    condvar() noexcept = default;  // NOLINT(cppcoreguidelines-pro-type-member-init,hicpp-member-init)
 
     /// @brief Destroys the condition variable.
     ~condvar() noexcept
@@ -110,7 +110,7 @@ public:
     ///          Equivalent to: @code while (!pred()) cv.wait(m); @endcode
     /// @param m     The mutex the caller holds.
     /// @param pred  Callable with signature @c bool().  Evaluated under @p m.
-    template<typename Predicate>
+    template<wait_predicate Predicate>
     void wait(mutex& m, Predicate pred) noexcept(noexcept(pred()))
     {
         while (!pred())
@@ -136,19 +136,17 @@ public:
     /// @param timeout  Maximum total wait time.
     /// @param pred     Callable with signature @c bool().  Evaluated under @p m.
     /// @return true if @p pred was satisfied; false if the timeout expired first.
-    template<typename Predicate>
+    template<wait_predicate Predicate>
     bool wait_for(mutex& m, milliseconds timeout, Predicate pred) noexcept(noexcept(pred()))
     {
-        const auto deadline = monotonic_clock::now() + timeout;
+        const monotonic_deadline wait_deadline = monotonic_deadline::after(timeout);
         while (!pred())
         {
-            const auto now = monotonic_clock::now();
-            if (now >= deadline)
+            if (wait_deadline.expired())
             {
                 return pred();
             }
-            const auto remaining = std::chrono::duration_cast<milliseconds>(deadline - now);
-            if (!wait_for(m, remaining))
+            if (!wait_for(m, wait_deadline.remaining()))
             {
                 return pred();
             }
@@ -164,15 +162,14 @@ public:
     ///          large deadlines) does not cause premature false-timeout returns.
     bool wait_until(mutex& m, monotonic_clock::time_point deadline) noexcept
     {
+        const monotonic_deadline wait_deadline = monotonic_deadline::at(deadline);
         for (;;)
         {
-            const auto now = monotonic_clock::now();
-            if (deadline <= now)
+            if (wait_deadline.expired())
             {
                 return false;
             }
-            const auto remaining = std::chrono::duration_cast<milliseconds>(deadline - now);
-            if (wait_for(m, remaining))
+            if (wait_for(m, wait_deadline.remaining()))
             {
                 return true;  // notified
             }
@@ -187,14 +184,11 @@ public:
     /// @param deadline  Absolute monotonic time point.
     /// @param pred      Callable with signature @c bool().  Evaluated under @p m.
     /// @return true if @p pred was satisfied before the deadline; false otherwise.
-    template<typename Predicate>
+    template<wait_predicate Predicate>
     bool wait_until(mutex& m, monotonic_clock::time_point deadline, Predicate pred) noexcept(noexcept(pred()))
     {
         // Delegate to the timed predicate wait_for, which already loops.
-        const auto         now = monotonic_clock::now();
-        const milliseconds remaining =
-            (deadline > now) ? std::chrono::duration_cast<milliseconds>(deadline - now) : milliseconds{0};
-        return wait_for(m, remaining, pred);
+        return wait_for(m, monotonic_deadline::at(deadline).remaining(), pred);
     }
 
     // ---- notify ------------------------------------------------------------
@@ -211,8 +205,8 @@ public:
     [[nodiscard]] bool valid() const noexcept { return valid_; }
 
 private:
-    bool                            valid_;
-    active_traits::condvar_handle_t handle_;
+    active_traits::condvar_handle_t handle_{};
+    bool                            valid_{osal_condvar_create(&handle_).ok()};
 };
 
 /// @} // osal_condvar

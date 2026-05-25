@@ -52,6 +52,30 @@ package "osal (core)" #F5F5F5 {
 
 package "osal (compile-time)" #FFF8E1 {
 
+    class "backend_descriptor<B>" as backend_concept <<concept>> {
+        +backend_traits<B>
+        +capabilities<B>
+    }
+
+    class "queue_element<T>" as queue_concept <<concept>>
+    class "wait_predicate<P>" as predicate_concept <<concept>>
+
+    enum support_requirement {
+        timer
+        delayable_work
+        wait_set
+        spinlock
+        timed_join
+        thread_affinity
+        dynamic_thread_priority
+        task_notification
+        thread_suspend_resume
+    }
+
+    class "supports_requirement<R, B>" as support_req <<template>> {
+        +{static} value : bool
+    }
+
     class "capabilities<B>" as caps <<template>> {
         +{static} has_recursive_mutex : bool
         +{static} has_timed_mutex : bool
@@ -95,10 +119,18 @@ package "osal (compile-time)" #FFF8E1 {
     }
 
     note bottom of caps
-            17 full template
-      specializations —
-      one per backend.
+                        17 full template
+            specializations plus
+            concepts validate the
+            compile-time contract.
     end note
+
+        note bottom of support_req
+            Native-only APIs expose
+            `is_supported`, `supports_*`,
+            and `require_*_support()`
+            wrappers over this contract.
+        end note
 }
 
 ' ============================================================================
@@ -154,6 +186,17 @@ package "osal (primitives)" #E3F2FD {
         -handle_ : thread_handle_t
         -valid_ : bool
         --
+        +{static} supports_timed_join : bool
+        +{static} supports_affinity : bool
+        +{static} supports_dynamic_priority : bool
+        +{static} supports_task_notification : bool
+        +{static} supports_suspend_resume : bool
+        +{static} require_timed_join_support() {consteval}
+        +{static} require_affinity_support() {consteval}
+        +{static} require_dynamic_priority_support() {consteval}
+        +{static} require_task_notification_support() {consteval}
+        +{static} require_suspend_resume_support() {consteval}
+        __
         +thread()
         +create(thread_config&) : result
         +join() : result
@@ -229,6 +272,9 @@ package "osal (primitives)" #E3F2FD {
         -handle_ : timer_handle_t
         -valid_ : bool
         --
+        +{static} is_supported : bool
+        +{static} require_support() {consteval}
+        __
         +timer(cb, arg, period, mode, name)
         +timer(const timer_config&)
         +~timer()
@@ -258,6 +304,9 @@ package "osal (primitives)" #E3F2FD {
         -handle_ : wait_set_handle_t
         -valid_ : bool
         --
+        +{static} is_supported : bool
+        +{static} require_support() {consteval}
+        __
         +wait_set()
         +~wait_set()
         +add(fd, events) : result
@@ -299,6 +348,25 @@ package "osal (primitives)" #E3F2FD {
         +cancel_all() : result
         +pending() : size_t
         +valid() : bool
+    }
+
+    class delayable_work {
+        -queue_ : work_queue*
+        -timer_ : timer
+        -valid_ : bool
+        --
+        +{static} is_supported : bool
+        +{static} require_support() {consteval}
+        __
+        +delayable_work(queue&, fn, arg, name)
+        +schedule(ms) : result
+        +reschedule(ms) : result
+        +cancel() : result
+        +flush(ms) : result
+        +valid() : bool
+        +scheduled() : bool
+        +pending() : bool
+        +running() : bool
     }
 
     struct memory_pool_config <<value>> <<const>> {
@@ -396,6 +464,9 @@ package "osal (primitives)" #E3F2FD {
         -handle_ : spinlock_handle_t
         -valid_ : bool
         --
+        +{static} is_supported : bool
+        +{static} require_support() {consteval}
+        __
         +spinlock()
         +~spinlock()
         +lock() : result
@@ -414,6 +485,42 @@ package "osal (primitives)" #E3F2FD {
         +~barrier()
         +wait() : result
         +valid() : bool
+    }
+
+    class "notification<Slots>" as notification <<template>> {
+        +{static} slot_count : size_t
+        -mtx_ : mutex
+        -cv_ : condvar
+        -slots_[Slots] : slot_state
+        --
+        +notification()
+        +~notification()
+        +notify(value, action, index) : result
+        +wait(index, timeout, value_out*) : result
+        +clear(bits, index) : result
+        +reset(index) : result
+        +pending(index) : bool
+        +peek(index) : uint32_t
+        +valid() : bool
+    }
+
+    class object_wait_set {
+        -entries_[MaxEntries] : entry_state
+        --
+        +object_wait_set()
+        +~object_wait_set()
+        +add(queue&, id) : result
+        +add(mailbox&, id) : result
+        +add_any(event_flags&, bits, id) : result
+        +add_all(event_flags&, bits, id) : result
+        +add(stream_buffer&, min_bytes, id) : result
+        +add(message_buffer&, id) : result
+        +add(work_queue&, id) : result
+        +add(delayable_work&, id) : result
+        +add(notification&, index, id) : result
+        +remove(id) : result
+        +wait(ready_ids, max, n_ready, ms) : result
+        +{static} valid() : bool
     }
 
     class "ring_buffer<T, N>" as ring_buffer <<template>> {
@@ -462,6 +569,7 @@ message_buffer ..> traits : "stores message_buffer_handle_t"
 rwlock ..> traits : "stores rwlock_handle_t"
 spinlock ..> traits : "stores spinlock_handle_t"
 barrier ..> traits : "stores barrier_handle_t"
+support_req ..> support_requirement : selects
 
 mailbox *-- queue : slot_
 condvar ..> mutex : "wait(mutex&)"
@@ -471,6 +579,14 @@ semaphore ..> semaphore_config : "ctor(cfg)"
 timer ..> timer_config : "ctor(cfg)"
 work_queue ..> work_queue_config : "ctor(cfg)"
 memory_pool ..> memory_pool_config : "ctor(cfg)"
+delayable_work ..> work_queue : queues on
+delayable_work ..> timer : arms
+
+thread ..> support_req : support queries
+timer ..> support_req : support helper
+wait_set ..> support_req : support helper
+spinlock ..> support_req : support helper
+delayable_work ..> support_req : support helper
 
 mutex ..> result : returns
 semaphore ..> result : returns
@@ -480,6 +596,7 @@ timer ..> result : returns
 event_flags ..> result : returns
 condvar ..> result : returns
 work_queue ..> result : returns
+delayable_work ..> result : returns
 memory_pool ..> result : returns
 stream_buffer ..> result : returns
 message_buffer ..> result : returns
@@ -488,5 +605,16 @@ spinlock ..> result : returns
 barrier ..> result : returns
 thread_local_data ..> result : returns
 mailbox ..> result : returns
+notification ..> result : returns
+notification *-- mutex : mtx_
+notification *-- condvar : cv_
+object_wait_set ..> result : returns
+object_wait_set ..> queue : polls
+object_wait_set ..> event_flags : polls
+object_wait_set ..> notification : polls
+object_wait_set ..> stream_buffer : polls
+object_wait_set ..> message_buffer : polls
+object_wait_set ..> work_queue : polls
+object_wait_set ..> delayable_work : polls
 
 @enduml

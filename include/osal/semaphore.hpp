@@ -70,6 +70,12 @@ enum class semaphore_type : std::uint8_t
 ///              osal::semaphore_type::counting, 0, 10};
 ///          osal::semaphore s{cfg};  // only handle_ + valid_ in RAM
 ///          @endcode
+///
+/// @note On POSIX and Linux backends, the underlying `sem_t` does not enforce
+///       a caller-specified maximum count.  The @c max_count field is accepted
+///       but silently ignored; the effective upper bound is `SEM_VALUE_MAX`
+///       (typically 2^31 - 1).  Portable code that requires strict max-count
+///       enforcement should verify the active backend's behaviour.
 struct semaphore_config
 {
     semaphore_type type          = semaphore_type::binary;  ///< Binary or counting.
@@ -91,7 +97,7 @@ public:
     /// @param max_count      Maximum permit count (ignored for binary — forced to 1).
     /// @complexity O(1)
     /// @blocking   Never.
-    semaphore(semaphore_type type, unsigned initial_count, unsigned max_count = 1U) noexcept : valid_(false), handle_{}
+    semaphore(semaphore_type type, unsigned initial_count, unsigned max_count = 1U) noexcept : valid_(false)
     {
         const unsigned mc = (type == semaphore_type::binary) ? 1U : max_count;
         valid_            = osal_semaphore_create(&handle_, initial_count, mc).ok();
@@ -101,7 +107,7 @@ public:
     /// @param cfg  Configuration — typically declared @c const / @c constexpr.
     /// @complexity O(1)
     /// @blocking   Never.
-    explicit semaphore(const semaphore_config& cfg) noexcept : valid_(false), handle_{}
+    explicit semaphore(const semaphore_config& cfg) noexcept : valid_(false)
     {
         const unsigned mc = (cfg.type == semaphore_type::binary) ? 1U : cfg.max_count;
         valid_            = osal_semaphore_create(&handle_, cfg.initial_count, mc).ok();
@@ -130,7 +136,10 @@ public:
     // ---- give (signal) -----------------------------------------------------
 
     /// @brief Gives (signals) the semaphore from thread context.
-    /// @details Increments the count by 1.  Blocks waiting thread if any.
+    /// @details Increments the count by 1.  Wakes one waiting thread if any.
+    ///          The underlying OS result is intentionally discarded; on a
+    ///          correctly initialised semaphore this call cannot fail.
+    ///          Use `try_give()` when the caller needs to detect overflow.
     /// @note   Not ISR-safe — use isr_give() from interrupt context.
     /// @complexity O(1)
     /// @blocking   Never.
@@ -172,7 +181,7 @@ public:
     /// @blocking   Up to timeout.
     bool take_for(milliseconds timeout) noexcept
     {
-        if constexpr (active_capabilities::has_timed_semaphore)
+        if constexpr (timed_semaphore_backend<active_backend>)
         {
             const tick_t ticks = clock_utils::ms_to_ticks(timeout);
             return osal_semaphore_take(&handle_, ticks).ok();
@@ -190,19 +199,17 @@ public:
     /// @blocking   Until deadline.
     bool take_until(monotonic_clock::time_point deadline) noexcept
     {
-        const auto now = monotonic_clock::now();
-        if (deadline <= now)
+        const monotonic_deadline take_deadline = monotonic_deadline::at(deadline);
+        if (take_deadline.expired())
         {
             return try_take();
         }
-        const auto diff = deadline - now;
-        const auto ms   = std::chrono::duration_cast<milliseconds>(diff);
-        return take_for(ms);
+        return take_for(take_deadline.remaining());
     }
 
 private:
     bool                              valid_;  ///< Init succeeded.
-    active_traits::semaphore_handle_t handle_;
+    active_traits::semaphore_handle_t handle_{};
 };
 
 /// @} // osal_semaphore
