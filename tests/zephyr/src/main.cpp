@@ -16,6 +16,7 @@
 
 #include <zephyr/ztest.h>
 #include <zephyr/kernel.h>
+#include <osal/bus/osal_signal_premium.hpp>
 #include <osal/osal.hpp>
 #include <atomic>
 #include <cstring>
@@ -270,6 +271,106 @@ ZTEST(osal_queue, test_full_detection)
 }
 
 ZTEST_SUITE(osal_queue, NULL, NULL, NULL, NULL, NULL);
+
+// =========================================================================
+// Bus + Signal
+// =========================================================================
+
+static std::atomic<std::uint32_t> g_bus_observer_last{0U};
+static std::atomic<std::size_t>   g_bus_observer_calls{0U};
+
+static void reset_bus_observer_state() noexcept
+{
+    g_bus_observer_last.store(0U, std::memory_order_relaxed);
+    g_bus_observer_calls.store(0U, std::memory_order_relaxed);
+}
+
+static void zephyr_bus_observer(const std::uint32_t& value) noexcept
+{
+    g_bus_observer_last.store(value, std::memory_order_relaxed);
+    g_bus_observer_calls.fetch_add(1U, std::memory_order_relaxed);
+}
+
+ZTEST(osal_bus_layer, test_channel_send_receive)
+{
+    osal::osal_bus<std::uint32_t, 4U, osal::bus_backend_zephyr> channel;
+    zassert_true(channel.valid(), "channel construction should succeed");
+    zassert_true(channel.try_send(42U), "try_send should succeed");
+
+    std::uint32_t value = 0U;
+    zassert_true(channel.try_receive(value), "try_receive should succeed");
+    zassert_equal(value, 42U, NULL);
+}
+
+ZTEST(osal_bus_layer, test_signal_publish_receive)
+{
+    osal::osal_signal<std::uint32_t, 4U, 4U, osal::bus_backend_zephyr> topic;
+    osal::subscriber_id                                                sub{osal::invalid_subscriber_id};
+
+    zassert_true(topic.subscribe(sub), "subscribe should succeed");
+    zassert_true(topic.publish(77U), "publish should reach the subscriber");
+
+    std::uint32_t value = 0U;
+    zassert_true(topic.try_receive(sub, value), "subscriber should receive the message");
+    zassert_equal(value, 77U, NULL);
+    zassert_true(topic.unsubscribe(sub), "unsubscribe should succeed");
+}
+
+ZTEST(osal_bus_layer, test_signal_slot_reuse_clears_stale_messages)
+{
+    osal::osal_signal<std::uint32_t, 2U, 2U, osal::bus_backend_zephyr> topic;
+    osal::subscriber_id                                                first{osal::invalid_subscriber_id};
+
+    zassert_true(topic.subscribe(first), "initial subscribe should succeed");
+    zassert_true(topic.publish(17U), "publish should enqueue for the subscriber");
+    zassert_true(topic.unsubscribe(first), "unsubscribe should succeed");
+
+    osal::subscriber_id reused{osal::invalid_subscriber_id};
+    zassert_true(topic.subscribe(reused), "reused subscribe should succeed");
+    zassert_not_equal(reused, first, "reused slot must get a fresh subscriber token");
+
+    std::uint32_t value = 0U;
+    zassert_false(topic.try_receive(first, value), "stale subscriber token should be rejected");
+    zassert_false(topic.try_receive(reused, value), "reused slot should not inherit stale messages");
+
+    zassert_true(topic.publish(23U), "publish should reach the active subscriber");
+    zassert_false(topic.try_receive(first, value), "stale subscriber token must stay invalid");
+    zassert_true(topic.try_receive(reused, value), "fresh subscriber token should receive new messages");
+    zassert_equal(value, 23U, NULL);
+    zassert_true(topic.unsubscribe(reused), NULL);
+}
+
+ZTEST(osal_bus_layer, test_premium_queue_and_observer)
+{
+    reset_bus_observer_state();
+
+    osal::osal_signal_premium<std::uint32_t, 4U, 4U, osal::bus_backend_zephyr> topic;
+    osal::subscriber_id                                                        sub{osal::invalid_subscriber_id};
+
+    zassert_true(topic.subscribe(sub), NULL);
+    zassert_true(topic.subscribe_observer(zephyr_bus_observer), NULL);
+    zassert_equal(topic.observer_count(), 1U, NULL);
+    zassert_true(topic.publish(123U), NULL);
+
+    std::uint32_t value = 0U;
+    zassert_true(topic.try_receive(sub, value), NULL);
+    zassert_equal(value, 123U, NULL);
+    zassert_equal(g_bus_observer_calls.load(std::memory_order_relaxed), 1U, NULL);
+    zassert_equal(g_bus_observer_last.load(std::memory_order_relaxed), 123U, NULL);
+    zassert_true(topic.unsubscribe_observer(zephyr_bus_observer), NULL);
+    zassert_equal(topic.observer_count(), 0U, NULL);
+}
+
+ZTEST(osal_bus_layer, test_capabilities)
+{
+    static_assert(osal::native_pubsub_backend<osal::bus_backend_zephyr>);
+    static_assert(osal::native_observer_backend<osal::bus_backend_zephyr>);
+    static_assert(!osal::zero_copy_backend<osal::bus_backend_zephyr>);
+    static_assert(!osal::native_routing_backend<osal::bus_backend_zephyr>);
+    zassert_true(true, NULL);
+}
+
+ZTEST_SUITE(osal_bus_layer, NULL, NULL, NULL, NULL, NULL);
 
 // =========================================================================
 // Mailbox

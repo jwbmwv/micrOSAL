@@ -1,17 +1,20 @@
 # Bus + Signal Backend Reference
 
+Public bus headers are canonical under `include/osal/bus/`. The legacy
+`include/microsal/bus/` path remains as a compatibility wrapper.
+
 ## Runtime Status Summary
 
 | Backend tag | Capability traits | Current runtime status |
 | --- | --- | --- |
 | `bus_backend_generic` | All `native_*` and `zero_copy` flags are `false` | Fully implemented; canonical bus/signal behavior |
 | Delegated `bus_backend_*` tags | Same flags as `bus_backend_generic` | Fully implemented by delegating to the generic backend |
-| `bus_backend_mock` | All premium flags are `true` | Implemented for hosted tests; uses the generic bus/signal path plus the premium wrapper's local observer table |
-| `bus_backend_zephyr` | All premium flags are `false` | Dedicated Zephyr tag that currently delegates to the generic runtime; native Zbus integration is not implemented yet |
+| `bus_backend_mock` | All premium flags are `true` | Implemented for hosted tests; uses the generic bus/signal path plus backend-owned observer hooks so premium code paths can be exercised without Zephyr |
+| `bus_backend_zephyr` | `native_pubsub` and `native_observers` are `true` on real Zephyr builds; `native_routing` and `zero_copy` remain `false` | Dedicated Zephyr runtime uses `k_msgq` for channels and per-subscriber queues plus backend-owned observer registration/dispatch; hosted instantiations still delegate to the generic runtime |
 
 ## `bus_backend_generic`
 
-**File:** `include/microsal/bus/detail/osal_signal_backend_generic.hpp`
+**File:** `include/osal/bus/detail/osal_signal_backend_generic.hpp`
 
 `bus_backend_generic` is the authoritative implementation for the bus layer.
 It uses the MicrOSAL queue C ABI for `osal_bus` and `osal_signal` data flow,
@@ -25,7 +28,7 @@ This backend provides:
 
 ## Delegated Backends
 
-**File:** `include/microsal/bus/detail/osal_signal_backend_delegated.hpp`
+**File:** `include/osal/bus/detail/osal_signal_backend_delegated.hpp`
 
 All non-Zephyr, non-mock OSAL backends currently reuse the generic runtime
 implementation through `OSAL_BUS_DELEGATE_BACKEND_()`. Each tag is distinct at
@@ -52,23 +55,30 @@ compile time, but today they all behave like `bus_backend_generic`.
 
 ## `bus_backend_mock`
 
-**File:** `include/microsal/bus/detail/osal_signal_backend_mock.hpp`
+**File:** `include/osal/bus/detail/osal_signal_backend_mock.hpp`
 
 `bus_backend_mock` exists to exercise `osal::osal_signal_premium` in hosted
-tests. It reuses the generic bus/signal implementation, while the premium
-wrapper exposes observer support and copy-based `publish_zero_copy()` behavior.
+tests. It reuses the generic bus/signal implementation and exposes backend-
+owned observer hooks so premium feature-gated code can be exercised in the
+hosted suite.
 
 ## `bus_backend_zephyr`
 
-**File:** `include/microsal/bus/detail/osal_signal_backend_zephyr.hpp`
+**File:** `include/osal/bus/detail/osal_signal_backend_zephyr.hpp`
 
-The Zephyr specialisations currently delegate to `bus_backend_generic`. This
-keeps `MICROSAL_DEFAULT_BACKEND_TAG` usable on Zephyr today while preserving a
-dedicated specialisation point for a future native Zbus implementation.
+On real Zephyr builds, the Zephyr specialisations use a dedicated `k_msgq`-
+backed runtime. `osal_bus` maps directly to a Zephyr message queue, and
+`osal_signal` keeps one Zephyr-backed queue per subscriber slot so the public
+MicrOSAL FIFO semantics match the generic implementation.
 
-Because the runtime is still the generic path, the Zephyr capability traits
-stay `false` today and `osal_signal_premium` uses its portable observer and
-copy-fallback behavior.
+Hosted builds that instantiate `bus_backend_zephyr` only for compile-time
+coverage still delegate to `bus_backend_generic`, so the cross-backend doctest
+matrix does not require Zephyr headers.
+
+On real Zephyr builds, `native_pubsub` and `native_observers` are currently
+`true`. Observer callbacks are registered and dispatched through the Zephyr
+backend itself, while routing and zero-copy publish still use the portable
+premium-wrapper behavior.
 
 ## Backend Selection Macro
 
@@ -106,12 +116,12 @@ Override before including any bus header:
 
 1. Add the tag struct in `include/microsal/microsal_config.hpp`.
 2. Add or update the `osal_signal_capabilities<>` specialisation in
-   `include/microsal/bus/detail/osal_signal_traits.hpp`.
+   `include/osal/bus/detail/osal_signal_traits.hpp`.
 3. Either:
    - add a delegated specialisation via `OSAL_BUS_DELEGATE_BACKEND_()` when the
      generic runtime path is sufficient, or
-   - add a new native backend header under `include/microsal/bus/detail/` and
-     include it from `include/microsal/bus/osal_bus.hpp`.
+    - add a new native backend header under `include/osal/bus/detail/` and
+       include it from `include/osal/bus/osal_bus.hpp`.
 4. Extend the `bus_backend_tag` concept in `osal_signal_traits.hpp`.
 5. Update the `MICROSAL_DEFAULT_BACKEND_TAG` selector if the new backend should
    become the default for an `OSAL_BACKEND_*` macro.

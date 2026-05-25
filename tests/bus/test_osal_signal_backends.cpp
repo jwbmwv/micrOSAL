@@ -12,7 +12,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <doctest/doctest.h>
 
-#include <microsal/bus/osal_signal_premium.hpp>
+#include <osal/bus/osal_signal_premium.hpp>
 
 #include <cstdint>
 

@@ -9,16 +9,18 @@ Implemented today:
 
 - `osal::osal_bus<T, Capacity, BackendTag>`
 - `osal::osal_signal<T, MaxSubscribers, PerSubCapacity, BackendTag>`
-- `osal::osal_signal_premium<T, ...>` with portable observer storage,
-  copy-based `publish_zero_copy()`, and a stub `route_to()`
+- `osal::osal_signal_premium<T, ...>` with backend-owned observers on mock and
+   Zephyr, portable observer storage elsewhere, copy-based
+   `publish_zero_copy()`, and a stub `route_to()`
 - delegated `bus_backend_*` tags for all non-Zephyr, non-mock OSAL backends
 - `bus_backend_mock` for hosted premium tests
-- `bus_backend_zephyr` as a dedicated tag that currently forwards to the generic runtime
+- `bus_backend_zephyr` with a dedicated Zephyr `k_msgq` pub/sub runtime on
+   real Zephyr builds and a hosted generic fallback for compile-time coverage
 - hosted test coverage in `tests/bus/`
 
 Not implemented yet:
 
-- a native Zephyr Zbus runtime backend
+- native Zephyr routing or zero-copy premium paths
 - native zero-copy publish behavior
 - topic registry / cross-topic routing
 - backend-specific optimized bus runtimes beyond delegated generic behavior
@@ -47,7 +49,8 @@ The generic implementation remains the canonical LCD behavior:
 `osal_signal_premium` is always available as an API surface. On the currently
 implemented backends it behaves as follows:
 
-- observers are stored in a fixed-size local array
+- generic and delegated backends store observers in a fixed-size local array
+- mock and Zephyr expose backend-owned observer registration and dispatch
 - `publish()` first fans out to queue subscribers, then invokes registered observers
 - `publish_zero_copy()` currently falls back to `publish(*ptr)`
 - `route_to()` currently returns `false`
@@ -61,14 +64,15 @@ are exercised in hosted tests.
 - `docs/bus/lcd_pubsub.md`
 - `docs/bus/premium_pubsub.md`
 - `docs/bus/backends.md`
-- `include/microsal/bus/*.hpp`
+- `include/osal/bus/*.hpp`
 - `docs/diagrams/bus_*.puml`
 
 ## Remaining Work
 
-1. Replace the Zephyr fallback with a real Zbus integration.
-2. Decide which `native_*` traits the eventual Zbus implementation should
-   expose as part of the supported contract.
+1. Decide whether any future Zephyr-specific observer or routing integration
+   should use Zbus without weakening the current FIFO snapshot semantics.
+2. Expose additional `native_*` traits only when the corresponding Zephyr
+   behavior is implemented as part of the supported contract.
 3. Add native routing if a topic registry or RTOS-native mechanism becomes part
    of the supported contract.
 - All file skeletons

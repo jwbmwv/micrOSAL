@@ -12,8 +12,8 @@ is using its portable fallback behavior.
 | Backend family | Trait flags | Current behavior |
 | --- | --- | --- |
 | `bus_backend_generic` and delegated backends | `native_* == false`, `zero_copy == false` | Local observer table, synchronous observer callbacks, `publish_zero_copy()` falls back to `publish(*ptr)`, `route_to()` returns `false` |
-| `bus_backend_mock` | All premium flags `true` | Hosted test backend; uses the same portable observer/copy fallback behavior while exercising the premium API surface |
-| `bus_backend_zephyr` | All premium flags `false` | Current Zephyr tag delegates to the generic runtime, so the premium wrapper uses the same portable observer and copy-fallback behavior |
+| `bus_backend_mock` | All premium flags `true` | Hosted test backend; uses backend-owned observer hooks while still relying on copy-based `publish_zero_copy()` and stubbed routing behavior |
+| `bus_backend_zephyr` | `native_pubsub == true`, `native_observers == true`, `native_routing == false`, `zero_copy == false` on real Zephyr builds | Queue-backed pub/sub and observer registration/dispatch are native on Zephyr; `publish_zero_copy()` is still copy-based and `route_to()` remains a stub |
 
 Use `osal::osal_signal_capabilities<BackendTag>` and the `native_*` concepts in
 `osal_signal_traits.hpp` when you need to branch on native backend support.
@@ -31,8 +31,9 @@ std::size_t observer_count() const;
 ```
 
 On the currently implemented backends, observers are invoked synchronously
-during `publish()`. A future native Zephyr model may switch that to Zbus
-listener integration, but the current Zephyr tag still uses the portable path.
+during `publish()`. Zephyr now has dedicated backend-owned observer
+registration and dispatch, but it preserves the same publish-then-observe
+ordering as the generic path.
 
 ### `publish_zero_copy()`
 
@@ -42,7 +43,8 @@ bool publish_zero_copy(T* ptr);
 
 Today, every implemented backend copies from `ptr` and then uses `publish()`.
 The API is present so a future native backend can replace that fallback with a
-true zero-copy or near-zero-copy path.
+true zero-copy or near-zero-copy path; the current Zephyr backend does not yet
+change that behavior.
 
 ### `route_to()`
 
@@ -56,7 +58,7 @@ topic registry or native routing integration is added.
 ## Example
 
 ```cpp
-#include <microsal/bus/osal_signal_premium.hpp>
+#include <osal/bus/osal_signal_premium.hpp>
 
 osal::osal_signal_premium<std::uint32_t, 4, 8, osal::bus_backend_mock> topic;
 

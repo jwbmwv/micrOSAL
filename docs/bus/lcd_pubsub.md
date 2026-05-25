@@ -4,9 +4,9 @@
 portable fixed-capacity pub/sub topic in the bus layer.
 
 The implemented LCD behavior is provided by `bus_backend_generic`, every
-delegated `bus_backend_*` tag, and the current Zephyr-tagged fallback. The
-Zephyr specialisation currently forwards to the generic runtime, which keeps
-Zephyr behavior portable today while leaving room for a future native backend.
+delegated `bus_backend_*` tag, and the dedicated Zephyr runtime. On real
+Zephyr builds, `bus_backend_zephyr` uses native `k_msgq` queues while
+preserving the same per-subscriber FIFO contract as the generic backend.
 
 ## Guarantees
 
@@ -16,6 +16,7 @@ Zephyr behavior portable today while leaving room for a future native backend.
 | Publish complexity | `O(MaxSubscribers)` non-blocking sends |
 | Subscriber model | Per-subscriber FIFO queue (pull model) |
 | Thread safety | `subscribe()`, `unsubscribe()`, and `publish()` are mutex-protected |
+| Slot reuse | Reused subscriber slots are purged before reassignment |
 | Full subscriber queue | That subscriber silently drops the publish; the overall call returns `true` if any active subscriber accepted the message |
 
 ## API Reference
@@ -44,7 +45,7 @@ class osal_signal;
 ## Example
 
 ```cpp
-#include <microsal/bus/osal_signal.hpp>
+#include <osal/bus/osal_signal.hpp>
 
 using SensorTopic = osal::osal_signal<SensorData, 4, 16, osal::bus_backend_generic>;
 

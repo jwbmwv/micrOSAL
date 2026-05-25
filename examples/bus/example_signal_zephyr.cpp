@@ -2,27 +2,22 @@
 /// @file example_signal_zephyr.cpp
 /// @brief Zephyr-tagged pub/sub example.
 ///
-/// Demonstrates osal_signal<T, N, M, bus_backend_zephyr>. Today that backend
-/// tag delegates to the generic runtime, so the example runs on hosted builds
-/// while preserving the future Zephyr-native integration surface.
-///
-/// For a future native Zephyr target:
-///   - ZBUS_CHAN_DEFINE() must appear at file scope.
-///   - Each subscriber registers a ZBUS_SUBSCRIBER_DEFINE listener.
-///   - publish() → zbus_chan_pub()
-///   - receive() → zbus_sub_wait()
+/// Demonstrates osal_signal<T, N, M, bus_backend_zephyr>. On real Zephyr
+/// builds, that tag uses a dedicated queue-backed runtime. Hosted builds that
+/// instantiate the tag for compile-time coverage still delegate to the generic
+/// runtime, so this example remains runnable outside Zephyr as well.
 ///
 /// Build (Zephyr west build):
 /// @code
 ///   west build -b <board> examples/bus
 /// @endcode
 ///
-/// Build (hosted fallback run):
+/// Build (hosted coverage run):
 /// @code
 ///   cmake -B build -DOSAL_BACKEND=LINUX -DOSAL_BUILD_EXAMPLES=ON
 ///   cmake --build build -- example_signal_zephyr
 /// @endcode
-#include <microsal/bus/osal_signal_premium.hpp>
+#include <osal/bus/osal_signal_premium.hpp>
 
 #include <array>
 #include <charconv>
@@ -51,10 +46,8 @@ void print_value_line(const char* prefix, Integer value)
 
 }  // namespace
 
-// ---------------------------------------------------------------------------
-// On Zephyr: define the channel at file scope with ZBUS_CHAN_DEFINE.
-// TODO: ZBUS_CHAN_DEFINE(sensor_chan, std::uint32_t, NULL, NULL, ZBUS_OBSERVERS_EMPTY, ZBUS_MSG_INIT(0))
-// ---------------------------------------------------------------------------
+// The Zephyr backend keeps the same fixed-capacity FIFO semantics as the
+// generic implementation, but does so with native k_msgq-backed queues.
 
 int main()
 {
@@ -70,7 +63,7 @@ int main()
         return 1;
     }
 
-    // Register a Zbus observer callback.
+    // Observer registration and dispatch use the Zephyr backend's native hook.
     static auto obs = [](const std::uint32_t& v) noexcept
     { print_value_line("[zephyr-example] observer callback: ", v); };
     // Cast lambda to function pointer (stateless lambda is convertible).
@@ -79,7 +72,7 @@ int main()
     // Publish a sensor reading.
     (void)sensor_topic.publish(9876U);
 
-    // Zero-copy publish currently uses the portable copy fallback.
+    // Zero-copy publish still uses the portable copy fallback.
     std::uint32_t msg = 1111U;
     (void)sensor_topic.publish_zero_copy(&msg);
 

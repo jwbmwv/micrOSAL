@@ -13,7 +13,7 @@
 ///   - generic backend behaviour
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <doctest/doctest.h>
-#include <microsal/bus/osal_signal.hpp>
+#include <osal/bus/osal_signal.hpp>
 #include <cstdint>
 
 // ---------------------------------------------------------------------------
@@ -81,6 +81,31 @@ TEST_CASE("osal_signal: double unsubscribe returns false")
     REQUIRE(topic.subscribe(id));
     REQUIRE(topic.unsubscribe(id));
     CHECK_FALSE(topic.unsubscribe(id));
+}
+
+TEST_CASE("osal_signal: reusing a slot does not inherit stale queued messages")
+{
+    osal::osal_signal<std::uint32_t, 2U, 2U, osal::bus_backend_generic> topic;
+
+    osal::subscriber_id first{osal::invalid_subscriber_id};
+    REQUIRE(topic.subscribe(first));
+    REQUIRE(topic.publish(17U));
+    REQUIRE(topic.unsubscribe(first));
+
+    osal::subscriber_id reused{osal::invalid_subscriber_id};
+    REQUIRE(topic.subscribe(reused));
+    CHECK(reused != first);
+
+    std::uint32_t value{0U};
+    CHECK_FALSE(topic.try_receive(first, value));
+    CHECK_FALSE(topic.try_receive(reused, value));
+
+    REQUIRE(topic.publish(23U));
+    CHECK_FALSE(topic.try_receive(first, value));
+    REQUIRE(topic.try_receive(reused, value));
+    CHECK(value == 23U);
+
+    (void)topic.unsubscribe(reused);
 }
 
 // ---------------------------------------------------------------------------

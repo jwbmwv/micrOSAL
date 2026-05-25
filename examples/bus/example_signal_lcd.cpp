@@ -17,7 +17,7 @@
 ///   cmake --build build
 ///   ./build/examples/bus/example_topic_lcd
 /// @endcode
-#include <microsal/bus/osal_signal.hpp>
+#include <osal/bus/osal_signal.hpp>
 
 #include <array>
 #include <charconv>

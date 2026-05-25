@@ -30,8 +30,8 @@ Nine build targets are covered by automated builds or runtime suites:
 | INTEGRITY | CMake / CTest (doctest) | None (native process) | ✅ in CI (`OSAL_BACKEND=INTEGRITY`); same 28 binaries |
 | FreeRTOS v11 | CMake / CTest (doctest) | POSIX sim port (no emulator) | ✅ in CI (`freertos-test` job); **44/44 pass** locally rerun |
 | NuttX (main / sim:nsh) | NuttX builtin app (printf framework) | NuttX sim/nsh on x86-64 | ✅ in CI; **30/30 pass** last recorded rerun |
-| Zephyr (`native_sim`) | west twister (ztest) | Native Linux process | ✅ Locally rerun in an isolated Zephyr v4.4 environment; current 97-case suite passed **2/2** configurations and **194/194** test cases |
-| Zephyr (`nrf52840dk`) | west twister (ztest + Renode) | **Renode** v1.15.3 SoC simulation | ⚠️ Last published rerun was **79/79** on the pre-change suite; current 97-case suite not rerun after the stack-watermark, high-resolution-clock, and thread-introspection additions |
+| Zephyr (`native_sim`) | west twister (ztest) | Native Linux process | ✅ Last published isolated Twister rerun passed **2/2** configurations and **194/194** test cases on the pre-bus 97-case suite; the current **101-case / 25-suite** suite also passed in a fresh isolated `west build` + `-t run` rerun |
+| Zephyr (`nrf52840dk`) | west twister (ztest + Renode) | **Renode** v1.15.3 SoC simulation | ⚠️ Last published rerun was **79/79** on the pre-change suite; current **101-case / 25-suite** suite not rerun after the stack-watermark, high-resolution-clock, thread-introspection, and bus-layer additions |
 | ThreadX / PX5 / VxWorks / Micrium / ChibiOS / embOS / CMSIS-RTOS{,2} / QNX | External SDK or BSP integration | External SDK, BSP, simulator, or non-hosted toolchain/environment required | ❌ Not on GitHub-hosted CI |
 
 GitHub-hosted CI does not attempt to build these external-integration backends
@@ -156,23 +156,23 @@ Legend:
 | C API (`osal_c.h`) | `test_c_api.cpp` | ⚠️ | C11 compilation verified; hosted tests cover notification and delayable_work; Zephyr `native_sim` rerun also passes the C notification and C delayable-work round-trips; ISR variants still not called from C |
 | Integration (multi-primitive) | `test_integration.cpp` | ⚠️ | Producer/consumer with queue+semaphore; no rwlock or memory_pool integration |
 | Thread task notification | `test_thread.cpp` | ⚠️ | Unsupported path verified on Linux; native `xTaskNotify` round-trip now covered in the FreeRTOS suite; embOS task-event coverage still needs a licensed SDK environment |
-| `osal::osal_bus` | `tests/bus/test_osal_signal_backends.cpp` | ✅ | Hosted generic, delegated, and Zephyr-tagged fallback point-to-point channel behavior is covered; a native Zephyr runtime is still not implemented |
-| `osal::osal_signal` | `tests/bus/test_osal_signal_lcd.cpp`, `tests/bus/test_osal_signal_backends.cpp` | ✅ | Subscribe/unsubscribe, fan-out, FIFO ordering, full-queue drop semantics, and delegated backend compilation are covered on hosted builds |
-| `osal::osal_signal_premium` | `tests/bus/test_osal_signal_premium.cpp`, `tests/bus/test_osal_signal_backends.cpp` | ⚠️ | Mock-backend observers and copy-based `publish_zero_copy()` fallback are covered; `route_to()` is still a stub, and the Zephyr tag currently reuses the same portable premium path rather than a native Zbus implementation |
+| `osal::osal_bus` | `tests/bus/test_osal_signal_backends.cpp` | ✅ | Hosted generic, delegated, and Zephyr-tagged point-to-point channel behavior is covered; the Zephyr ztest suite now also covers the native `k_msgq` channel path |
+| `osal::osal_signal` | `tests/bus/test_osal_signal_lcd.cpp`, `tests/bus/test_osal_signal_backends.cpp` | ✅ | Subscribe/unsubscribe, fan-out, FIFO ordering, full-queue drop semantics, delegated backend compilation, and native Zephyr pub/sub publish/receive are covered |
+| `osal::osal_signal_premium` | `tests/bus/test_osal_signal_premium.cpp`, `tests/bus/test_osal_signal_backends.cpp` | ⚠️ | Mock-backend observers and copy-based `publish_zero_copy()` fallback are covered; the Zephyr suite now covers native observer registration/dispatch on the queue-backed Zephyr backend, but `route_to()` is still a stub and zero-copy publish is still copy-based |
 
 ---
 
 ## Zephyr test suite (`tests/zephyr/src/main.cpp`)
 
-97 test cases across 24 ztest suites.  The current suite includes mailbox,
+101 test cases across 25 ztest suites. The current suite includes mailbox,
 notification, delayable-work, object-wait-set, native Zephyr spinlocks,
 shared-emulated barriers, expanded C API coverage, thread
 stack-watermark queries (with `CONFIG_INIT_STACKS=y` and
-`CONFIG_THREAD_STACK_INFO=y`), thread introspection queries, and
-high-resolution clock coverage.
+`CONFIG_THREAD_STACK_INFO=y`), thread introspection queries,
+high-resolution clock coverage, and native Zephyr bus-layer coverage.
 
-- **`native_sim`** (Zephyr v4.4.0) — fresh isolated rerun of the current suite: **194/194 pass** across 2 test configurations.
-- **`nrf52840dk/nrf52840`** (Zephyr v4.3.0, **Renode** v1.15.3) — last published rerun before the thread stack-watermark, high-resolution-clock, and thread-introspection additions: **79/79 pass**.
+- **`native_sim`** (Zephyr v4.4.99) — fresh isolated direct `west build -b native_sim/native tests/zephyr && west build -t run` rerun of the current suite passed; the last published 2-configuration Twister rerun on the pre-bus suite was **194/194 pass**.
+- **`nrf52840dk/nrf52840`** (Zephyr v4.3.0, **Renode** v1.15.3) — last published rerun before the thread stack-watermark, high-resolution-clock, thread-introspection, and bus-layer additions: **79/79 pass**.
 
 | ztest suite | Cases | What is covered |
 | --- | --- | --- |
@@ -180,6 +180,7 @@ high-resolution clock coverage.
 | `osal_mutex` | 6 | Construction, lock/unlock, try_lock, recursive, config, lock_guard |
 | `osal_semaphore` | 6 | Binary, counting, initial count, config, `take_for` timeout |
 | `osal_queue` | 5 | Construction, starts empty, send/receive, FIFO order, full detection |
+| `osal_bus_layer` | 4 | Native `osal_bus` send/receive, native `osal_signal` publish/receive, premium observer subscribe/unsubscribe + publish fan-out, and Zephyr capability traits |
 | `osal_mailbox` | 4 | Construction, single-slot send/receive, alias/full detection, cross-thread handoff |
 | `osal_thread` | 6 | Default invalid, create+join, yield, `sleep_for` elapsed check, current/target stack-watermark queries, current/worker introspection queries |
 | `osal_timer` | 4 | Construction, one-shot fires once, periodic fires ≥2×, config |
