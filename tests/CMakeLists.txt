@@ -22,6 +22,7 @@ function(osal_add_test name source)
     target_compile_definitions(${name} PRIVATE
         DOCTEST_CONFIG_NO_EXCEPTIONS_BUT_WITH_ALL_ASSERTS
     )
+    osal_target_enable_alignment_diagnostics(${name})
     # Re-enable RTTI for test harness (doctest uses typeid internally)
     if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
         target_compile_options(${name} PRIVATE -fno-exceptions)
@@ -65,6 +66,7 @@ target_link_libraries(test_c_api PRIVATE microsal doctest::doctest)
 target_compile_definitions(test_c_api PRIVATE
     DOCTEST_CONFIG_NO_EXCEPTIONS_BUT_WITH_ALL_ASSERTS
 )
+osal_target_enable_alignment_diagnostics(test_c_api)
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     # C++ flags
     set_source_files_properties(test_c_api.cpp PROPERTIES COMPILE_OPTIONS "-fno-exceptions")

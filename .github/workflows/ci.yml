@@ -130,7 +130,7 @@ jobs:
   # Sanitiser run (ASan + UBSan on LINUX backend)
   # -------------------------------------------------------------------
   sanitizers:
-    name: "ASan + UBSan"
+    name: "ASan + UBSan + alignment"
     runs-on: ubuntu-24.04
     needs: build-test
     steps:
@@ -140,8 +140,9 @@ jobs:
         run: |
           cmake -B build \
             -DCMAKE_BUILD_TYPE=Debug \
-            -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer" \
-            -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined" \
+            -DCMAKE_C_FLAGS="-fsanitize=address,undefined,alignment -fno-omit-frame-pointer" \
+            -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined,alignment -fno-omit-frame-pointer" \
+            -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined,alignment" \
             -DOSAL_BACKEND=LINUX \
             -DOSAL_BUILD_TESTS=ON
 

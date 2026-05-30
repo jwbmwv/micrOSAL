@@ -215,6 +215,32 @@ west twister -T tests/zephyr -p native_sim \
 printf 'microsal_test\nexit\n' | timeout 120 ./nuttx/build/nuttx
 ```
 
+### Alignment diagnostics
+
+GNU and Clang builds now enable alignment-focused warnings on MicrOSAL targets:
+`-Wcast-align`, `-Waddress-of-packed-member`, and on GCC also
+`-Wcast-align=strict`.
+
+For a hosted runtime pass that traps misaligned loads and stores under UBSan:
+
+```bash
+cmake -B build-align \
+    -DOSAL_BACKEND=LINUX \
+    -DOSAL_BUILD_TESTS=ON \
+    -DCMAKE_BUILD_TYPE=Debug \
+    -DCMAKE_C_FLAGS="-fsanitize=address,undefined,alignment -fno-omit-frame-pointer" \
+    -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined,alignment -fno-omit-frame-pointer" \
+    -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined,alignment"
+cmake --build build-align -j$(nproc)
+ctest --test-dir build-align --output-on-failure
+```
+
+To keep unaligned access out of target builds, prefer `alignas(T)` storage,
+copy untrusted byte buffers into typed objects with `std::memcpy` instead of
+casting raw pointers, and on strict-alignment targets such as Cortex-M consider
+toolchain flags such as `-mno-unaligned-access` or `-mstrict-align` when your
+toolchain and core support them.
+
 ---
 
 ## Test coverage

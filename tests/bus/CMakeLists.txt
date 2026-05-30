@@ -7,6 +7,7 @@ function(bus_add_test name source)
     target_compile_definitions(${name} PRIVATE
         DOCTEST_CONFIG_NO_EXCEPTIONS_BUT_WITH_ALL_ASSERTS
     )
+    osal_target_enable_alignment_diagnostics(${name})
     if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
         target_compile_options(${name} PRIVATE -fno-exceptions)
     endif()

@@ -18,6 +18,8 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS        OFF)
 set(CMAKE_C_STANDARD            11)
 
+include(${CMAKE_CURRENT_SOURCE_DIR}/../../cmake/osal_diagnostics.cmake)
+
 include(FetchContent)
 
 # ---------------------------------------------------------------------------
@@ -70,6 +72,7 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
         -Wall -Wextra -Wno-unused-parameter
         -fno-exceptions -fno-rtti
     )
+    osal_target_enable_alignment_diagnostics(microsal)
 endif()
 
 # ---------------------------------------------------------------------------
@@ -108,6 +111,7 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
         -Wall -Wextra -Wno-unused-parameter
         -fno-exceptions -fno-rtti
     )
+    osal_target_enable_alignment_diagnostics(test_freertos)
 endif()
 
 target_link_libraries(test_freertos PRIVATE microsal freertos_kernel pthread)

@@ -68,6 +68,8 @@ project(microsal
     VERSION 0.0.1
     LANGUAGES C CXX)
 
+include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/osal_diagnostics.cmake)
+
 # ---------------------------------------------------------------------------
 # Options
 # ---------------------------------------------------------------------------
@@ -259,6 +261,7 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
         -Wshadow -Wno-unused-parameter
         -fno-exceptions -fno-rtti
     )
+    osal_target_enable_alignment_diagnostics(microsal)
 endif()
 
 # POSIX-family backends require pthread.
