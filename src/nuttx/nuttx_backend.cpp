@@ -1179,10 +1179,10 @@ extern "C"
     }
 
     // ---------------------------------------------------------------------------
-    // Work queue (emulated fallback — TODO: replace with native work_queue(LPWORK, ...))
+    // Work queue (native — NuttX work_queue() API)
     // ---------------------------------------------------------------------------
 
-#include "../common/emulated_work_queue.inl"
+#include "nuttx_work_queue.inl"
 
     // ---------------------------------------------------------------------------
     // Memory pool (emulated — bitmap + mutex + counting semaphore)

@@ -66,3 +66,9 @@ Testing/
 *.gcda
 *.gcno
 coverage/
+
+# Python bytecode
+__pycache__/
+*.pyc
+*.pyo
+*.py[cod]

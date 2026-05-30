@@ -87,6 +87,29 @@ constexpr osal::mutex_config mtx_cfg{osal::mutex_type::recursive};
 osal::mutex m{mtx_cfg};  // only handle_ + valid_ in RAM (≤ 12 bytes typ.)
 ```
 
+### Memory Analysis Tools
+
+micrOSAL provides tools to calculate memory footprint during development:
+
+- **`scripts/memory_footprint.py`**: Analyzes pool configurations and calculates
+  RAM/FLASH usage per backend. Supports custom pool size overrides.
+- **`cmake/MemoryReport.cmake`**: CMake integration for build-time memory
+  reporting using `size` and `nm` tools.
+
+Example usage:
+```bash
+# Analyze FreeRTOS backend pools
+./scripts/memory_footprint.py --backend FREERTOS
+
+# Calculate queue<uint32_t, 32> memory
+./scripts/memory_footprint.py --queue 4 32
+
+# Generate build-time memory report
+make memory_reports
+```
+
+See [`scripts/README.md`](../scripts/README.md) for complete documentation.
+
 ### Backward compatibility
 
 Original positional constructors remain alongside the new config-taking

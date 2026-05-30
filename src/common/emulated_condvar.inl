@@ -116,22 +116,21 @@ osal::result osal_condvar_create(osal::active_traits::condvar_handle_t* handle) 
     }
 
     // Pre-create binary semaphores for each waiter slot.
+    std::size_t created_count = 0;
     for (auto& w : cv->waiters)
     {
         if (!osal_semaphore_create(&w.sem, 0U, 1U).ok())
         {
-            // Cleanup already-created semaphores.
-            for (auto& w2 : cv->waiters)
+            // Cleanup already-created semaphores (those created before this failure).
+            for (std::size_t i = 0; i < created_count; ++i)
             {
-                if (w2.in_use || (&w2 < &w))
-                {
-                    osal_semaphore_destroy(&w2.sem);
-                }
+                osal_semaphore_destroy(&cv->waiters[i].sem);
             }
             osal_mutex_destroy(&cv->guard);
             emu_cv_release(cv);
             return osal::error_code::out_of_resources;
         }
+        ++created_count;
     }
 
     handle->native = cv;

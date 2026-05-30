@@ -14,6 +14,23 @@ hosted operating systems.
 Backend-by-backend storage and allocation profiles are summarized in
 [`docs/threading_model.md`](docs/threading_model.md).
 
+### Memory Analysis Tools
+
+micrOSAL includes tools for analyzing memory footprint:
+
+```bash
+# Analyze backend pool sizes
+./scripts/memory_footprint.py --backend FREERTOS
+
+# Calculate queue memory usage: queue<uint32_t, 32>
+./scripts/memory_footprint.py --queue 4 32
+
+# Build-time memory reporting (CMake)
+make memory_reports
+```
+
+See [`scripts/README.md`](scripts/README.md) for complete documentation.
+
 ```cpp
 #include <osal/osal.hpp>      // or include individual headers
 

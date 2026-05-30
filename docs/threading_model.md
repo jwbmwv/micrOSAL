@@ -101,8 +101,11 @@ from ISR context.
 
 Notes:
 
-- In FreeRTOS static mode, the first `sizeof(StaticTask_t)` bytes of `thread_config::stack` are used for the task control block; the remaining bytes form the usable task stack.
-- In the bare-metal backend, task metadata is stored but no independent stack switch occurs; each task runs on the scheduler's call stack.
+- In FreeRTOS static mode, the first `sizeof(StaticTask_t)` bytes of
+  `thread_config::stack` are used for the task control block; the remaining
+  bytes form the usable task stack.
+- In the bare-metal backend, task metadata is stored but no independent stack
+  switch occurs; each task runs on the scheduler's call stack.
 
 ## Backend Allocation Profiles
 
@@ -126,7 +129,7 @@ into a smaller set of storage models.
 | CMSIS-RTOS2 | Wrapper slot + native OS-managed objects | Depends on the underlying CMSIS port; memory-pool backing storage stays caller-supplied | MicrOSAL keeps fixed tracking slots, but queues/mutexes/timers/event flags are created through `os*New` APIs. |
 | POSIX | Heap-backed wrapper objects for many control primitives | Optional thread / work-queue stack storage; payload storage for fixed-storage wrappers such as `queue<T,N>` and `memory_pool` | The backend heap-allocates pthread / semaphore / timer / wait-set wrapper objects with `new`, even though several higher-level OSAL containers still embed their own payload storage. |
 | Linux | Heap-backed wrapper objects for many control primitives | Optional thread / work-queue stack storage; payload storage for fixed-storage wrappers such as `queue<T,N>` and `memory_pool` | Same model as POSIX, with Linux-specific control objects such as `timerfd` / `epoll` wrappers allocated on the heap. |
-| NuttX | Heap-backed wrapper objects for many control primitives | Optional thread stack storage; payload storage for fixed-storage wrappers such as `queue<T,N>` and `memory_pool` | NuttX currently uses the POSIX-style wrapper model in MicrOSAL, even though the RTOS itself is embedded. |
+| NuttX | Heap-backed wrapper objects for many control primitives | Optional thread stack storage; payload storage for fixed-storage wrappers such as `queue<T,N>` and `memory_pool` | NuttX now uses native `work_queue()` API (LPWORK/HPWORK) for work queues, with ISR-safe submission support. Other control objects use the POSIX-style wrapper model. |
 | QNX | Heap-backed wrapper objects for many control primitives | Optional thread stack storage; payload storage for fixed-storage wrappers such as `queue<T,N>` and `memory_pool` | Same general model as the POSIX-family backends. |
 | RTEMS | Heap-backed wrapper objects for many control primitives | Optional thread stack storage; payload storage for fixed-storage wrappers such as `queue<T,N>` and `memory_pool` | RTEMS currently builds through the shared POSIX-family backend implementation. |
 | INTEGRITY | Heap-backed wrapper objects for many control primitives | Optional thread stack storage; payload storage for fixed-storage wrappers such as `queue<T,N>` and `memory_pool` | INTEGRITY currently builds through the shared POSIX-family backend implementation. |

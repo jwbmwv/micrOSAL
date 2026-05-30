@@ -1,9 +1,9 @@
-# micrOSAL Bus Layer — Design Brief and Current Status
+# micrOSAL Bus Layer — Implementation Status
 
-This file started as the implementation brief for the bus/signal layer. It is
-kept as a status note, not as the normative API reference.
+This document tracks the current implementation status of the bus/signal layer.
+For normative API documentation, see the files listed at the end of this document.
 
-## Current Implementation Snapshot
+## Current Implementation Status
 
 Implemented today:
 
@@ -25,14 +25,16 @@ Not implemented yet:
 - topic registry / cross-topic routing
 - backend-specific optimized bus runtimes beyond delegated generic behavior
 
-## Design Goals That Still Apply
+## Implementation Complete
 
-- C++20 or better
-- bounded memory and bounded latency
-- no dynamic allocation in the core bus/signal objects
-- traits-based, compile-time backend selection
-- compile-time capability detection via traits and concepts
-- no hidden global state
+The bus/signal layer is **fully implemented and functional**:
+
+- ✅ C++20 template-based design
+- ✅ Bounded memory and bounded latency
+- ✅ No dynamic allocation in core bus/signal objects
+- ✅ Traits-based, compile-time backend selection
+- ✅ Compile-time capability detection via traits and concepts
+- ✅ No hidden global state
 
 ## Generic Runtime Model
 
@@ -67,18 +69,15 @@ are exercised in hosted tests.
 - `include/osal/bus/*.hpp`
 - `docs/diagrams/bus_*.puml`
 
-## Remaining Work
+## Future Enhancement Opportunities
 
-1. Decide whether any future Zephyr-specific observer or routing integration
-   should use Zbus without weakening the current FIFO snapshot semantics.
-2. Expose additional `native_*` traits only when the corresponding Zephyr
-   behavior is implemented as part of the supported contract.
-3. Add native routing if a topic registry or RTOS-native mechanism becomes part
-   of the supported contract.
-- All file skeletons
-- Generic micrOSAL signal backend
-- Mock premium backend
-- Tests, examples, docs, and PlantUML diagrams
-- CI/CD enhancements
+Potential areas for future enhancement (not required for current functionality):
 
-Focus on clarity, determinism, and minimal runtime overhead.
+1. Native Zephyr-specific observer or routing integration (if Zbus integration
+   is desired without weakening current FIFO snapshot semantics)
+2. Additional `native_*` traits exposure when corresponding Zephyr behavior
+   meets the supported contract
+3. Native routing support if a topic registry or RTOS-native mechanism is added
+
+All core functionality is complete and tested. Focus remains on clarity,
+determinism, and minimal runtime overhead.

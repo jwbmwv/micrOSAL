@@ -884,8 +884,8 @@ struct capabilities<backend_nuttx>
     static constexpr bool has_timed_event_flags          = true;
     static constexpr bool has_wait_set                   = false;
     static constexpr bool has_native_condvar             = true;  // pthread_cond_t
-    static constexpr bool has_native_work_queue          = true;  // work_queue()
-    static constexpr bool has_isr_work_queue_submit      = false;
+    static constexpr bool has_native_work_queue          = true;  // work_queue() LPWORK/HPWORK
+    static constexpr bool has_isr_work_queue_submit      = true;  // work_queue() is ISR-safe
     static constexpr bool has_native_memory_pool         = false;
     static constexpr bool has_native_stream_buffer       = false;
     static constexpr bool has_isr_stream_buffer          = false;
