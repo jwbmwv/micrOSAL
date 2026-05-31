@@ -83,7 +83,11 @@ public:
     /// @brief Constructs and initialises the queue.
     /// @complexity O(1)
     /// @blocking   Never.
+<<<<<<< HEAD
     queue() noexcept : valid_(osal_queue_create(&handle_, storage_, sizeof(T), N).ok()) {}
+=======
+    queue() noexcept { valid_ = osal_queue_create(&handle_, storage_, sizeof(T), N).ok(); }
+>>>>>>> 106c50797e2a92547b0b2b8d7bdb7dfd9fc24bc5
 
     /// @brief Destructs the queue.
     ~queue() noexcept
