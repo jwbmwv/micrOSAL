@@ -83,7 +83,7 @@ public:
     /// @brief Constructs and initialises the queue.
     /// @complexity O(1)
     /// @blocking   Never.
-    queue() noexcept : handle_{}, storage_{}, valid_{osal_queue_create(&handle_, storage_, sizeof(T), N).ok()} {}
+    queue() noexcept : valid_(osal_queue_create(&handle_, storage_, sizeof(T), N).ok()) {}
 
     /// @brief Destructs the queue.
     ~queue() noexcept
@@ -197,10 +197,10 @@ public:
     bool peek(T& item) noexcept { return osal_queue_peek(&handle_, &item, NO_WAIT).ok(); }
 
 private:
-    active_traits::queue_handle_t handle_;
+    active_traits::queue_handle_t handle_{};
     /// @brief Static backing storage — N items of size sizeof(T).
-    alignas(T) std::uint8_t storage_[N * sizeof(T)];
-    bool valid_;
+    alignas(T) std::uint8_t storage_[N * sizeof(T)]{};
+    bool valid_{};
 };
 
 /// @} // osal_queue

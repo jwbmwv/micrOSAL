@@ -48,7 +48,7 @@ struct nuttx_work_item
 struct nuttx_work_queue_obj
 {
     nuttx_work_item items[OSAL_NUTTX_MAX_WORK_ITEMS];
-    nxmutex_t       lock;           ///< Protects item array.
+    mutex_t         lock;           ///< Protects item array.
     int             queue_id;       ///< NuttX work queue ID (HPWORK/LPWORK).
     std::size_t     pending_count;  ///< Number of pending items.
     bool            valid;          ///< Queue is initialized.
@@ -355,7 +355,7 @@ std::size_t osal_work_queue_pending(const osal::active_traits::work_queue_handle
         return 0;
     }
 
-    nxmutex_lock(const_cast<nxmutex_t*>(&wq->lock));
+    nxmutex_lock(const_cast<mutex_t*>(&wq->lock));
     std::size_t count = 0;
     for (const auto& item : wq->items)
     {
@@ -364,7 +364,7 @@ std::size_t osal_work_queue_pending(const osal::active_traits::work_queue_handle
             ++count;
         }
     }
-    nxmutex_unlock(const_cast<nxmutex_t*>(&wq->lock));
+    nxmutex_unlock(const_cast<mutex_t*>(&wq->lock));
 
     return count;
 }
