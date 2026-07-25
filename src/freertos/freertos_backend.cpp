@@ -1072,10 +1072,14 @@ extern "C"
     {
         if (handle != nullptr && handle->native != nullptr)
         {
+            const auto queue = static_cast<QueueHandle_t>(handle->native);
 #if !defined(OSAL_FREERTOS_DYNAMIC_ALLOC)
-            fr_pool_release(fr_queue_pool, fr_queue_used, reinterpret_cast<StaticQueue_t*>(handle->native));
+            auto* const static_queue = reinterpret_cast<StaticQueue_t*>(handle->native);
 #endif
-            vQueueDelete(static_cast<QueueHandle_t>(handle->native));
+            vQueueDelete(queue);
+#if !defined(OSAL_FREERTOS_DYNAMIC_ALLOC)
+            fr_pool_release(fr_queue_pool, fr_queue_used, static_queue);
+#endif
             handle->native = nullptr;
         }
         return osal::ok();
