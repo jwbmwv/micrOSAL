@@ -382,6 +382,29 @@ TEST_CASE("c_api: rwlock read-then-write")
 // Config-based _create_with_cfg variants
 // =========================================================================
 
+TEST_CASE("c_api: create_with_cfg rejects null configuration")
+{
+    osal_mutex_handle          mtx{};
+    osal_semaphore_handle      sem{};
+    osal_queue_handle          queue{};
+    osal_thread_handle         thread{};
+    osal_timer_handle          timer{};
+    osal_work_queue_handle     work_queue{};
+    osal_memory_pool_handle    memory_pool{};
+    osal_stream_buffer_handle  stream_buffer{};
+    osal_message_buffer_handle message_buffer{};
+
+    CHECK(osal_c_mutex_create_with_cfg(&mtx, nullptr) == OSAL_INVALID_ARGUMENT);
+    CHECK(osal_c_semaphore_create_with_cfg(&sem, nullptr) == OSAL_INVALID_ARGUMENT);
+    CHECK(osal_c_queue_create_with_cfg(&queue, nullptr) == OSAL_INVALID_ARGUMENT);
+    CHECK(osal_c_thread_create_with_cfg(&thread, nullptr) == OSAL_INVALID_ARGUMENT);
+    CHECK(osal_c_timer_create_with_cfg(&timer, nullptr) == OSAL_INVALID_ARGUMENT);
+    CHECK(osal_c_work_queue_create_with_cfg(&work_queue, nullptr) == OSAL_INVALID_ARGUMENT);
+    CHECK(osal_c_memory_pool_create_with_cfg(&memory_pool, nullptr) == OSAL_INVALID_ARGUMENT);
+    CHECK(osal_c_stream_buffer_create_with_cfg(&stream_buffer, nullptr) == OSAL_INVALID_ARGUMENT);
+    CHECK(osal_c_message_buffer_create_with_cfg(&message_buffer, nullptr) == OSAL_INVALID_ARGUMENT);
+}
+
 TEST_CASE("c_api: mutex create_with_cfg — normal")
 {
     const osal_mutex_config cfg = {0};

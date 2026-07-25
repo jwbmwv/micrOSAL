@@ -78,6 +78,11 @@ public:
     using value_type                        = T;
     static constexpr queue_depth_t capacity = N;
 
+#if defined(OSAL_BACKEND_CMSIS_RTOS)
+    static_assert(sizeof(T) <= sizeof(std::uint32_t),
+                  "CMSIS-RTOS v1 queues transport values of at most 32 bits; use a handle or a smaller payload.");
+#endif
+
     // ---- construction / destruction ----------------------------------------
 
     /// @brief Constructs and initialises the queue.
@@ -127,7 +132,7 @@ public:
     /// @return true if enqueued; false if the queue was full.
     /// @complexity O(1)
     /// @blocking   Never.
-    bool try_send(const T& item) noexcept { return osal_queue_send(&handle_, &item, NO_WAIT).ok(); }
+    [[nodiscard]] bool try_send(const T& item) noexcept { return osal_queue_send(&handle_, &item, NO_WAIT).ok(); }
 
     /// @brief Sends with a timeout.
     /// @param item    Item to enqueue.
@@ -154,7 +159,7 @@ public:
     /// @warning Only safe when capabilities<active_backend>::has_isr_queue.
     /// @complexity O(1)
     /// @blocking   Never.
-    bool send_isr(const T& item) noexcept { return osal_queue_send_isr(&handle_, &item).ok(); }
+    [[nodiscard]] bool send_isr(const T& item) noexcept { return osal_queue_send_isr(&handle_, &item).ok(); }
 
     // ---- receive -----------------------------------------------------------
 
@@ -168,7 +173,7 @@ public:
     /// @brief Attempts to receive without blocking.
     /// @param[out] item  Destination.
     /// @return true if an item was available.
-    bool try_receive(T& item) noexcept { return osal_queue_receive(&handle_, &item, NO_WAIT).ok(); }
+    [[nodiscard]] bool try_receive(T& item) noexcept { return osal_queue_receive(&handle_, &item, NO_WAIT).ok(); }
 
     /// @brief Receives with a timeout.
     /// @param[out] item    Destination.
@@ -189,12 +194,12 @@ public:
     /// @brief Receives from ISR context.
     /// @param[out] item  Destination.
     /// @return true on success.
-    bool receive_isr(T& item) noexcept { return osal_queue_receive_isr(&handle_, &item).ok(); }
+    [[nodiscard]] bool receive_isr(T& item) noexcept { return osal_queue_receive_isr(&handle_, &item).ok(); }
 
     /// @brief Peeks at the front item without removing it.
     /// @param[out] item  Destination.
     /// @return true if an item was available.
-    bool peek(T& item) noexcept { return osal_queue_peek(&handle_, &item, NO_WAIT).ok(); }
+    [[nodiscard]] bool peek(T& item) noexcept { return osal_queue_peek(&handle_, &item, NO_WAIT).ok(); }
 
 private:
     active_traits::queue_handle_t handle_{};

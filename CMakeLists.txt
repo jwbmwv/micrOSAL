@@ -65,7 +65,7 @@ endif()
 # Standalone cmake project
 # ---------------------------------------------------------------------------
 project(microsal
-    VERSION 0.0.1
+    VERSION 0.0.2
     LANGUAGES C CXX)
 
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/osal_diagnostics.cmake)

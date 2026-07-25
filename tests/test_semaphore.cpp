@@ -38,6 +38,19 @@ TEST_CASE("binary semaphore: initialized with count=1")
     CHECK_FALSE(s.try_take());
 }
 
+#if defined(OSAL_BACKEND_BAREMETAL)
+TEST_CASE("binary semaphore: try_give rejects a second token")
+{
+    osal::semaphore s{osal::semaphore_type::binary, 0U};
+    REQUIRE(s.valid());
+
+    CHECK(s.try_give());
+    CHECK_FALSE(s.try_give());
+    CHECK(s.try_take());
+    CHECK_FALSE(s.try_take());
+}
+#endif
+
 TEST_CASE("binary semaphore: take_for with timeout")
 {
     osal::semaphore s{osal::semaphore_type::binary, 0U};

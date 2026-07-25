@@ -69,11 +69,14 @@ extern "C" void vApplicationStackOverflowHook(TaskHandle_t, char* pcTaskName)
 // ---------------------------------------------------------------------------
 // Doctest runner task
 // ---------------------------------------------------------------------------
-static int g_exit_code = 0;
+static int    g_exit_code = 0;
+static int    g_argc      = 0;
+static char** g_argv      = nullptr;
 
 static void runner_task(void* /*pvParam*/)
 {
     doctest::Context ctx;
+    (void)ctx.applyCommandLine(g_argc, g_argv);
     ctx.setOption("no-breaks", true);  // don't break into debugger on failure
     g_exit_code = ctx.run();
     vTaskEndScheduler();
@@ -85,10 +88,10 @@ static void runner_task(void* /*pvParam*/)
 // ---------------------------------------------------------------------------
 int main(int argc, char** argv)
 {
-    // Forward argc/argv to doctest so --help / --test-case etc. work from CTest.
-    // We stash them in globals so runner_task can pick them up via the Context API.
-    (void)argc;
-    (void)argv;
+    // The runner executes inside a FreeRTOS task, so retain the process
+    // arguments until doctest receives them there.
+    g_argc = argc;
+    g_argv = argv;
 
     xTaskCreate(runner_task, "doctest_runner", static_cast<configSTACK_DEPTH_TYPE>(131072 / sizeof(StackType_t)),
                 nullptr, configMAX_PRIORITIES - 2, nullptr);
@@ -100,6 +103,32 @@ int main(int argc, char** argv)
 // ==========================================================================
 //  Test cases — mirror of the Linux/POSIX doctest suite
 // ==========================================================================
+
+static_assert(osal::irq_mask_guard::is_supported);
+
+// --------------------------------------------------------------------------
+// osal::irq_mask_guard
+// --------------------------------------------------------------------------
+
+TEST_CASE("freertos/irq_mask_guard: construction")
+{
+    osal::irq_mask_guard guard;
+    CHECK(guard.active());
+}
+
+TEST_CASE("freertos/irq_mask_guard: nested scopes are safe")
+{
+    osal::irq_mask_guard outer;
+    CHECK(outer.active());
+
+    {
+        osal::irq_mask_guard inner;
+        CHECK(inner.active());
+        CHECK(outer.active());
+    }
+
+    CHECK(outer.active());
+}
 
 // --------------------------------------------------------------------------
 // osal::mutex

@@ -1,0 +1,53 @@
+# SPDX-License-Identifier: Apache-2.0
+name: Documentation
+
+on:
+  push:
+    paths:
+      - 'Doxyfile'
+      - 'README.md'
+      - 'include/**'
+      - 'docs/**'
+      - '.github/workflows/documentation.yml'
+  pull_request:
+    paths:
+      - 'Doxyfile'
+      - 'README.md'
+      - 'include/**'
+      - 'docs/**'
+      - '.github/workflows/documentation.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: documentation-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  generate-doxygen:
+    name: Generate Doxygen documentation
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Doxygen and Graphviz
+        run: sudo apt-get update && sudo apt-get install -y doxygen graphviz
+
+      - name: Generate documentation
+        run: |
+          rm -rf docs/doxygen/html docs/doxygen/latex docs/doxygen/xml
+          doxygen Doxyfile 2> doxygen-warnings.log
+          test -f docs/doxygen/html/index.html
+
+      - name: Upload documentation artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: microsal-doxygen-docs
+          path: |
+            docs/doxygen/html
+            doxygen-warnings.log
+          if-no-files-found: warn
+          retention-days: 30

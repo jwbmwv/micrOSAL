@@ -418,6 +418,10 @@ extern "C" osal_result_t osal_c_mutex_create(osal_mutex_handle* handle, int recu
 /// @return `OSAL_OK` on success.
 extern "C" osal_result_t osal_c_mutex_create_with_cfg(osal_mutex_handle* handle, const osal_mutex_config* cfg)
 {
+    if (cfg == nullptr) [[unlikely]]
+    {
+        return OSAL_INVALID_ARGUMENT;
+    }
     return to_c(osal_mutex_create(OSAL_C_CAST(mtx_h, handle), cfg->recursive != 0));
 }
 
@@ -476,6 +480,10 @@ extern "C" osal_result_t osal_c_semaphore_create(osal_semaphore_handle* handle, 
 extern "C" osal_result_t osal_c_semaphore_create_with_cfg(osal_semaphore_handle*       handle,
                                                           const osal_semaphore_config* cfg)
 {
+    if (cfg == nullptr) [[unlikely]]
+    {
+        return OSAL_INVALID_ARGUMENT;
+    }
     return to_c(osal_semaphore_create(OSAL_C_CAST(sem_h, handle), cfg->initial_count, cfg->max_count));
 }
 
@@ -541,6 +549,10 @@ extern "C" osal_result_t osal_c_queue_create(osal_queue_handle* handle, void* bu
 /// @return `OSAL_OK` on success.
 extern "C" osal_result_t osal_c_queue_create_with_cfg(osal_queue_handle* handle, const osal_queue_config* cfg)
 {
+    if (cfg == nullptr) [[unlikely]]
+    {
+        return OSAL_INVALID_ARGUMENT;
+    }
     return to_c(osal_queue_create(OSAL_C_CAST(que_h, handle), cfg->buffer, cfg->item_size, cfg->capacity));
 }
 
@@ -644,6 +656,10 @@ extern "C" osal_result_t osal_c_thread_create(osal_thread_handle* handle, osal_c
 /// @return `OSAL_OK` on success.
 extern "C" osal_result_t osal_c_thread_create_with_cfg(osal_thread_handle* handle, const osal_thread_config* cfg)
 {
+    if (cfg == nullptr) [[unlikely]]
+    {
+        return OSAL_INVALID_ARGUMENT;
+    }
     return to_c(osal_thread_create(OSAL_C_CAST(thr_h, handle), cfg->entry, cfg->arg, cfg->priority, cfg->affinity,
                                    cfg->stack, cfg->stack_bytes, cfg->name));
 }
@@ -813,6 +829,10 @@ extern "C" osal_result_t osal_c_timer_create(osal_timer_handle* handle, const ch
 /// @return `OSAL_OK` on success.
 extern "C" osal_result_t osal_c_timer_create_with_cfg(osal_timer_handle* handle, const osal_timer_config* cfg)
 {
+    if (cfg == nullptr) [[unlikely]]
+    {
+        return OSAL_INVALID_ARGUMENT;
+    }
     return to_c(osal_timer_create(OSAL_C_CAST(tmr_h, handle), cfg->name, cfg->callback, cfg->arg, cfg->period_ticks,
                                   cfg->auto_reload != 0));
 }
@@ -1280,6 +1300,10 @@ extern "C" osal_result_t osal_c_work_queue_create(osal_work_queue_handle* handle
 extern "C" osal_result_t osal_c_work_queue_create_with_cfg(osal_work_queue_handle*       handle,
                                                            const osal_work_queue_config* cfg)
 {
+    if (cfg == nullptr) [[unlikely]]
+    {
+        return OSAL_INVALID_ARGUMENT;
+    }
     return to_c(osal_work_queue_create(OSAL_C_CAST(wq_h, handle), cfg->stack, cfg->stack_bytes, cfg->depth, cfg->name));
 }
 
@@ -1637,6 +1661,10 @@ extern "C" osal_result_t osal_c_memory_pool_create(osal_memory_pool_handle* hand
 extern "C" osal_result_t osal_c_memory_pool_create_with_cfg(osal_memory_pool_handle*       handle,
                                                             const osal_memory_pool_config* cfg)
 {
+    if (cfg == nullptr) [[unlikely]]
+    {
+        return OSAL_INVALID_ARGUMENT;
+    }
     return to_c(osal_memory_pool_create(OSAL_C_CAST(mp_h, handle), cfg->buffer, cfg->buf_bytes, cfg->block_size,
                                         cfg->block_count, cfg->name));
 }
@@ -1760,6 +1788,10 @@ extern "C" osal_result_t osal_c_stream_buffer_create(osal_stream_buffer_handle* 
 extern "C" osal_result_t osal_c_stream_buffer_create_with_cfg(osal_stream_buffer_handle*       handle,
                                                               const osal_stream_buffer_config* cfg)
 {
+    if (cfg == nullptr) [[unlikely]]
+    {
+        return OSAL_INVALID_ARGUMENT;
+    }
     return to_c(osal_stream_buffer_create(OSAL_C_CAST(sb_h, handle), cfg->buffer, cfg->capacity, cfg->trigger_level));
 }
 
@@ -1859,6 +1891,10 @@ extern "C" osal_result_t osal_c_message_buffer_create(osal_message_buffer_handle
 extern "C" osal_result_t osal_c_message_buffer_create_with_cfg(osal_message_buffer_handle*       handle,
                                                                const osal_message_buffer_config* cfg)
 {
+    if (cfg == nullptr) [[unlikely]]
+    {
+        return OSAL_INVALID_ARGUMENT;
+    }
     return to_c(osal_message_buffer_create(OSAL_C_CAST(mb_h, handle), cfg->buffer, cfg->capacity));
 }
 

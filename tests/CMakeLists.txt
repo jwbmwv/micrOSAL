@@ -56,6 +56,7 @@ osal_add_test(test_memory_pool           test_memory_pool.cpp)
 osal_add_test(test_ring_buffer           test_ring_buffer.cpp)
 osal_add_test(test_thread_local_data     test_thread_local_data.cpp)
 osal_add_test(test_spinlock              test_spinlock.cpp)
+osal_add_test(test_irq_mask_guard        test_irq_mask_guard.cpp)
 osal_add_test(test_barrier               test_barrier.cpp)
 
 # ---------------------------------------------------------------------------

@@ -88,6 +88,34 @@ ZTEST(osal_clock, test_high_resolution_clock)
 ZTEST_SUITE(osal_clock, NULL, NULL, NULL, NULL, NULL);
 
 // =========================================================================
+// IRQ Mask Guard
+// =========================================================================
+
+static_assert(osal::irq_mask_guard::is_supported);
+
+ZTEST(osal_irq_mask_guard, test_construction)
+{
+    osal::irq_mask_guard guard;
+    zassert_true(guard.active(), "irq_mask_guard should acquire a Zephyr IRQ key");
+}
+
+ZTEST(osal_irq_mask_guard, test_nested_scopes)
+{
+    osal::irq_mask_guard outer;
+    zassert_true(outer.active(), NULL);
+
+    {
+        osal::irq_mask_guard inner;
+        zassert_true(inner.active(), NULL);
+        zassert_true(outer.active(), NULL);
+    }
+
+    zassert_true(outer.active(), NULL);
+}
+
+ZTEST_SUITE(osal_irq_mask_guard, NULL, NULL, NULL, NULL, NULL);
+
+// =========================================================================
 // Mutex
 // =========================================================================
 

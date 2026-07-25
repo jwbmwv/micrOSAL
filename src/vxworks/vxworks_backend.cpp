@@ -38,6 +38,7 @@
 #include <ctime>
 #include <cassert>
 #include <cstring>
+#include <limits>
 
 namespace
 {
@@ -72,6 +73,7 @@ int to_vx_ticks(osal::tick_t t) noexcept
 // Timer callback context
 // ---------------------------------------------------------------------------
 #define OSAL_VX_MAX_TIMERS 16
+#define OSAL_VX_MAX_QUEUES 8
 
 struct vx_timer_ctx
 {
@@ -82,6 +84,46 @@ struct vx_timer_ctx
     bool                  auto_reload{};
 };
 vx_timer_ctx vx_timer_ctxs[OSAL_VX_MAX_TIMERS];
+
+struct vx_queue_slot
+{
+    MSG_Q_ID    id{};
+    std::size_t item_size{};
+    std::size_t capacity{};
+    bool        used{};
+};
+vx_queue_slot vx_queues[OSAL_VX_MAX_QUEUES];
+
+vx_queue_slot* vx_queue_acquire() noexcept
+{
+    const int key = intLock();
+    for (auto& queue : vx_queues)
+    {
+        if (!queue.used)
+        {
+            queue.used = true;
+            intUnlock(key);
+            return &queue;
+        }
+    }
+    intUnlock(key);
+    return nullptr;
+}
+
+void vx_queue_release(vx_queue_slot* queue) noexcept
+{
+    if (queue == nullptr)
+    {
+        return;
+    }
+
+    const int key    = intLock();
+    queue->id        = nullptr;
+    queue->item_size = 0U;
+    queue->capacity  = 0U;
+    queue->used      = false;
+    intUnlock(key);
+}
 
 void vx_timer_expiry(long ctx_idx) noexcept
 {
@@ -414,13 +456,31 @@ extern "C"
     osal::result osal_queue_create(osal::active_traits::queue_handle_t* handle, void* /*buffer*/, std::size_t item_size,
                                    std::size_t capacity) noexcept
     {
-        // VxWorks msgQ allocates internally; user buffer is ignored.
-        MSG_Q_ID q = msgQCreate(static_cast<int>(capacity), static_cast<int>(item_size), MSG_Q_FIFO);
-        if (q == MSG_Q_ID_NULL)
+        if (handle == nullptr || item_size == 0U || capacity == 0U ||
+            item_size > static_cast<std::size_t>(std::numeric_limits<UINT>::max()) ||
+            capacity > static_cast<std::size_t>(std::numeric_limits<int>::max()))
+        {
+            return osal::error_code::invalid_argument;
+        }
+
+        auto* slot = vx_queue_acquire();
+        if (slot == nullptr)
         {
             return osal::error_code::out_of_resources;
         }
-        handle->native = static_cast<void*>(q);
+
+        // VxWorks msgQ allocates its native payload storage internally; the
+        // wrapper slot keeps the requested item geometry for every operation.
+        MSG_Q_ID q = msgQCreate(static_cast<int>(capacity), static_cast<int>(item_size), MSG_Q_FIFO);
+        if (q == MSG_Q_ID_NULL)
+        {
+            vx_queue_release(slot);
+            return osal::error_code::out_of_resources;
+        }
+        slot->id        = q;
+        slot->item_size = item_size;
+        slot->capacity  = capacity;
+        handle->native  = static_cast<void*>(slot);
         return osal::ok();
     }
 
@@ -433,7 +493,9 @@ extern "C"
         {
             return osal::ok();
         }
-        msgQDelete(static_cast<MSG_Q_ID>(handle->native));
+        auto* slot = static_cast<vx_queue_slot*>(handle->native);
+        (void)msgQDelete(slot->id);
+        vx_queue_release(slot);
         handle->native = nullptr;
         return osal::ok();
     }
@@ -450,16 +512,9 @@ extern "C"
         {
             return osal::error_code::not_initialized;
         }
-        MSG_Q_ID q = static_cast<MSG_Q_ID>(handle->native);
-        // msgQSend requires the message size; we stored it implicitly at creation.
-        // VxWorks tracks max msg length internally.
-        int msg_len = 0;
-        // Use the queue's configured max message size.
-        // VxWorks 7: msgQInfoGet or simply pass the item_size stored externally.
-        // For simplicity, send sizeof-of-item which must match create.
-        const STATUS rc = msgQSend(q, const_cast<char*>(static_cast<const char*>(item)), 0 /* filled below */,
-                                   to_vx_ticks(timeout_ticks), MSG_PRI_NORMAL);
-        (void)msg_len;
+        auto*        slot = static_cast<vx_queue_slot*>(handle->native);
+        const STATUS rc   = msgQSend(slot->id, const_cast<char*>(static_cast<const char*>(item)),
+                                     static_cast<UINT>(slot->item_size), to_vx_ticks(timeout_ticks), MSG_PRI_NORMAL);
         return (rc == OK) ? osal::ok() : osal::error_code::timeout;
     }
 
@@ -484,9 +539,9 @@ extern "C"
         {
             return osal::error_code::not_initialized;
         }
-        MSG_Q_ID  q = static_cast<MSG_Q_ID>(handle->native);
-        const int rc =
-            msgQReceive(q, static_cast<char*>(item), 0 /* max bytes — filled by VxWorks */, to_vx_ticks(timeout_ticks));
+        auto*     slot = static_cast<vx_queue_slot*>(handle->native);
+        const int rc   = msgQReceive(slot->id, static_cast<char*>(item), static_cast<UINT>(slot->item_size),
+                                     to_vx_ticks(timeout_ticks));
         return (rc != ERROR) ? osal::ok() : osal::error_code::timeout;
     }
 
@@ -517,15 +572,27 @@ extern "C"
         {
             return 0U;
         }
-        return static_cast<std::size_t>(msgQNumMsgs(static_cast<MSG_Q_ID>(handle->native)));
+        const auto* slot  = static_cast<const vx_queue_slot*>(handle->native);
+        const int   count = msgQNumMsgs(slot->id);
+        return (count > 0) ? static_cast<std::size_t>(count) : 0U;
     }
 
     /// @brief Query remaining queue capacity — not directly queryable on VxWorks.
     /// @return 0 always.
     std::size_t osal_queue_free(const osal::active_traits::queue_handle_t* handle) noexcept
     {
-        (void)handle;
-        return 0U;  // VxWorks does not expose remaining capacity directly
+        if (handle == nullptr || handle->native == nullptr)
+        {
+            return 0U;
+        }
+        const auto* slot  = static_cast<const vx_queue_slot*>(handle->native);
+        const int   count = msgQNumMsgs(slot->id);
+        if (count <= 0)
+        {
+            return slot->capacity;
+        }
+        const std::size_t used = static_cast<std::size_t>(count);
+        return (used >= slot->capacity) ? 0U : (slot->capacity - used);
     }
 
     // ---------------------------------------------------------------------------

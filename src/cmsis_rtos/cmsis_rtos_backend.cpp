@@ -30,6 +30,7 @@
 #include <osal/osal.hpp>
 
 #include <cmsis_os.h>  ///< CMSIS-RTOS v1 header
+#include <atomic>
 #include <cassert>
 #include <cstring>
 
@@ -87,11 +88,56 @@ cmsis1_sem_slot cmsis1_sems[OSAL_CMSIS1_MAX_SEMS];
 
 struct cmsis1_queue_slot
 {
-    osMessageQId id{};
-    std::size_t  item_size{};
-    bool         used{};
+    osMessageQId             id{};
+    std::size_t              item_size{};
+    std::size_t              capacity{};
+    std::atomic<std::size_t> count{0U};
+    bool                     used{};
+    bool                     active{};
 };
 cmsis1_queue_slot cmsis1_queues[OSAL_CMSIS1_MAX_QUEUES];
+
+cmsis1_queue_slot* cmsis1_queue_acquire(std::size_t item_size, std::size_t capacity) noexcept
+{
+    // CMSIS-RTOS v1 has no portable message-queue delete operation. Reuse a
+    // compatible native queue before consuming a previously unused slot.
+    for (auto& queue : cmsis1_queues)
+    {
+        if (!queue.active && queue.used && queue.item_size == item_size && queue.capacity == capacity)
+        {
+            queue.active = true;
+            queue.count.store(0U, std::memory_order_relaxed);
+            return &queue;
+        }
+    }
+
+    for (auto& queue : cmsis1_queues)
+    {
+        if (!queue.used)
+        {
+            queue.used      = true;
+            queue.active    = true;
+            queue.item_size = item_size;
+            queue.capacity  = capacity;
+            queue.count.store(0U, std::memory_order_relaxed);
+            return &queue;
+        }
+    }
+    return nullptr;
+}
+
+void cmsis1_queue_drain(cmsis1_queue_slot* queue) noexcept
+{
+    if (queue == nullptr || queue->id == nullptr)
+    {
+        return;
+    }
+
+    while (osMessageGet(queue->id, 0U).status == osEventMessage)
+    {
+    }
+    queue->count.store(0U, std::memory_order_relaxed);
+}
 
 struct cmsis1_timer_slot
 {
@@ -530,19 +576,33 @@ extern "C"
 
     /// @brief Create a CMSIS-RTOS v1 message queue via osMessageCreate().
     /// @param handle    Output handle populated with the cmsis1_queue_slot pointer.
-    /// @param item_size Size in bytes of each message (values > 4 bytes are sent as pointers).
+    /// @param item_size Size in bytes of each message (maximum 4 bytes).
     /// @param capacity  Maximum number of messages the queue can hold.
     /// @return osal::ok() on success; osal::error_code::out_of_resources on failure.
     osal::result osal_queue_create(osal::active_traits::queue_handle_t* handle, void* /*buffer*/, std::size_t item_size,
                                    std::size_t capacity) noexcept
     {
-        assert(handle != nullptr);
-        auto* slot = slot_acquire(cmsis1_queues);
+        if (handle == nullptr || item_size == 0U || capacity == 0U)
+        {
+            return osal::error_code::invalid_argument;
+        }
+        if (item_size > sizeof(std::uint32_t))
+        {
+            return osal::error_code::not_supported;
+        }
+
+        auto* slot = cmsis1_queue_acquire(item_size, capacity);
         if (slot == nullptr)
         {
             return osal::error_code::out_of_resources;
         }
-        slot->item_size = item_size;
+
+        if (slot->id != nullptr)
+        {
+            cmsis1_queue_drain(slot);
+            handle->native = static_cast<void*>(slot);
+            return osal::ok();
+        }
 
         osMessageQDef_t def = {};
         def.queue_sz        = static_cast<uint32_t>(capacity);
@@ -551,7 +611,10 @@ extern "C"
         slot->id = osMessageCreate(&def, nullptr);
         if (slot->id == nullptr)
         {
-            slot_release(cmsis1_queues, slot);
+            slot->item_size = 0U;
+            slot->capacity  = 0U;
+            slot->active    = false;
+            slot->used      = false;
             return osal::error_code::out_of_resources;
         }
         handle->native = static_cast<void*>(slot);
@@ -559,7 +622,8 @@ extern "C"
     }
 
     /// @brief Destroy a queue and release its slot.
-    /// @details CMSIS-RTOS v1 has no osMessageDelete in all implementations; best-effort slot release.
+    /// @details CMSIS-RTOS v1 has no portable queue-delete operation. The
+    ///          native queue is drained and retained for compatible reuse.
     /// @param handle Queue handle; no-op if null or already destroyed.
     /// @return osal::ok() always.
     osal::result osal_queue_destroy(osal::active_traits::queue_handle_t* handle) noexcept
@@ -569,15 +633,13 @@ extern "C"
             return osal::ok();
         }
         auto* slot = static_cast<cmsis1_queue_slot*>(handle->native);
-        // CMSIS-RTOS v1 does not have osMessageDelete in all implementations;
-        // best-effort release.
-        slot_release(cmsis1_queues, slot);
+        cmsis1_queue_drain(slot);
+        slot->active   = false;
         handle->native = nullptr;
         return osal::ok();
     }
 
-    /// @brief Send a 32-bit message to a queue via osMessagePut().
-    /// @details For messages larger than 4 bytes, the first four bytes are sent as a 32-bit value.
+    /// @brief Send a value of at most 32 bits to a queue via osMessagePut().
     /// @param handle        Queue handle.
     /// @param item          Pointer to the message data.
     /// @param timeout_ticks Maximum wait in OSAL ticks (mapped to milliseconds).
@@ -589,13 +651,13 @@ extern "C"
         {
             return osal::error_code::not_initialized;
         }
-        auto* slot = static_cast<cmsis1_queue_slot*>(handle->native);
-        // CMSIS-RTOS v1 sends 32-bit values; for larger items, send a pointer.
-        uint32_t val = 0U;
-        std::memcpy(&val, item, (slot->item_size <= sizeof(val)) ? slot->item_size : sizeof(val));
+        auto*    slot = static_cast<cmsis1_queue_slot*>(handle->native);
+        uint32_t val  = 0U;
+        std::memcpy(&val, item, slot->item_size);
         const osStatus s = osMessagePut(slot->id, val, to_cmsis1_timeout(timeout_ticks));
         if (s == osOK)
         {
+            slot->count.fetch_add(1U, std::memory_order_relaxed);
             return osal::ok();
         }
         return (timeout_ticks == osal::NO_WAIT) ? osal::error_code::would_block : osal::error_code::timeout;
@@ -627,7 +689,12 @@ extern "C"
         if (ev.status == osEventMessage)
         {
             uint32_t val = ev.value.v;
-            std::memcpy(item, &val, (slot->item_size <= sizeof(val)) ? slot->item_size : sizeof(val));
+            std::memcpy(item, &val, slot->item_size);
+            std::size_t count = slot->count.load(std::memory_order_relaxed);
+            while (count > 0U && !slot->count.compare_exchange_weak(count, count - 1U, std::memory_order_relaxed,
+                                                                    std::memory_order_relaxed))
+            {
+            }
             return osal::ok();
         }
         return (timeout_ticks == osal::NO_WAIT) ? osal::error_code::would_block : osal::error_code::timeout;
@@ -650,18 +717,27 @@ extern "C"
         return osal::error_code::not_supported;  // CMSIS-RTOS v1 has no peek
     }
 
-    /// @brief Return the number of messages currently in the queue (not available in CMSIS-RTOS v1).
-    /// @return Always 0; CMSIS-RTOS v1 has no message-count query.
-    std::size_t osal_queue_count(const osal::active_traits::queue_handle_t* /*handle*/) noexcept
+    /// @brief Return the locally tracked number of messages currently queued.
+    std::size_t osal_queue_count(const osal::active_traits::queue_handle_t* handle) noexcept
     {
-        return 0U;  // CMSIS-RTOS v1 has no message-count query
+        if (handle == nullptr || handle->native == nullptr)
+        {
+            return 0U;
+        }
+        const auto* slot = static_cast<const cmsis1_queue_slot*>(handle->native);
+        return slot->count.load(std::memory_order_relaxed);
     }
 
-    /// @brief Return the number of free slots in the queue (not available in CMSIS-RTOS v1).
-    /// @return Always 0; CMSIS-RTOS v1 has no free-space query.
-    std::size_t osal_queue_free(const osal::active_traits::queue_handle_t* /*handle*/) noexcept
+    /// @brief Return the locally tracked number of available queue slots.
+    std::size_t osal_queue_free(const osal::active_traits::queue_handle_t* handle) noexcept
     {
-        return 0U;  // CMSIS-RTOS v1 has no free-space query
+        if (handle == nullptr || handle->native == nullptr)
+        {
+            return 0U;
+        }
+        const auto* slot  = static_cast<const cmsis1_queue_slot*>(handle->native);
+        const auto  count = slot->count.load(std::memory_order_relaxed);
+        return (count >= slot->capacity) ? 0U : (slot->capacity - count);
     }
 
     // ---------------------------------------------------------------------------

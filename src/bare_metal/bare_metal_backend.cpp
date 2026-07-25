@@ -19,6 +19,16 @@
 /// If not defined, the backend falls back to C11 _Noreturn-safe busy waits
 /// (safe on single-core systems without real interrupts).
 ///
+/// @par IRQ-mask guard hooks (preferred for osal::irq_mask_guard):
+/// @code
+///   #define OSAL_BM_IRQ_STATE_T       unsigned int
+///   #define OSAL_BM_IRQ_LOCK()        my_irq_save()
+///   #define OSAL_BM_IRQ_UNLOCK(state) my_irq_restore(state)
+/// @endcode
+/// When these hooks are omitted, osal::irq_mask_guard falls back to a hosted
+/// no-op token for OSAL_BM_TEST_SELF_TICK builds and to PRIMASK save/restore
+/// on Cortex-M targets.
+///
 /// @par SysTick integration:
 /// The user's SysTick_Handler (or equivalent) MUST call:
 /// @code
@@ -50,9 +60,41 @@
 // Critical section — user may override
 // ---------------------------------------------------------------------------
 #if !defined(OSAL_BM_ENTER_CRITICAL)
-#if defined(__arm__) || defined(__ARM_ARCH)
-#define OSAL_BM_ENTER_CRITICAL() __asm volatile("cpsid i" ::: "memory")
-#define OSAL_BM_EXIT_CRITICAL() __asm volatile("cpsie i" ::: "memory")
+#if defined(__ARM_ARCH_PROFILE) && (__ARM_ARCH_PROFILE == 'M')
+namespace
+{
+std::uint32_t bm_critical_depth = 0U;
+std::uint32_t bm_saved_primask  = 0U;
+
+inline void bm_enter_critical() noexcept
+{
+    if (bm_critical_depth == 0U)
+    {
+        __asm volatile("mrs %0, primask\n\t"
+                       "cpsid i"
+                       : "=r"(bm_saved_primask)
+                       :
+                       : "memory");
+    }
+    ++bm_critical_depth;
+}
+
+inline void bm_exit_critical() noexcept
+{
+    if (bm_critical_depth == 0U)
+    {
+        return;
+    }
+    --bm_critical_depth;
+    if (bm_critical_depth == 0U)
+    {
+        __asm volatile("msr primask, %0" : : "r"(bm_saved_primask) : "memory");
+    }
+}
+}  // namespace
+
+#define OSAL_BM_ENTER_CRITICAL() bm_enter_critical()
+#define OSAL_BM_EXIT_CRITICAL() bm_exit_critical()
 #else
 // No-op fallback for hosted/simulation builds.
 #define OSAL_BM_ENTER_CRITICAL() \
@@ -105,12 +147,12 @@ inline void bm_maybe_self_tick() noexcept {}
 }  // namespace
 
 /// @brief Called by the SysTick handler (or equivalent) each tick.
+/// @note Software timers are NOT advanced here.  Call
+///       osal_baremetal_tick_with_timers() instead when software timer
+///       support is required.
 extern "C" void osal_baremetal_tick() noexcept
 {
     (void)bm_ticks_advance_one();
-
-    // Advance software timers.
-    // See timer section below.
 }
 
 // ---------------------------------------------------------------------------
@@ -156,6 +198,13 @@ extern "C"
 #define OSAL_BM_MAX_TASKS OSAL_BAREMETAL_MAX_TASKS
 #define OSAL_BM_STACK_GUARD 0xDEADBEEFU
 
+    // bm_task::flags bit positions
+    static constexpr std::uint8_t BM_TASK_VALID    = 0x01U;  ///< Slot is in use
+    static constexpr std::uint8_t BM_TASK_STARTED  = 0x02U;  ///< Entry has been called at least once
+    static constexpr std::uint8_t BM_TASK_FINISHED = 0x04U;  ///< Entry function has returned
+    static constexpr std::uint8_t BM_TASK_DETACHED = 0x08U;  ///< Detached; auto-free on finish
+    static constexpr std::uint8_t BM_TASK_WAITING  = 0x10U;  ///< Blocked in bm_wait_yield
+
     struct bm_task
     {
 #if defined(OSAL_BM_TEST_SELF_TICK)
@@ -163,11 +212,7 @@ extern "C"
 #else
         jmp_buf ctx;
 #endif
-        bool started;
-        bool finished;
-        bool valid;
-        bool detached;
-        bool waiting;
+        std::uint8_t flags;  ///< BM_TASK_* bitmask — replaces five separate bool fields
         void (*entry)(void*);
         void*         arg;
         std::uint8_t* stack;
@@ -198,7 +243,8 @@ extern "C"
             {
                 continue;
             }
-            if (bm_tasks[idx].valid && !bm_tasks[idx].finished && (include_waiting || !bm_tasks[idx].waiting))
+            if ((bm_tasks[idx].flags & BM_TASK_VALID) != 0U && (bm_tasks[idx].flags & BM_TASK_FINISHED) == 0U &&
+                (include_waiting || (bm_tasks[idx].flags & BM_TASK_WAITING) == 0U))
             {
                 return idx;
             }
@@ -210,11 +256,11 @@ extern "C"
     {
         bm_current = idx;
         bm_tasks[idx].entry(bm_tasks[idx].arg);
-        bm_tasks[idx].finished = true;
-        bm_tasks[idx].waiting  = false;
-        if (bm_tasks[idx].detached)
+        bm_tasks[idx].flags |= BM_TASK_FINISHED;
+        bm_tasks[idx].flags &= static_cast<std::uint8_t>(~BM_TASK_WAITING);
+        if ((bm_tasks[idx].flags & BM_TASK_DETACHED) != 0U)
         {
-            bm_tasks[idx].valid = false;
+            bm_tasks[idx].flags &= static_cast<std::uint8_t>(~BM_TASK_VALID);
         }
 
         const int next = bm_find_next_ready_task(idx, false);
@@ -285,16 +331,16 @@ extern "C"
             {
                 continue;
             }
-            if (bm_tasks[idx].valid && !bm_tasks[idx].finished)
+            if ((bm_tasks[idx].flags & BM_TASK_VALID) != 0U && (bm_tasks[idx].flags & BM_TASK_FINISHED) == 0U)
             {
                 bm_current = idx;
-                if (!bm_tasks[idx].started)
+                if ((bm_tasks[idx].flags & BM_TASK_STARTED) == 0U)
                 {
-                    bm_tasks[idx].started = true;
+                    bm_tasks[idx].flags |= BM_TASK_STARTED;
                     // Call entry directly (no stack switching here — user provides stack via config).
                     bm_tasks[idx].entry(bm_tasks[idx].arg);
-                    bm_tasks[idx].finished = true;
-                    bm_current             = current;
+                    bm_tasks[idx].flags |= BM_TASK_FINISHED;
+                    bm_current = current;
                 }
                 else
                 {
@@ -327,16 +373,12 @@ extern "C"
         assert(handle != nullptr && entry != nullptr);
         for (auto& task : bm_tasks)
         {
-            if (!task.valid)
+            if ((task.flags & BM_TASK_VALID) == 0U)
             {
                 task             = {};
-                task.valid       = true;
-                task.started     = false;
-                task.finished    = false;
+                task.flags       = BM_TASK_VALID;  // started/finished/detached/waiting all clear
                 task.entry       = entry;
                 task.arg         = arg;
-                task.detached    = false;
-                task.waiting     = false;
                 task.stack       = static_cast<std::uint8_t*>(stack);
                 task.stack_bytes = stack_bytes;
 #if defined(OSAL_BM_TEST_SELF_TICK)
@@ -344,9 +386,10 @@ extern "C"
                 task.ctx.uc_stack.ss_sp   = task.stack;
                 task.ctx.uc_stack.ss_size = task.stack_bytes;
                 task.ctx.uc_link          = nullptr;
+                // NOLINTNEXTLINE(cppcoreguidelines-pro-type-vararg)
                 makecontext(&task.ctx, reinterpret_cast<void (*)()>(bm_task_trampoline), 1,
                             static_cast<int>(&task - bm_tasks));
-                task.started = true;
+                task.flags |= BM_TASK_STARTED;
 #endif
                 handle->native = static_cast<void*>(&task);
                 return osal::ok();
@@ -367,7 +410,7 @@ extern "C"
         }
         auto*               t        = static_cast<bm_task*>(handle->native);
         const std::uint64_t deadline = bm_ticks_now() + static_cast<std::uint64_t>(timeout);
-        while (!t->finished)
+        while ((t->flags & BM_TASK_FINISHED) == 0U)
         {
             osal_thread_yield();
             if (timeout != osal::WAIT_FOREVER && bm_ticks_now() >= deadline)
@@ -375,7 +418,7 @@ extern "C"
                 return osal::error_code::timeout;
             }
         }
-        t->valid       = false;
+        t->flags &= static_cast<std::uint8_t>(~BM_TASK_VALID);
         handle->native = nullptr;
         return osal::ok();
     }
@@ -389,8 +432,8 @@ extern "C"
         {
             return osal::error_code::not_initialized;
         }
-        static_cast<bm_task*>(handle->native)->detached = true;
-        handle->native                                  = nullptr;
+        static_cast<bm_task*>(handle->native)->flags |= BM_TASK_DETACHED;
+        handle->native = nullptr;
         return osal::ok();
     }
 
@@ -440,7 +483,6 @@ extern "C"
         }
 
         bm_schedule();
-        return;
 #else
         if (bm_current < 0)
         {
@@ -473,14 +515,14 @@ extern "C"
 #if defined(OSAL_BM_TEST_SELF_TICK)
         if (bm_current >= 0)
         {
-            bm_tasks[bm_current].waiting = true;
+            bm_tasks[bm_current].flags |= BM_TASK_WAITING;
         }
 #endif
         osal_thread_yield();
 #if defined(OSAL_BM_TEST_SELF_TICK)
         if (bm_current >= 0)
         {
-            bm_tasks[bm_current].waiting = false;
+            bm_tasks[bm_current].flags &= static_cast<std::uint8_t>(~BM_TASK_WAITING);
         }
 #endif
     }
@@ -511,7 +553,8 @@ extern "C"
     namespace
     {
     bm_mutex bm_mutex_pool[OSAL_BM_MAX_MUTEXES];
-    bool     bm_mutex_used[OSAL_BM_MAX_MUTEXES];
+    /// Bit-per-slot occupancy map — 1 byte per 8 slots (7× smaller than bool[]).
+    std::uint8_t bm_mutex_used_bits[(OSAL_BM_MAX_MUTEXES + 7U) / 8U] = {};
     }  // namespace
 
     /// @brief Allocate a spin-lock mutex from the static pool.
@@ -521,9 +564,9 @@ extern "C"
     {
         for (int i = 0; i < OSAL_BM_MAX_MUTEXES; ++i)
         {
-            if (!bm_mutex_used[i])
+            if ((bm_mutex_used_bits[i / 8] & static_cast<std::uint8_t>(1U << (i % 8))) == 0U)
             {
-                bm_mutex_used[i] = true;
+                bm_mutex_used_bits[i / 8] |= static_cast<std::uint8_t>(1U << (i % 8));
                 bm_mutex_pool[i].flag.clear();
                 handle->native = static_cast<void*>(&bm_mutex_pool[i]);
                 return osal::ok();
@@ -545,7 +588,7 @@ extern "C"
         {
             if (&bm_mutex_pool[i] == handle->native)
             {
-                bm_mutex_used[i] = false;
+                bm_mutex_used_bits[i / 8] &= static_cast<std::uint8_t>(~(1U << (i % 8)));
                 break;
             }
         }
@@ -613,11 +656,12 @@ extern "C"
     struct bm_semaphore
     {
         std::atomic<unsigned> count;
+        unsigned              max;
     };
     namespace
     {
     bm_semaphore bm_sem_pool[OSAL_BM_MAX_SEMS];
-    bool         bm_sem_used[OSAL_BM_MAX_SEMS];
+    std::uint8_t bm_sem_used_bits[(OSAL_BM_MAX_SEMS + 7U) / 8U] = {};  ///< Bit-per-slot occupancy
     }  // namespace
 
     /// @brief Allocate a counting semaphore from the static pool.
@@ -625,15 +669,20 @@ extern "C"
     /// @param init   Initial count.
     /// @return `osal::ok()` on success, `out_of_resources` if `OSAL_BM_MAX_SEMS` is full.
     osal::result osal_semaphore_create(osal::active_traits::semaphore_handle_t* handle, unsigned init,
-                                       unsigned /*max*/) noexcept
+                                       unsigned max) noexcept
     {
+        if (handle == nullptr || max == 0U || init > max)
+        {
+            return osal::error_code::invalid_argument;
+        }
         for (int i = 0; i < OSAL_BM_MAX_SEMS; ++i)
         {
-            if (!bm_sem_used[i])
+            if ((bm_sem_used_bits[i / 8] & static_cast<std::uint8_t>(1U << (i % 8))) == 0U)
             {
-                bm_sem_used[i] = true;
+                bm_sem_used_bits[i / 8] |= static_cast<std::uint8_t>(1U << (i % 8));
                 bm_sem_pool[i].count.store(init, std::memory_order_relaxed);
-                handle->native = static_cast<void*>(&bm_sem_pool[i]);
+                bm_sem_pool[i].max = max;
+                handle->native     = static_cast<void*>(&bm_sem_pool[i]);
                 return osal::ok();
             }
         }
@@ -653,7 +702,7 @@ extern "C"
         {
             if (&bm_sem_pool[i] == handle->native)
             {
-                bm_sem_used[i] = false;
+                bm_sem_used_bits[i / 8] &= static_cast<std::uint8_t>(~(1U << (i % 8)));
                 break;
             }
         }
@@ -661,17 +710,27 @@ extern "C"
         return osal::ok();
     }
 
-    /// @brief Increment the semaphore count atomically.
+    /// @brief Increment the semaphore count atomically without exceeding its maximum.
     /// @param handle Semaphore handle.
-    /// @return `osal::ok()` on success, `not_initialized` if the handle is invalid.
+    /// @return `osal::ok()` on success, `overflow` at the maximum count, or
+    ///         `not_initialized` if the handle is invalid.
     osal::result osal_semaphore_give(osal::active_traits::semaphore_handle_t* handle) noexcept
     {
         if (handle == nullptr || handle->native == nullptr)
         {
             return osal::error_code::not_initialized;
         }
-        static_cast<bm_semaphore*>(handle->native)->count.fetch_add(1U, std::memory_order_release);
-        return osal::ok();
+        auto*    semaphore = static_cast<bm_semaphore*>(handle->native);
+        unsigned count     = semaphore->count.load(std::memory_order_relaxed);
+        while (count < semaphore->max)
+        {
+            if (semaphore->count.compare_exchange_weak(count, count + 1U, std::memory_order_release,
+                                                       std::memory_order_relaxed))
+            {
+                return osal::ok();
+            }
+        }
+        return osal::error_code::overflow;
     }
 
     /// @brief Increment the semaphore from ISR context (delegates to `give`).
@@ -738,8 +797,8 @@ extern "C"
     };
     namespace
     {
-    bm_queue bm_queue_pool[OSAL_BM_MAX_QUEUES];
-    bool     bm_queue_used[OSAL_BM_MAX_QUEUES];
+    bm_queue     bm_queue_pool[OSAL_BM_MAX_QUEUES];
+    std::uint8_t bm_queue_used_bits[(OSAL_BM_MAX_QUEUES + 7U) / 8U] = {};  ///< Bit-per-slot occupancy
     }  // namespace
 
     /// @brief Allocate a circular queue from the static pool, backed by @p buf.
@@ -753,9 +812,9 @@ extern "C"
     {
         for (int i = 0; i < OSAL_BM_MAX_QUEUES; ++i)
         {
-            if (!bm_queue_used[i])
+            if ((bm_queue_used_bits[i / 8] & static_cast<std::uint8_t>(1U << (i % 8))) == 0U)
             {
-                bm_queue_used[i] = true;
+                bm_queue_used_bits[i / 8] |= static_cast<std::uint8_t>(1U << (i % 8));
                 bm_queue_pool[i] = {static_cast<std::uint8_t*>(buf), item_size, capacity, 0, 0, 0};
                 handle->native   = static_cast<void*>(&bm_queue_pool[i]);
                 return osal::ok();
@@ -777,7 +836,7 @@ extern "C"
         {
             if (&bm_queue_pool[i] == handle->native)
             {
-                bm_queue_used[i] = false;
+                bm_queue_used_bits[i / 8] &= static_cast<std::uint8_t>(~(1U << (i % 8)));
                 break;
             }
         }
@@ -931,8 +990,8 @@ extern "C"
     {
         osal_timer_callback_t fn;
         void*                 arg;
+        std::uint64_t         deadline;  ///< Absolute tick of next expiry (before period to avoid padding)
         osal::tick_t          period;    ///< Reload value in ticks
-        std::uint64_t         deadline;  ///< Absolute tick of next expiry
         bool                  auto_reload;
         bool                  active;
         bool                  valid;
@@ -1003,7 +1062,7 @@ extern "C"
         {
             if (!timer.valid)
             {
-                timer          = {cb, arg, period, 0, auto_reload, false, true};
+                timer          = {cb, arg, 0, period, auto_reload, false, true};
                 handle->native = static_cast<void*>(&timer);
                 return osal::ok();
             }

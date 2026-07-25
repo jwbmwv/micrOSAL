@@ -41,6 +41,7 @@
 #include <cassert>
 #include <atomic>
 #include <cstring>
+#include <memory>
 #include <new>
 
 #if defined(OSAL_FREERTOS_DYNAMIC_ALLOC)
@@ -161,6 +162,9 @@ fr_cb_pair fr_cb_pairs[OSAL_FREERTOS_MAX_TIMERS];
 #ifndef OSAL_FREERTOS_MAX_SEMAPHORES
 #define OSAL_FREERTOS_MAX_SEMAPHORES 16
 #endif
+#ifndef OSAL_FREERTOS_MAX_QUEUES
+#define OSAL_FREERTOS_MAX_QUEUES 8
+#endif
 #ifndef OSAL_FREERTOS_MAX_TIMERS
 #define OSAL_FREERTOS_MAX_TIMERS 8
 #endif
@@ -179,6 +183,7 @@ fr_cb_pair fr_cb_pairs[OSAL_FREERTOS_MAX_TIMERS];
 
 static_assert(OSAL_FREERTOS_MAX_MUTEXES > 0, "OSAL_FREERTOS_MAX_MUTEXES must be > 0.");
 static_assert(OSAL_FREERTOS_MAX_SEMAPHORES > 0, "OSAL_FREERTOS_MAX_SEMAPHORES must be > 0.");
+static_assert(OSAL_FREERTOS_MAX_QUEUES > 0, "OSAL_FREERTOS_MAX_QUEUES must be > 0.");
 static_assert(OSAL_FREERTOS_MAX_TIMERS > 0, "OSAL_FREERTOS_MAX_TIMERS must be > 0.");
 static_assert(OSAL_FREERTOS_MAX_EVENT_GROUPS > 0, "OSAL_FREERTOS_MAX_EVENT_GROUPS must be > 0.");
 static_assert(OSAL_FREERTOS_MAX_STREAM_BUFFERS > 0, "OSAL_FREERTOS_MAX_STREAM_BUFFERS must be > 0.");
@@ -192,6 +197,9 @@ bool              fr_mutex_used[OSAL_FREERTOS_MAX_MUTEXES];
 
 StaticSemaphore_t fr_sem_pool[OSAL_FREERTOS_MAX_SEMAPHORES];
 bool              fr_sem_used[OSAL_FREERTOS_MAX_SEMAPHORES];
+
+StaticQueue_t fr_queue_pool[OSAL_FREERTOS_MAX_QUEUES];
+bool          fr_queue_used[OSAL_FREERTOS_MAX_QUEUES];
 
 StaticTimer_t fr_timer_pool[OSAL_FREERTOS_MAX_TIMERS];
 bool          fr_timer_used[OSAL_FREERTOS_MAX_TIMERS];
@@ -501,10 +509,26 @@ extern "C"
             return osal::error_code::out_of_resources;
         }
 
-        auto* tcb = static_cast<StaticTask_t*>(stack);  // first sizeof(StaticTask_t) bytes
-        auto* stk = reinterpret_cast<StackType_t*>(static_cast<std::uint8_t*>(stack) + sizeof(StaticTask_t));
+        void*       tcb_storage = stack;
+        std::size_t remaining   = stack_bytes;
+        if (std::align(alignof(StaticTask_t), sizeof(StaticTask_t), tcb_storage, remaining) == nullptr)
+        {
+            fr_thread_ctx_destroy(ctx);
+            return osal::error_code::invalid_argument;
+        }
+
+        auto* tcb           = static_cast<StaticTask_t*>(tcb_storage);
+        void* stack_storage = static_cast<std::uint8_t*>(tcb_storage) + sizeof(StaticTask_t);
+        remaining -= sizeof(StaticTask_t);
+        if (std::align(alignof(StackType_t), sizeof(StackType_t), stack_storage, remaining) == nullptr)
+        {
+            fr_thread_ctx_destroy(ctx);
+            return osal::error_code::invalid_argument;
+        }
+
+        auto*               stk        = static_cast<StackType_t*>(stack_storage);
         const std::uint32_t real_words =  // NOLINT(cppcoreguidelines-init-variables)
-            static_cast<std::uint32_t>((stack_bytes - sizeof(StaticTask_t)) / sizeof(StackType_t));
+            static_cast<std::uint32_t>(remaining / sizeof(StackType_t));
 
         th = xTaskCreateStatic(fr_thread_wrapper_fn, (name != nullptr) ? name : "osal", real_words, ctx, fr_prio, stk,
                                tcb);
@@ -1004,12 +1028,12 @@ extern "C"
     // Queue
     // ---------------------------------------------------------------------------
 
-    /// @brief Creates a FreeRTOS queue backed by caller-supplied storage.
-    /// @details On the static-alloc path, @p buffer must contain a @c StaticQueue_t followed by
-    ///          @c capacity * @p item_size bytes of data storage.  On the dynamic path @p buffer
-    ///          is ignored and the queue is heap-allocated.
+    /// @brief Creates a FreeRTOS queue backed by caller-supplied payload storage.
+    /// @details On the static-alloc path the backend obtains a @c StaticQueue_t
+    ///          from its fixed control-block pool. @p buffer always contains
+    ///          exactly @c capacity * @p item_size bytes of queue payload data.
     /// @param handle    Output handle populated on success.
-    /// @param buffer    Pointer to @c StaticQueue_t + data storage (ignored with dynamic alloc).
+    /// @param buffer    Caller-owned queue payload storage (ignored with dynamic alloc).
     /// @param item_size Size in bytes of each queue element.
     /// @param capacity  Maximum number of elements the queue can hold.
     /// @return @c osal::ok() on success; @c error_code::out_of_resources on failure.
@@ -1022,14 +1046,19 @@ extern "C"
         (void)buffer;
         QueueHandle_t q = xQueueCreate(static_cast<UBaseType_t>(capacity), static_cast<UBaseType_t>(item_size));
 #else
-        // Static queue — needs StaticQueue_t; we embed it before the data buffer.
-        auto*         sq   = static_cast<StaticQueue_t*>(buffer);
-        auto*         data = reinterpret_cast<std::uint8_t*>(sq) + sizeof(StaticQueue_t);
-        QueueHandle_t q =
-            xQueueCreateStatic(static_cast<UBaseType_t>(capacity), static_cast<UBaseType_t>(item_size), data, sq);
+        auto* sq = fr_pool_acquire(fr_queue_pool, fr_queue_used);
+        if (sq == nullptr)
+        {
+            return osal::error_code::out_of_resources;
+        }
+        QueueHandle_t q = xQueueCreateStatic(static_cast<UBaseType_t>(capacity), static_cast<UBaseType_t>(item_size),
+                                             static_cast<std::uint8_t*>(buffer), sq);
 #endif
         if (q == nullptr)
         {
+#if !defined(OSAL_FREERTOS_DYNAMIC_ALLOC)
+            fr_pool_release(fr_queue_pool, fr_queue_used, sq);
+#endif
             return osal::error_code::out_of_resources;
         }
         handle->native = static_cast<void*>(q);
@@ -1043,6 +1072,9 @@ extern "C"
     {
         if (handle != nullptr && handle->native != nullptr)
         {
+#if !defined(OSAL_FREERTOS_DYNAMIC_ALLOC)
+            fr_pool_release(fr_queue_pool, fr_queue_used, reinterpret_cast<StaticQueue_t*>(handle->native));
+#endif
             vQueueDelete(static_cast<QueueHandle_t>(handle->native));
             handle->native = nullptr;
         }
@@ -1594,9 +1626,10 @@ extern "C"
         {
             return osal::error_code::out_of_resources;
         }
-        // storage must be capacity+1 bytes (one sentinel slot for the SPSC ring).
-        StreamBufferHandle_t h = xStreamBufferCreateStatic(static_cast<std::size_t>(capacity), trig,
-                                                           static_cast<std::uint8_t*>(buffer), scb);
+        // The static FreeRTOS API expects its sentinel byte to be included in
+        // xBufferSizeBytes; stream_buffer<N> owns exactly N + 1 bytes.
+        StreamBufferHandle_t h =
+            xStreamBufferCreateStatic(capacity + 1U, trig, static_cast<std::uint8_t*>(buffer), scb);
         if (h == nullptr)
         {
             fr_pool_release(fr_sbuf_pool, fr_sbuf_used, scb);

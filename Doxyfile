@@ -6,7 +6,7 @@
 
 DOXYFILE_ENCODING      = UTF-8
 PROJECT_NAME           = "MicrOSAL"
-PROJECT_NUMBER         = 0.0.1
+PROJECT_NUMBER         = 0.0.2
 PROJECT_BRIEF          = "Thin, zero-overhead C++20 operating-system abstraction layer for embedded and hosted targets"
 PROJECT_LOGO           =
 OUTPUT_DIRECTORY       = docs/doxygen

@@ -2,34 +2,13 @@
 # Kconfig — MicrOSAL Zephyr module configuration
 
 config MICRO_OSAL
-	bool "MicrOSAL — Zephyr backend"
+	bool "MicrOSAL Zephyr backend"
 	default n
 	help
 	  Enables the Micro Operating System Abstraction Layer compiled
-	  against the Zephyr RTOS backend.  Only one backend can be active
-	  per build.
+	  against the Zephyr RTOS backend.
 
 if MICRO_OSAL
-
-choice MICRO_OSAL_BACKEND
-	prompt "OSAL backend selection"
-	default MICRO_OSAL_BACKEND_ZEPHYR
-	help
-	  Selects the underlying RTOS backend used by the OSAL.
-
-config MICRO_OSAL_BACKEND_ZEPHYR
-	bool "Zephyr"
-	help
-	  Use the Zephyr RTOS backend.  k_thread, k_mutex, k_sem,
-	  k_msgq, k_timer, and k_condvar are used.
-
-config MICRO_OSAL_BACKEND_BAREMETAL
-	bool "Bare-metal (cooperative)"
-	help
-	  Use the software-only bare-metal backend.  No RTOS headers
-	  are required.  Cooperative multitasking via setjmp/longjmp.
-
-endchoice
 
 config MICRO_OSAL_STACK_SIZE_DEFAULT
 	int "Default thread stack size (bytes)"
