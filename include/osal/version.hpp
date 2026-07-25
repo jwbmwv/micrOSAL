@@ -18,14 +18,19 @@
 
 #define MICRO_OSAL_VERSION_MAJOR 0
 #define MICRO_OSAL_VERSION_MINOR 0
-#define MICRO_OSAL_VERSION_PATCH 1
+#define MICRO_OSAL_VERSION_PATCH 2
 
 /// @brief Encodes major.minor.patch into a single integer: (M * 10000 + m * 100 + p).
 #define MICRO_OSAL_VERSION_NUMBER \
     (MICRO_OSAL_VERSION_MAJOR * 10000 + MICRO_OSAL_VERSION_MINOR * 100 + MICRO_OSAL_VERSION_PATCH)
 
-/// @brief Version as a string literal, e.g. "0.0.1".
-#define MICRO_OSAL_VERSION_STRING "0.0.1"
+#define MICRO_OSAL_DETAIL_STRINGIFY_IMPL(value) #value
+#define MICRO_OSAL_DETAIL_STRINGIFY(value) MICRO_OSAL_DETAIL_STRINGIFY_IMPL(value)
+
+/// @brief Version as a string literal generated from the version component macros.
+#define MICRO_OSAL_VERSION_STRING                         \
+    MICRO_OSAL_DETAIL_STRINGIFY(MICRO_OSAL_VERSION_MAJOR) \
+    "." MICRO_OSAL_DETAIL_STRINGIFY(MICRO_OSAL_VERSION_MINOR) "." MICRO_OSAL_DETAIL_STRINGIFY(MICRO_OSAL_VERSION_PATCH)
 
 /// @} // osal_version
 
@@ -46,14 +51,14 @@ struct version_info
                static_cast<std::uint32_t>(patch);
     }
 
-    /// @brief Returns the version as a string literal, e.g. "0.0.1".
+    /// @brief Returns the version as a string literal, e.g. "0.0.2".
     [[nodiscard]] static constexpr const char* string() noexcept { return MICRO_OSAL_VERSION_STRING; }
 };
 
 /// @brief Returns the library version at compile-time.
 /// @code
 ///   constexpr auto v = osal::version();
-///   static_assert(v.major == 0 && v.minor == 0 && v.patch == 1);
+///   static_assert(v.major == 0 && v.minor == 0 && v.patch == 2);
 /// @endcode
 [[nodiscard]] constexpr version_info version() noexcept
 {

@@ -295,6 +295,7 @@ coverage matrix and gap analysis.
 | --- | --- |
 | [`docs/design.md`](docs/design.md) | Architecture, design principles, config/data split, capability matrix |
 | [`docs/backend_integration.md`](docs/backend_integration.md) | How to port MicrOSAL to a new backend |
+| [`docs/RELEASE_CONTRACT.md`](docs/RELEASE_CONTRACT.md) | Supported configurations, validation boundary, and release checks |
 | [`docs/TestCoverage.md`](docs/TestCoverage.md) | Test suite inventory and coverage matrix |
 | [`docs/threading_model.md`](docs/threading_model.md) | Thread lifecycle, priorities, and scheduling model |
 | [`docs/c_api.md`](docs/c_api.md) | Pure-C API reference |

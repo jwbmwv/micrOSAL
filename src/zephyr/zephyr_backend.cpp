@@ -241,42 +241,49 @@ static_assert(OSAL_ZEPHYR_WQ_MAX_DEPTH > 0, "OSAL_ZEPHYR_WQ_MAX_DEPTH must be > 
 namespace
 {
 
-struct k_mutex  zephyr_mutexes[OSAL_ZEPHYR_MAX_MUTEXES];
-bool            zephyr_mutex_used[OSAL_ZEPHYR_MAX_MUTEXES];
-struct k_sem    zephyr_sems[OSAL_ZEPHYR_MAX_SEMS];
-bool            zephyr_sem_used[OSAL_ZEPHYR_MAX_SEMS];
-struct k_msgq   zephyr_queues[OSAL_ZEPHYR_MAX_QUEUES];
-bool            zephyr_queue_used[OSAL_ZEPHYR_MAX_QUEUES];
-struct k_timer  zephyr_timers[OSAL_ZEPHYR_MAX_TIMERS];
-bool            zephyr_timer_used[OSAL_ZEPHYR_MAX_TIMERS];
-struct k_thread zephyr_threads[OSAL_ZEPHYR_MAX_THREADS];
-bool            zephyr_thread_used[OSAL_ZEPHYR_MAX_THREADS];
+struct k_mutex    zephyr_mutexes[OSAL_ZEPHYR_MAX_MUTEXES];
+bool              zephyr_mutex_used[OSAL_ZEPHYR_MAX_MUTEXES];
+struct k_sem      zephyr_sems[OSAL_ZEPHYR_MAX_SEMS];
+bool              zephyr_sem_used[OSAL_ZEPHYR_MAX_SEMS];
+struct k_msgq     zephyr_queues[OSAL_ZEPHYR_MAX_QUEUES];
+bool              zephyr_queue_used[OSAL_ZEPHYR_MAX_QUEUES];
+struct k_timer    zephyr_timers[OSAL_ZEPHYR_MAX_TIMERS];
+bool              zephyr_timer_used[OSAL_ZEPHYR_MAX_TIMERS];
+struct k_thread   zephyr_threads[OSAL_ZEPHYR_MAX_THREADS];
+bool              zephyr_thread_used[OSAL_ZEPHYR_MAX_THREADS];
+struct k_spinlock zephyr_pool_lock;
 
 template<typename T, std::size_t N>
 T* acquire_from_pool(T (&pool)[N], bool (&used)[N]) noexcept
 {
+    const k_spinlock_key_t key = k_spin_lock(&zephyr_pool_lock);
     for (std::size_t i = 0U; i < N; ++i)
     {
         if (!used[i])
         {
             used[i] = true;
+            k_spin_unlock(&zephyr_pool_lock, key);
             return &pool[i];
         }
     }
+    k_spin_unlock(&zephyr_pool_lock, key);
     return nullptr;
 }
 
 template<typename T, std::size_t N>
 void release_to_pool(T (&pool)[N], bool (&used)[N], T* p) noexcept
 {
+    const k_spinlock_key_t key = k_spin_lock(&zephyr_pool_lock);
     for (std::size_t i = 0U; i < N; ++i)
     {
         if (&pool[i] == p)
         {
             used[i] = false;
+            k_spin_unlock(&zephyr_pool_lock, key);
             return;
         }
     }
+    k_spin_unlock(&zephyr_pool_lock, key);
 }
 
 }  // namespace

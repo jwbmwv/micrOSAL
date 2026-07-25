@@ -5,6 +5,7 @@
 #include <doctest/doctest.h>
 #include <osal/osal.hpp>
 #include <cstring>
+#include <limits>
 
 // ---------------------------------------------------------------------------
 // Construction
@@ -23,6 +24,20 @@ TEST_CASE("memory_pool: config construction succeeds")
     const osal::memory_pool_config           cfg{buf, sizeof(buf), sizeof(std::size_t), 8, "cfg_test"};
     osal::memory_pool                        pool{cfg};
     CHECK(pool.valid());
+}
+
+TEST_CASE("memory_pool: rejects overflowed backing-storage geometry")
+{
+    if constexpr (osal::active_capabilities::has_native_memory_pool)
+    {
+        return;
+    }
+
+    alignas(std::size_t) std::uint8_t         storage[sizeof(std::size_t)]{};
+    osal::active_traits::memory_pool_handle_t handle{};
+    const auto                                result = osal_memory_pool_create(&handle, storage, sizeof(storage),
+                                                                               std::numeric_limits<std::size_t>::max(), 2U, nullptr);
+    CHECK(result.code() == osal::error_code::invalid_argument);
 }
 
 // ---------------------------------------------------------------------------

@@ -24,6 +24,7 @@
 
 #include <ch.h>  ///< ChibiOS/RT header
 #include <cassert>
+#include <cstdint>
 #include <cstring>
 
 // ---------------------------------------------------------------------------
@@ -35,7 +36,9 @@
 #define OSAL_CH_MAX_QUEUES 8
 #define OSAL_CH_MAX_TIMERS 8
 #define OSAL_CH_MAX_FLAGS 8
-#define OSAL_CH_MAILBOX_DEPTH 16  // per-mailbox message slots
+#ifndef OSAL_CH_MAILBOX_DEPTH
+#define OSAL_CH_MAILBOX_DEPTH 16  // maximum queue depth per static slot
+#endif
 
 // ---------------------------------------------------------------------------
 // Static pools
@@ -56,12 +59,18 @@ struct ch_thread_slot
 };
 ch_thread_slot ch_threads[OSAL_CH_MAX_THREADS];
 
-// ChibiOS mailbox (queue) slots
+// ChibiOS queue slots. Payloads remain in the caller's backing buffer; the
+// mailboxes transport free/ready buffer indices rather than payload bytes.
 struct ch_mailbox_slot
 {
-    mailbox_t mb{};
-    msg_t     buf[OSAL_CH_MAILBOX_DEPTH]{};
-    bool      used = false;
+    mailbox_t     ready{};
+    mailbox_t     free{};
+    msg_t         ready_buffer[OSAL_CH_MAILBOX_DEPTH]{};
+    msg_t         free_buffer[OSAL_CH_MAILBOX_DEPTH]{};
+    std::uint8_t* storage   = nullptr;
+    std::size_t   item_size = 0U;
+    std::size_t   capacity  = 0U;
+    bool          used      = false;
 };
 ch_mailbox_slot ch_mailboxes[OSAL_CH_MAX_QUEUES];
 
@@ -240,7 +249,6 @@ extern "C"
                                     osal::priority_t priority, osal::affinity_t /*affinity*/, void* stack,
                                     osal::stack_size_t stack_bytes, const char* name) noexcept
     {
-        assert(handle != nullptr && entry != nullptr && stack != nullptr);
         auto* slot = pool_acquire_by_used(ch_threads);
         if (slot == nullptr)
         {
@@ -530,28 +538,52 @@ extern "C"
     }
 
     // ---------------------------------------------------------------------------
-    // Queue (ChibiOS Mailbox — pointer-sized messages)
+    // Queue (caller storage plus ChibiOS mailbox indices)
     // ---------------------------------------------------------------------------
 
-    /// @brief Initialise a ChibiOS mailbox slot via chMBObjectInit().
-    /// @details The mailbox depth is fixed at OSAL_CH_MAILBOX_DEPTH; item_size and capacity
-    ///          parameters are accepted for API compatibility but the mailbox stores msg_t values.
+    /// @brief Initialise a ChibiOS queue using the caller's payload storage.
+    /// @details Two native mailboxes transport indices into @p buffer: one
+    ///          tracks free entries and the other tracks FIFO-ready entries.
     /// @param handle Output handle pointing to the ch_mailbox_slot.
-    /// @return osal::ok() on success; osal::error_code::out_of_resources if no slot is available.
-    osal::result osal_queue_create(osal::active_traits::queue_handle_t* handle, void* /*buffer*/,
-                                   std::size_t /*item_size*/, std::size_t /*capacity*/) noexcept
+    /// @return osal::ok() on success; osal::error_code::not_supported when
+    ///         @p capacity exceeds OSAL_CH_MAILBOX_DEPTH.
+    osal::result osal_queue_create(osal::active_traits::queue_handle_t* handle, void* buffer, std::size_t item_size,
+                                   std::size_t capacity) noexcept
     {
+        if (handle == nullptr || buffer == nullptr || item_size == 0U || capacity == 0U)
+        {
+            return osal::error_code::invalid_argument;
+        }
+        if (capacity > OSAL_CH_MAILBOX_DEPTH)
+        {
+            return osal::error_code::not_supported;
+        }
         auto* slot = pool_acquire_by_used(ch_mailboxes);
         if (slot == nullptr)
         {
             return osal::error_code::out_of_resources;
         }
-        chMBObjectInit(&slot->mb, slot->buf, OSAL_CH_MAILBOX_DEPTH);
+
+        slot->storage   = static_cast<std::uint8_t*>(buffer);
+        slot->item_size = item_size;
+        slot->capacity  = capacity;
+        chMBObjectInit(&slot->ready, slot->ready_buffer, capacity);
+        chMBObjectInit(&slot->free, slot->free_buffer, capacity);
+        for (std::size_t index = 0U; index < capacity; ++index)
+        {
+            if (chMBPostTimeout(&slot->free, static_cast<msg_t>(index), TIME_IMMEDIATE) != MSG_OK)
+            {
+                chMBReset(&slot->ready);
+                chMBReset(&slot->free);
+                pool_release_by_used(ch_mailboxes, slot);
+                return osal::error_code::out_of_resources;
+            }
+        }
         handle->native = static_cast<void*>(slot);
         return osal::ok();
     }
 
-    /// @brief Reset a mailbox and release its slot via chMBReset().
+    /// @brief Reset a queue's native mailboxes and release its static slot.
     /// @param handle Queue handle; no-op if null or already destroyed.
     /// @return osal::ok() always.
     osal::result osal_queue_destroy(osal::active_traits::queue_handle_t* handle) noexcept
@@ -561,14 +593,17 @@ extern "C"
             return osal::ok();
         }
         auto* slot = static_cast<ch_mailbox_slot*>(handle->native);
-        chMBReset(&slot->mb);
+        chMBReset(&slot->ready);
+        chMBReset(&slot->free);
+        slot->storage   = nullptr;
+        slot->item_size = 0U;
+        slot->capacity  = 0U;
         pool_release_by_used(ch_mailboxes, slot);
         handle->native = nullptr;
         return osal::ok();
     }
 
-    /// @brief Post a msg_t-sized message to the mailbox via chMBPostTimeout().
-    /// @details The first sizeof(msg_t) bytes of @p item are copied into a msg_t value.
+    /// @brief Copy an item into a free caller-storage entry and enqueue its index.
     /// @param handle        Queue handle.
     /// @param item          Pointer to the message data.
     /// @param timeout_ticks Maximum wait in OSAL ticks.
@@ -580,18 +615,33 @@ extern "C"
         {
             return osal::error_code::not_initialized;
         }
-        auto* slot = static_cast<ch_mailbox_slot*>(handle->native);
-        msg_t msg;
-        std::memcpy(&msg, item, sizeof(msg_t));
-        const msg_t r = chMBPostTimeout(&slot->mb, msg, to_ch_ticks(timeout_ticks));
-        if (r == MSG_OK)
+        if (item == nullptr)
+        {
+            return osal::error_code::invalid_argument;
+        }
+        auto*       slot = static_cast<ch_mailbox_slot*>(handle->native);
+        msg_t       index_message;
+        const msg_t fetch_result = chMBFetchTimeout(&slot->free, &index_message, to_ch_ticks(timeout_ticks));
+        if (fetch_result != MSG_OK)
+        {
+            return (timeout_ticks == osal::NO_WAIT) ? osal::error_code::would_block : osal::error_code::timeout;
+        }
+        const std::size_t index = static_cast<std::size_t>(index_message);
+        if (index >= slot->capacity)
+        {
+            (void)chMBPostTimeout(&slot->free, index_message, TIME_IMMEDIATE);
+            return osal::error_code::not_initialized;
+        }
+        std::memcpy(slot->storage + (index * slot->item_size), item, slot->item_size);
+        if (chMBPostTimeout(&slot->ready, index_message, TIME_IMMEDIATE) == MSG_OK)
         {
             return osal::ok();
         }
-        return (timeout_ticks == osal::NO_WAIT) ? osal::error_code::would_block : osal::error_code::timeout;
+        (void)chMBPostTimeout(&slot->free, index_message, TIME_IMMEDIATE);
+        return osal::error_code::out_of_resources;
     }
 
-    /// @brief Post a message from ISR context via chMBPostI() (syscall locked).
+    /// @brief Copy an item into a free caller-storage entry from ISR context.
     /// @param handle Queue handle.
     /// @param item   Pointer to the message data.
     /// @return osal::ok() on success; osal::error_code::would_block if the mailbox is full.
@@ -601,16 +651,33 @@ extern "C"
         {
             return osal::error_code::not_initialized;
         }
+        if (item == nullptr)
+        {
+            return osal::error_code::invalid_argument;
+        }
         auto* slot = static_cast<ch_mailbox_slot*>(handle->native);
-        msg_t msg;
-        std::memcpy(&msg, item, sizeof(msg_t));
+        msg_t index_message;
         chSysLockFromISR();
-        const msg_t r = chMBPostI(&slot->mb, msg);
+        const msg_t fetch_result = chMBFetchI(&slot->free, &index_message);
+        if (fetch_result == MSG_OK)
+        {
+            const std::size_t index = static_cast<std::size_t>(index_message);
+            if (index < slot->capacity)
+            {
+                std::memcpy(slot->storage + (index * slot->item_size), item, slot->item_size);
+                if (chMBPostI(&slot->ready, index_message) == MSG_OK)
+                {
+                    chSysUnlockFromISR();
+                    return osal::ok();
+                }
+            }
+            (void)chMBPostI(&slot->free, index_message);
+        }
         chSysUnlockFromISR();
-        return (r == MSG_OK) ? osal::ok() : osal::error_code::would_block;
+        return osal::error_code::would_block;
     }
 
-    /// @brief Fetch a message from the mailbox via chMBFetchTimeout().
+    /// @brief Dequeue an index, copy its caller-stored item, and release the entry.
     /// @param handle        Queue handle.
     /// @param item          Buffer to receive the dequeued message into.
     /// @param timeout_ticks Maximum wait in OSAL ticks.
@@ -622,18 +689,31 @@ extern "C"
         {
             return osal::error_code::not_initialized;
         }
-        auto*       slot = static_cast<ch_mailbox_slot*>(handle->native);
-        msg_t       msg;
-        const msg_t r = chMBFetchTimeout(&slot->mb, &msg, to_ch_ticks(timeout_ticks));
-        if (r == MSG_OK)
+        if (item == nullptr)
         {
-            std::memcpy(item, &msg, sizeof(msg_t));
+            return osal::error_code::invalid_argument;
+        }
+        auto*       slot = static_cast<ch_mailbox_slot*>(handle->native);
+        msg_t       index_message;
+        const msg_t fetch_result = chMBFetchTimeout(&slot->ready, &index_message, to_ch_ticks(timeout_ticks));
+        if (fetch_result != MSG_OK)
+        {
+            return (timeout_ticks == osal::NO_WAIT) ? osal::error_code::would_block : osal::error_code::timeout;
+        }
+        const std::size_t index = static_cast<std::size_t>(index_message);
+        if (index >= slot->capacity)
+        {
+            return osal::error_code::not_initialized;
+        }
+        std::memcpy(item, slot->storage + (index * slot->item_size), slot->item_size);
+        if (chMBPostTimeout(&slot->free, index_message, TIME_IMMEDIATE) == MSG_OK)
+        {
             return osal::ok();
         }
-        return (timeout_ticks == osal::NO_WAIT) ? osal::error_code::would_block : osal::error_code::timeout;
+        return osal::error_code::out_of_resources;
     }
 
-    /// @brief Fetch a message from ISR context via chMBFetchI() (syscall locked).
+    /// @brief Dequeue an item into caller storage from ISR context.
     /// @param handle Queue handle.
     /// @param item   Buffer to receive the dequeued message into.
     /// @return osal::ok() on success; osal::error_code::would_block if the mailbox is empty.
@@ -643,16 +723,28 @@ extern "C"
         {
             return osal::error_code::not_initialized;
         }
-        auto* slot = static_cast<ch_mailbox_slot*>(handle->native);
-        msg_t msg;
-        chSysLockFromISR();
-        const msg_t r = chMBFetchI(&slot->mb, &msg);
-        chSysUnlockFromISR();
-        if (r == MSG_OK)
+        if (item == nullptr)
         {
-            std::memcpy(item, &msg, sizeof(msg_t));
-            return osal::ok();
+            return osal::error_code::invalid_argument;
         }
+        auto* slot = static_cast<ch_mailbox_slot*>(handle->native);
+        msg_t index_message;
+        chSysLockFromISR();
+        const msg_t fetch_result = chMBFetchI(&slot->ready, &index_message);
+        if (fetch_result == MSG_OK)
+        {
+            const std::size_t index = static_cast<std::size_t>(index_message);
+            if (index < slot->capacity)
+            {
+                std::memcpy(item, slot->storage + (index * slot->item_size), slot->item_size);
+                if (chMBPostI(&slot->free, index_message) == MSG_OK)
+                {
+                    chSysUnlockFromISR();
+                    return osal::ok();
+                }
+            }
+        }
+        chSysUnlockFromISR();
         return osal::error_code::would_block;
     }
 
@@ -664,7 +756,7 @@ extern "C"
         return osal::error_code::not_supported;
     }
 
-    /// @brief Return the number of messages in the mailbox via chMBGetUsedCountI().
+    /// @brief Return the number of ready entries in the queue.
     /// @param handle Queue handle.
     /// @return Message count, or 0 if the handle is invalid.
     std::size_t osal_queue_count(const osal::active_traits::queue_handle_t* handle) noexcept
@@ -674,10 +766,13 @@ extern "C"
             return 0U;
         }
         const auto* slot = static_cast<const ch_mailbox_slot*>(handle->native);
-        return static_cast<std::size_t>(chMBGetUsedCountI(&slot->mb));
+        chSysLock();
+        const std::size_t count = static_cast<std::size_t>(chMBGetUsedCountI(&slot->ready));
+        chSysUnlock();
+        return count;
     }
 
-    /// @brief Return the number of free slots in the mailbox via chMBGetFreeCountI().
+    /// @brief Return the number of free caller-storage entries in the queue.
     /// @param handle Queue handle.
     /// @return Free slot count, or 0 if the handle is invalid.
     std::size_t osal_queue_free(const osal::active_traits::queue_handle_t* handle) noexcept
@@ -687,7 +782,10 @@ extern "C"
             return 0U;
         }
         const auto* slot = static_cast<const ch_mailbox_slot*>(handle->native);
-        return static_cast<std::size_t>(chMBGetFreeCountI(&slot->mb));
+        chSysLock();
+        const std::size_t count = static_cast<std::size_t>(chMBGetUsedCountI(&slot->free));
+        chSysUnlock();
+        return count;
     }
 
     // ---------------------------------------------------------------------------

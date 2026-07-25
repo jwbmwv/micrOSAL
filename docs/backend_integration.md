@@ -214,13 +214,16 @@ osal::result osal_queue_receive_isr(osal::active_traits::queue_handle_t*, void*)
 osal::result osal_queue_peek(osal::active_traits::queue_handle_t*, void*, osal::tick_t) noexcept;
 std::size_t  osal_queue_count(const osal::active_traits::queue_handle_t*) noexcept;
 std::size_t  osal_queue_free(const osal::active_traits::queue_handle_t*) noexcept;
+```
 
-There is intentionally no separate mailbox backend ABI.  `osal::mailbox<T>` is
-a header-only `osal::queue<T, 1>` adapter, so a backend that implements queue
-create/send/receive/peek/count/free automatically supports mailbox as well.
-If the RTOS already has a native mailbox primitive, mapping the queue depth-1
-case onto that primitive is fine and keeps the public API unchanged.
+> **Mailbox note** — There is intentionally no separate mailbox backend ABI.
+> `osal::mailbox<T>` is a header-only `osal::queue<T, 1>` adapter; a backend that
+> implements queue `create/send/receive/peek/count/free` automatically supports
+> mailbox as well.  If the RTOS already has a native mailbox primitive, mapping
+> the queue depth-1 case onto that primitive is fine and keeps the public API
+> unchanged.
 
+```cpp
 // ---- Timer ---------------------------------------------------------------
 osal::result osal_timer_create(osal::active_traits::timer_handle_t*, const char*,
     osal_timer_callback_t, void*, osal::tick_t period, bool auto_reload) noexcept;
@@ -565,6 +568,48 @@ triggers the backend:
 #define OSAL_BM_ENTER_CRITICAL()  my_irq_disable()
 #define OSAL_BM_EXIT_CRITICAL()   my_irq_enable()
 ```
+
+These macros remain a backend-internal blunt tool.  The public
+`osal::irq_mask_guard` API uses token-based save/restore hooks instead:
+
+```cpp
+#define OSAL_BM_IRQ_STATE_T       unsigned int
+#define OSAL_BM_IRQ_LOCK()        my_irq_save()
+#define OSAL_BM_IRQ_UNLOCK(state) my_irq_restore(state)
+```
+
+If those hooks are not provided, MicrOSAL enables `osal::irq_mask_guard` by
+default on Cortex-M builds (PRIMASK save/restore) and on hosted
+`OSAL_BM_TEST_SELF_TICK` validation builds (no-op token).  On other bare-metal
+targets without custom hooks, `osal::irq_mask_guard::is_supported` remains
+`false`.
+
+Example integration for a target BSP wrapper header:
+
+```cpp
+// board_osal.hpp
+#pragma once
+
+#include <stdint.h>
+#include "board_irq.h"
+
+#define OSAL_BACKEND_BAREMETAL
+#define OSAL_BM_IRQ_STATE_T       uint32_t
+#define OSAL_BM_IRQ_LOCK()        board_irq_save()
+#define OSAL_BM_IRQ_UNLOCK(state) board_irq_restore(state)
+
+#include <osal/osal.hpp>
+
+inline void update_shared_registers() noexcept
+{
+    osal::irq_mask_guard guard;
+    // short, non-blocking register update here
+}
+```
+
+The save/restore hooks must be visible before including `osal/osal.hpp`
+(or `osal/irq_mask_guard.hpp`) so the active backend can select the correct
+implementation at compile time.
 
 ---
 

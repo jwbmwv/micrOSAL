@@ -34,6 +34,7 @@ target_include_directories(freertos_config SYSTEM INTERFACE
 
 set(FREERTOS_PORT GCC_POSIX CACHE INTERNAL "FreeRTOS port selection")
 set(FREERTOS_HEAP "3"       CACHE INTERNAL "FreeRTOS heap selection (3 = wrap malloc)")
+option(OSAL_FREERTOS_TEST_DYNAMIC_ALLOC "Exercise MicrOSAL's dynamic-allocation FreeRTOS path" OFF)
 
 FetchContent_Declare(
     FreeRTOS_Kernel
@@ -61,9 +62,24 @@ target_compile_definitions(microsal PUBLIC
     OSAL_BACKEND_FREERTOS
     OSAL_CFG_TICK_TYPE_U32
     OSAL_CFG_NATIVE_TICK_BITS=32
-    # Dynamic alloc: simpler test code; no static TCB carving from stack buffer.
-    OSAL_FREERTOS_DYNAMIC_ALLOC
 )
+
+# The suite deliberately keeps several synchronization objects alive across
+# cases, so validate the static path with an explicit test-only pool budget.
+target_compile_definitions(microsal PRIVATE
+    OSAL_FREERTOS_MAX_MUTEXES=32
+    OSAL_FREERTOS_MAX_SEMAPHORES=64
+    OSAL_FREERTOS_MAX_QUEUES=16
+    OSAL_FREERTOS_MAX_TIMERS=16
+    OSAL_FREERTOS_MAX_EVENT_GROUPS=16
+    OSAL_FREERTOS_MAX_STREAM_BUFFERS=16
+    OSAL_FREERTOS_MAX_MESSAGE_BUFFERS=16
+    OSAL_FREERTOS_MAX_THREADS=16
+)
+
+if(OSAL_FREERTOS_TEST_DYNAMIC_ALLOC)
+    target_compile_definitions(microsal PUBLIC OSAL_FREERTOS_DYNAMIC_ALLOC)
+endif()
 
 target_link_libraries(microsal PUBLIC freertos_kernel)
 
@@ -100,9 +116,12 @@ target_compile_definitions(test_freertos PRIVATE
     OSAL_BACKEND_FREERTOS
     OSAL_CFG_TICK_TYPE_U32
     OSAL_CFG_NATIVE_TICK_BITS=32
-    OSAL_FREERTOS_DYNAMIC_ALLOC
     DOCTEST_CONFIG_NO_EXCEPTIONS_BUT_WITH_ALL_ASSERTS
 )
+
+if(OSAL_FREERTOS_TEST_DYNAMIC_ALLOC)
+    target_compile_definitions(test_freertos PRIVATE OSAL_FREERTOS_DYNAMIC_ALLOC)
+endif()
 
 target_compile_features(test_freertos PRIVATE cxx_std_20)
 

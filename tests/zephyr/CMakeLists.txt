@@ -28,9 +28,7 @@ target_include_directories(app PRIVATE
 
 # The module library gets OSAL_BACKEND_ZEPHYR via zephyr_library_compile_definitions(),
 # but the app target needs it too so the public headers resolve active_traits.
-if(CONFIG_MICRO_OSAL_BACKEND_ZEPHYR)
-    target_compile_definitions(app PRIVATE OSAL_BACKEND_ZEPHYR)
-endif()
+target_compile_definitions(app PRIVATE OSAL_BACKEND_ZEPHYR)
 
 # Zephyr selects the C++ dialect from Kconfig via cpp20.conf; only keep the
 # embedded-facing ABI constraints here.

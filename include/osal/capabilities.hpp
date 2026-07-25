@@ -232,6 +232,32 @@ struct irq_mask_guard_capability
 };
 
 template<>
+struct irq_mask_guard_capability<backend_baremetal>
+{
+#if defined(OSAL_BM_IRQ_LOCK) && defined(OSAL_BM_IRQ_UNLOCK)
+    static constexpr bool value = true;
+#elif defined(OSAL_BM_TEST_SELF_TICK)
+    static constexpr bool value = true;
+#elif defined(__ARM_ARCH_PROFILE) && (__ARM_ARCH_PROFILE == 'M')
+    static constexpr bool value = true;
+#else
+    static constexpr bool value = false;
+#endif
+};
+
+template<>
+struct irq_mask_guard_capability<backend_zephyr>
+{
+    static constexpr bool value = true;
+};
+
+template<>
+struct irq_mask_guard_capability<backend_freertos>
+{
+    static constexpr bool value = true;
+};
+
+template<>
 struct thread_stack_watermark_capability<backend_zephyr>
 {
 #if defined(CONFIG_THREAD_STACK_INFO) && (CONFIG_THREAD_STACK_INFO == 1) && defined(CONFIG_INIT_STACKS) && \

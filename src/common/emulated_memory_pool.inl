@@ -20,6 +20,7 @@
 #pragma once
 
 #include <osal/detail/atomic_compat.hpp>
+#include <cstdint>
 #include <cstring>
 
 // ---------------------------------------------------------------------------
@@ -156,7 +157,7 @@ osal::result osal_memory_pool_create(osal::active_traits::memory_pool_handle_t* 
     {
         return osal::error_code::invalid_argument;
     }
-    if (buf_bytes < block_size * block_count) [[unlikely]]
+    if (block_count > (buf_bytes / block_size)) [[unlikely]]
     {
         return osal::error_code::invalid_argument;
     }
@@ -300,13 +301,15 @@ osal::result osal_memory_pool_deallocate(osal::active_traits::memory_pool_handle
     }
     auto* pool = static_cast<emulated_pool_obj*>(handle->native);
 
-    auto* blk = static_cast<std::uint8_t*>(block);
-    if (blk < pool->buffer || blk >= pool->buffer + pool->block_count * pool->block_size)
+    const std::size_t pool_bytes     = pool->block_count * pool->block_size;
+    const auto        buffer_address = reinterpret_cast<std::uintptr_t>(pool->buffer);
+    const auto        block_address  = reinterpret_cast<std::uintptr_t>(block);
+    if (block_address < buffer_address || (block_address - buffer_address) >= pool_bytes)
     {
         return osal::error_code::invalid_argument;
     }
 
-    const std::size_t offset = static_cast<std::size_t>(blk - pool->buffer);
+    const std::size_t offset = static_cast<std::size_t>(block_address - buffer_address);
     if (offset % pool->block_size != 0)
     {
         return osal::error_code::invalid_argument;  // Not block-aligned.
@@ -340,6 +343,9 @@ std::size_t osal_memory_pool_available(const osal::active_traits::memory_pool_ha
     {
         return 0U;
     }
-    auto* pool = static_cast<const emulated_pool_obj*>(handle->native);
-    return pool->available;
+    auto* pool = static_cast<emulated_pool_obj*>(handle->native);
+    (void)osal_mutex_lock(&pool->guard, osal::WAIT_FOREVER);
+    const std::size_t available = pool->available;
+    (void)osal_mutex_unlock(&pool->guard);
+    return available;
 }
