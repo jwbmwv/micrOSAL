@@ -114,11 +114,11 @@ public:
     // ---- construction / destruction ----------------------------------------
 
     /// @brief Constructs and starts the work queue.
-    /// @param stack        Caller-supplied stack for the worker thread.
-    /// @param stack_bytes  Size of the stack in bytes.
-    /// @param depth        Maximum number of queued work items; must be > 0 and is capped at
+    /// @param[in] stack        Caller-supplied stack for the worker thread.
+    /// @param[in] stack_bytes  Size of the stack in bytes.
+    /// @param[in] depth        Maximum number of queued work items; must be > 0 and is capped at
     ///                     OSAL_WORK_QUEUE_MAX_DEPTH).
-    /// @param name         Human-readable name (for debugging).
+    /// @param[in] name  Human-readable name (for debugging).
     work_queue(void* stack, std::size_t stack_bytes, std::size_t depth = 16, const char* name = "wq") noexcept
         : valid_(false)
     {
@@ -127,7 +127,7 @@ public:
     }
 
     /// @brief Constructs from an immutable config (config may reside in FLASH).
-    /// @param cfg  Configuration — typically declared @c const.
+    /// @param[in] cfg  Configuration — typically declared @c const.
     /// @complexity O(1)
     explicit work_queue(const work_queue_config& cfg) noexcept : valid_(false)
     {
@@ -155,16 +155,17 @@ public:
     // ---- submit ------------------------------------------------------------
 
     /// @brief Submits a work item for deferred execution.
-    /// @param func  Function to call on the worker thread.
-    /// @param arg   Argument passed to @p func.
-    /// @return result::ok() on success; error_code::overflow if the queue is full.
+    /// @param[in] func  Function to call on the worker thread.
+    /// @param[in] arg   Argument passed to @p func.
+    /// @retval osal::ok()           The work item was submitted.
+    /// @retval error_code::overflow The work queue is full.
     [[nodiscard]] result submit(work_func_t func, void* arg = nullptr) noexcept
     {
         return osal_work_queue_submit(&handle_, func, arg);
     }
 
     /// @brief Submits a work item from ISR context.
-    /// @return error_code::not_supported on backends without ISR-safe queues.
+    /// @retval error_code::not_supported The active backend has no ISR-safe work queue.
     [[nodiscard]] result submit_from_isr(work_func_t func, void* arg = nullptr) noexcept
     {
         return osal_work_queue_submit_from_isr(&handle_, func, arg);
@@ -173,8 +174,9 @@ public:
     // ---- control -----------------------------------------------------------
 
     /// @brief Blocks until all currently-queued items have been executed.
-    /// @param timeout  Maximum time to wait.
-    /// @return result::ok() if flushed; error_code::timeout on expiry.
+    /// @param[in] timeout  Maximum time to wait.
+    /// @retval osal::ok()           All queued work completed.
+    /// @retval error_code::timeout  The wait expired.
     [[nodiscard]] result flush(milliseconds timeout = milliseconds{5000}) noexcept
     {
         const tick_t ticks = (timeout.count() < 0) ? WAIT_FOREVER : clock_utils::ms_to_ticks(timeout);

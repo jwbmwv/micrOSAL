@@ -83,19 +83,19 @@ static constexpr std::size_t kMsgHeaderBytes = sizeof(osal_mb_length_t);
 extern "C"
 {
     /// @brief Initialise a message buffer.
-    /// @param handle    Output handle.
-    /// @param buffer    Caller-supplied backing storage (capacity+1 bytes).
-    /// @param capacity  Total byte capacity of the ring (N).
+    /// @param[out] handle   Output handle.
+    /// @param[in] buffer    Caller-supplied backing storage (capacity+1 bytes).
+    /// @param[in] capacity  Total byte capacity of the ring (N).
     osal::result osal_message_buffer_create(osal::active_traits::message_buffer_handle_t* handle, void* buffer,
                                             std::size_t capacity) noexcept;
 
     osal::result osal_message_buffer_destroy(osal::active_traits::message_buffer_handle_t* handle) noexcept;
 
     /// @brief Write one complete message from task context.
-    /// @param handle        Message-buffer handle.
-    /// @param msg           Source message payload.
-    /// @param len           Payload length in bytes.
-    /// @param timeout_ticks WAIT_FOREVER / NO_WAIT / tick count.
+    /// @param[in] handle         Message-buffer handle.
+    /// @param[in] msg            Source message payload.
+    /// @param[in] len            Payload length in bytes.
+    /// @param[in] timeout_ticks  WAIT_FOREVER / NO_WAIT / tick count.
     osal::result osal_message_buffer_send(osal::active_traits::message_buffer_handle_t* handle, const void* msg,
                                           std::size_t len, osal::tick_t timeout_ticks) noexcept;
 
@@ -104,12 +104,12 @@ extern "C"
                                               std::size_t len) noexcept;
 
     /// @brief Read the next complete message (blocks until one is available).
-    /// @param handle  Message-buffer handle.
-    /// @param buf     Destination buffer.
-    /// @param max_len Destination buffer size.  If the message exceeds max_len
+    /// @param[in]  handle   Message-buffer handle.
+    /// @param[out] buf      Destination buffer.
+    /// @param[in]  max_len  Destination buffer size.  If the message exceeds max_len
     ///                the excess bytes are silently discarded (consistent with
     ///                FreeRTOS behaviour).
-    /// @param timeout_ticks WAIT_FOREVER / NO_WAIT / tick count.
+    /// @param[in] timeout_ticks  WAIT_FOREVER / NO_WAIT / tick count.
     /// @return Bytes written to @p buf (0 = timeout / empty).
     std::size_t osal_message_buffer_receive(osal::active_traits::message_buffer_handle_t* handle, void* buf,
                                             std::size_t max_len, osal::tick_t timeout_ticks) noexcept;
@@ -190,9 +190,9 @@ public:
     // ---- send (producer API) -----------------------------------------------
 
     /// @brief Blocks until space for the message is available, then writes it.
-    /// @param msg  Pointer to the message payload.
-    /// @param len  Payload length.  Must be ≤ max_message_size.
-    /// @return result::ok() on success.
+    /// @param[in] msg  Pointer to the message payload.
+    /// @param[in] len  Payload length.  Must be ≤ max_message_size.
+    /// @retval osal::ok() The message was enqueued successfully.
     /// @complexity O(len)
     /// @blocking   Until space is available.
     [[nodiscard]] result send(const void* msg, std::size_t len) noexcept
@@ -240,7 +240,8 @@ public:
 
     /// @brief Writes from ISR context (non-blocking).
     /// @warning ISR-safety depends on has_isr_stream_buffer / has_isr_semaphore.
-    /// @return result::ok() on success; error_code::timeout if no space.
+    /// @retval osal::ok()           The message was enqueued successfully.
+    /// @retval error_code::timeout  No space was available.
     /// @complexity O(len)
     /// @blocking   Never.
     [[nodiscard]] result send_isr(const void* msg, std::size_t len) noexcept
@@ -254,8 +255,8 @@ public:
     // ---- receive (consumer API) -------------------------------------------
 
     /// @brief Blocks until a complete message is available, then reads it.
-    /// @param[out] buf     Destination buffer.
-    /// @param      max_len Destination buffer size.
+    /// @param[out] buf      Destination buffer.
+    /// @param[in]  max_len  Destination buffer size.
     /// @return  Bytes copied into @p buf.  If the message payload exceeds
     ///          @p max_len the excess bytes are discarded (FreeRTOS behaviour).
     /// @complexity O(len read)

@@ -358,15 +358,16 @@ extern "C"
     /// @details Allocates a @c k_thread object from the static pool, calls
     ///          @c k_thread_create(), optionally names it via @c k_thread_name_set(),
     ///          and applies CPU-mask affinity when @c CONFIG_SCHED_CPU_MASK is enabled.
-    /// @param handle     Output handle; receives the allocated @c k_thread pointer.
-    /// @param entry      Thread entry function pointer.
-    /// @param arg        Argument forwarded to @p entry.
-    /// @param priority   OSAL priority mapped to Zephyr preemptive priority.
-    /// @param affinity   CPU affinity bitmask; @c AFFINITY_ANY leaves scheduling unrestricted.
-    /// @param stack      Caller-supplied stack buffer.
-    /// @param stack_bytes Size of @p stack in bytes.
-    /// @param name       Optional thread name (may be @c nullptr).
-    /// @return @c osal::ok() on success, @c error_code::out_of_resources if the pool is exhausted.
+    /// @param[out] handle      Output handle; receives the allocated @c k_thread pointer.
+    /// @param[in] entry        Thread entry function pointer.
+    /// @param[in] arg          Argument forwarded to @p entry.
+    /// @param[in] priority     OSAL priority mapped to Zephyr preemptive priority.
+    /// @param[in] affinity     CPU affinity bitmask; @c AFFINITY_ANY leaves scheduling unrestricted.
+    /// @param[in] stack        Caller-supplied stack buffer.
+    /// @param[in] stack_bytes  Size of @p stack in bytes.
+    /// @param[in] name         Optional thread name (may be @c nullptr).
+    /// @retval osal::ok()                    On success.
+    /// @retval error_code::out_of_resources  If the pool is exhausted.
     osal::result osal_thread_create(osal::active_traits::thread_handle_t* handle, void (*entry)(void*), void* arg,
                                     osal::priority_t priority, osal::affinity_t affinity, void* stack,
                                     osal::stack_size_t stack_bytes, const char* name) noexcept
@@ -421,10 +422,11 @@ extern "C"
     /// @brief Waits for a thread to terminate.
     /// @details Calls @c k_thread_join() with the converted timeout.  On success
     ///          the pool slot is released and the handle cleared.
-    /// @param handle        Handle of the thread to join.
-    /// @param timeout_ticks Maximum wait time in ticks; use @c WAIT_FOREVER to block indefinitely.
-    /// @return @c osal::ok() on success, @c error_code::timeout if the deadline expires,
-    ///         or @c error_code::not_initialized if @p handle is invalid.
+    /// @param[in,out] handle     Handle of the thread to join.
+    /// @param[in] timeout_ticks  Maximum wait time in ticks; use @c WAIT_FOREVER to block indefinitely.
+    /// @retval osal::ok()                   On success.
+    /// @retval error_code::timeout          If the deadline expires,.
+    /// @retval error_code::not_initialized  If @p handle is invalid.
     osal::result osal_thread_join(osal::active_traits::thread_handle_t* handle, osal::tick_t timeout_ticks) noexcept
     {
         if (handle == nullptr || handle->native == nullptr)
@@ -446,8 +448,9 @@ extern "C"
     /// @details Zephyr has no native @c k_thread_detach API.  This implementation
     ///          simply releases the pool slot and clears the handle, preventing a
     ///          subsequent @c osal_thread_join().
-    /// @param handle Handle of the thread to detach.
-    /// @return @c osal::ok() on success, or @c error_code::not_initialized if @p handle is invalid.
+    /// @param[in,out] handle  Handle of the thread to detach.
+    /// @retval osal::ok()                   On success,.
+    /// @retval error_code::not_initialized  If @p handle is invalid.
     osal::result osal_thread_detach(osal::active_traits::thread_handle_t* handle) noexcept
     {
         if (handle == nullptr || handle->native == nullptr)
@@ -464,9 +467,10 @@ extern "C"
     /// @brief Adjusts the scheduling priority of a running thread.
     /// @details Calls @c k_thread_priority_set() after mapping the OSAL priority
     ///          to the Zephyr preemptive priority range.
-    /// @param handle   Handle of the target thread.
-    /// @param priority New OSAL priority value.
-    /// @return @c osal::ok() on success, or @c error_code::not_initialized if @p handle is invalid.
+    /// @param[in] handle    Handle of the target thread.
+    /// @param[in] priority  New OSAL priority value.
+    /// @retval osal::ok()                   On success,.
+    /// @retval error_code::not_initialized  If @p handle is invalid.
     osal::result osal_thread_set_priority(osal::active_traits::thread_handle_t* handle,
                                           osal::priority_t                      priority) noexcept
     {
@@ -482,10 +486,11 @@ extern "C"
     /// @details Uses @c k_thread_cpu_mask_clear() / @c k_thread_cpu_mask_enable()
     ///          when @c CONFIG_SCHED_CPU_MASK is enabled; returns
     ///          @c error_code::not_supported otherwise.
-    /// @param handle   Handle of the target thread.
-    /// @param affinity Bitmask of allowed CPU cores.
-    /// @return @c osal::ok() on success, @c error_code::not_supported if the config is absent,
-    ///         or @c error_code::not_initialized if @p handle is invalid.
+    /// @param[in] handle    Handle of the target thread.
+    /// @param[in] affinity  Bitmask of allowed CPU cores.
+    /// @retval osal::ok()                   On success.
+    /// @retval error_code::not_supported    If the config is absent,.
+    /// @retval error_code::not_initialized  If @p handle is invalid.
     osal::result osal_thread_set_affinity(osal::active_traits::thread_handle_t* handle,
                                           osal::affinity_t                      affinity) noexcept
     {
@@ -512,8 +517,9 @@ extern "C"
 
     /// @brief Suspends a thread, preventing it from being scheduled.
     /// @details Calls @c k_thread_suspend().
-    /// @param handle Handle of the thread to suspend.
-    /// @return @c osal::ok() on success, or @c error_code::not_initialized if @p handle is invalid.
+    /// @param[in] handle  Handle of the thread to suspend.
+    /// @retval osal::ok()                   On success,.
+    /// @retval error_code::not_initialized  If @p handle is invalid.
     osal::result osal_thread_suspend(osal::active_traits::thread_handle_t* handle) noexcept
     {
         if (handle == nullptr || handle->native == nullptr)
@@ -526,8 +532,9 @@ extern "C"
 
     /// @brief Resumes a previously suspended thread.
     /// @details Calls @c k_thread_resume().
-    /// @param handle Handle of the thread to resume.
-    /// @return @c osal::ok() on success, or @c error_code::not_initialized if @p handle is invalid.
+    /// @param[in] handle  Handle of the thread to resume.
+    /// @retval osal::ok()                   On success,.
+    /// @retval error_code::not_initialized  If @p handle is invalid.
     osal::result osal_thread_resume(osal::active_traits::thread_handle_t* handle) noexcept
     {
         if (handle == nullptr || handle->native == nullptr)
@@ -695,7 +702,7 @@ extern "C"
 
     /// @brief Puts the calling thread to sleep for the specified number of milliseconds.
     /// @details Calls @c k_sleep(K_MSEC(ms)).
-    /// @param ms Duration to sleep in milliseconds.
+    /// @param[in] ms  Duration to sleep in milliseconds.
     void osal_thread_sleep_ms(std::uint32_t ms) noexcept
     {
         k_sleep(K_MSEC(static_cast<int64_t>(ms)));
@@ -709,9 +716,10 @@ extern "C"
     /// @details Allocates a @c k_mutex from the static pool and calls @c k_mutex_init().
     ///          Zephyr's @c k_mutex is inherently recursive; the @p recursive flag is accepted
     ///          but has no behavioral effect.
-    /// @param handle    Output handle receiving the initialized @c k_mutex pointer.
-    /// @param recursive Ignored — Zephyr mutexes are always recursive.
-    /// @return @c osal::ok() on success, or @c error_code::out_of_resources if the pool is full.
+    /// @param[out] handle    Output handle receiving the initialized @c k_mutex pointer.
+    /// @param[in] recursive  Ignored — Zephyr mutexes are always recursive.
+    /// @retval osal::ok()                    On success,.
+    /// @retval error_code::out_of_resources  If the pool is full.
     osal::result osal_mutex_create(osal::active_traits::mutex_handle_t* handle, bool recursive) noexcept
     {
         // Zephyr k_mutex is inherently recursive.  We just note the mode.
@@ -727,8 +735,8 @@ extern "C"
     }
 
     /// @brief Destroys a mutex and returns it to the static pool.
-    /// @param handle Handle of the mutex to destroy; a @c nullptr or already-null handle is ignored.
-    /// @return Always @c osal::ok().
+    /// @param[in,out] handle  Handle of the mutex to destroy; a @c nullptr or already-null handle is ignored.
+    /// @retval osal::ok()  Always.
     osal::result osal_mutex_destroy(osal::active_traits::mutex_handle_t* handle) noexcept
     {
         if (handle == nullptr || handle->native == nullptr)
@@ -742,10 +750,11 @@ extern "C"
 
     /// @brief Acquires a mutex with an optional timeout.
     /// @details Calls @c k_mutex_lock() using the converted @c k_timeout_t.
-    /// @param handle        Handle of the mutex to acquire.
-    /// @param timeout_ticks Maximum wait time in ticks; @c WAIT_FOREVER or @c NO_WAIT are honoured.
-    /// @return @c osal::ok() on success, @c error_code::timeout if the deadline expires,
-    ///         or @c error_code::not_initialized if @p handle is invalid.
+    /// @param[in] handle         Handle of the mutex to acquire.
+    /// @param[in] timeout_ticks  Maximum wait time in ticks; @c WAIT_FOREVER or @c NO_WAIT are honoured.
+    /// @retval osal::ok()                   On success.
+    /// @retval error_code::timeout          If the deadline expires,.
+    /// @retval error_code::not_initialized  If @p handle is invalid.
     osal::result osal_mutex_lock(osal::active_traits::mutex_handle_t* handle, osal::tick_t timeout_ticks) noexcept
     {
         if (handle == nullptr || handle->native == nullptr)
@@ -767,8 +776,9 @@ extern "C"
 
     /// @brief Attempts to acquire a mutex without blocking.
     /// @details Delegates to @c osal_mutex_lock() with @c NO_WAIT.
-    /// @param handle Handle of the mutex.
-    /// @return @c osal::ok() if acquired, @c error_code::timeout if unavailable.
+    /// @param[in] handle  Handle of the mutex.
+    /// @retval osal::ok()           If acquired.
+    /// @retval error_code::timeout  If unavailable.
     osal::result osal_mutex_try_lock(osal::active_traits::mutex_handle_t* handle) noexcept
     {
         return osal_mutex_lock(handle, osal::NO_WAIT);
@@ -776,9 +786,10 @@ extern "C"
 
     /// @brief Releases a previously acquired mutex.
     /// @details Calls @c k_mutex_unlock().
-    /// @param handle Handle of the mutex to release.
-    /// @return @c osal::ok() on success, @c error_code::not_owner if the caller does not own the lock,
-    ///         or @c error_code::not_initialized if @p handle is invalid.
+    /// @param[in] handle  Handle of the mutex to release.
+    /// @retval osal::ok()                   On success.
+    /// @retval error_code::not_owner        If the caller does not own the lock,.
+    /// @retval error_code::not_initialized  If @p handle is invalid.
     osal::result osal_mutex_unlock(osal::active_traits::mutex_handle_t* handle) noexcept
     {
         if (handle == nullptr || handle->native == nullptr)
@@ -795,10 +806,11 @@ extern "C"
 
     /// @brief Creates a counting semaphore.
     /// @details Allocates a @c k_sem from the static pool and calls @c k_sem_init().
-    /// @param handle        Output handle receiving the initialized @c k_sem pointer.
-    /// @param initial_count Initial semaphore count.
-    /// @param max_count     Maximum semaphore count.
-    /// @return @c osal::ok() on success, or @c error_code::out_of_resources if the pool is full.
+    /// @param[out] handle        Output handle receiving the initialized @c k_sem pointer.
+    /// @param[in] initial_count  Initial semaphore count.
+    /// @param[in] max_count      Maximum semaphore count.
+    /// @retval osal::ok()                    On success,.
+    /// @retval error_code::out_of_resources  If the pool is full.
     osal::result osal_semaphore_create(osal::active_traits::semaphore_handle_t* handle, unsigned initial_count,
                                        unsigned max_count) noexcept
     {
@@ -813,8 +825,8 @@ extern "C"
     }
 
     /// @brief Destroys a semaphore and returns it to the static pool.
-    /// @param handle Handle of the semaphore to destroy; a @c nullptr or already-null handle is ignored.
-    /// @return Always @c osal::ok().
+    /// @param[in,out] handle  Handle of the semaphore to destroy; a @c nullptr or already-null handle is ignored.
+    /// @retval osal::ok()  Always.
     osal::result osal_semaphore_destroy(osal::active_traits::semaphore_handle_t* handle) noexcept
     {
         if (handle == nullptr || handle->native == nullptr)
@@ -828,8 +840,9 @@ extern "C"
 
     /// @brief Signals (gives) a semaphore.
     /// @details Calls @c k_sem_give().
-    /// @param handle Handle of the semaphore.
-    /// @return @c osal::ok() on success, or @c error_code::not_initialized if @p handle is invalid.
+    /// @param[in] handle  Handle of the semaphore.
+    /// @retval osal::ok()                   On success,.
+    /// @retval error_code::not_initialized  If @p handle is invalid.
     osal::result osal_semaphore_give(osal::active_traits::semaphore_handle_t* handle) noexcept
     {
         if (handle == nullptr || handle->native == nullptr)
@@ -842,8 +855,9 @@ extern "C"
 
     /// @brief Signals a semaphore from an ISR context.
     /// @details Delegates to @c osal_semaphore_give() — @c k_sem_give() is ISR-safe on Zephyr.
-    /// @param handle Handle of the semaphore.
-    /// @return @c osal::ok() on success, or @c error_code::not_initialized if @p handle is invalid.
+    /// @param[in] handle  Handle of the semaphore.
+    /// @retval osal::ok()                   On success,.
+    /// @retval error_code::not_initialized  If @p handle is invalid.
     osal::result osal_semaphore_give_isr(osal::active_traits::semaphore_handle_t* handle) noexcept
     {
         // On Zephyr k_sem_give is ISR-safe.
@@ -852,10 +866,11 @@ extern "C"
 
     /// @brief Waits on a semaphore with an optional timeout.
     /// @details Calls @c k_sem_take() using the converted @c k_timeout_t.
-    /// @param handle        Handle of the semaphore.
-    /// @param timeout_ticks Maximum wait time in ticks; @c WAIT_FOREVER or @c NO_WAIT are honoured.
-    /// @return @c osal::ok() on success, @c error_code::timeout if the count is zero and the deadline
-    ///         expires, or @c error_code::not_initialized if @p handle is invalid.
+    /// @param[in] handle         Handle of the semaphore.
+    /// @param[in] timeout_ticks  Maximum wait time in ticks; @c WAIT_FOREVER or @c NO_WAIT are honoured.
+    /// @retval osal::ok()                   On success.
+    /// @retval error_code::timeout          If the count is zero and the deadline expires,.
+    /// @retval error_code::not_initialized  If @p handle is invalid.
     osal::result osal_semaphore_take(osal::active_traits::semaphore_handle_t* handle,
                                      osal::tick_t                             timeout_ticks) noexcept
     {
@@ -870,8 +885,9 @@ extern "C"
 
     /// @brief Attempts to decrement a semaphore without blocking.
     /// @details Delegates to @c osal_semaphore_take() with @c NO_WAIT.
-    /// @param handle Handle of the semaphore.
-    /// @return @c osal::ok() if taken, @c error_code::timeout if the count is zero.
+    /// @param[in] handle  Handle of the semaphore.
+    /// @retval osal::ok()           If taken.
+    /// @retval error_code::timeout  If the count is zero.
     osal::result osal_semaphore_try_take(osal::active_traits::semaphore_handle_t* handle) noexcept
     {
         return osal_semaphore_take(handle, osal::NO_WAIT);
@@ -884,11 +900,12 @@ extern "C"
     /// @brief Creates a message queue backed by a Zephyr @c k_msgq.
     /// @details Allocates a @c k_msgq from the static pool and calls @c k_msgq_init()
     ///          with the caller-supplied buffer.
-    /// @param handle    Output handle receiving the initialized @c k_msgq pointer.
-    /// @param buffer    Caller-supplied storage buffer; must be at least @p item_size * @p capacity bytes.
-    /// @param item_size Size of each queue item in bytes.
-    /// @param capacity  Maximum number of items the queue can hold.
-    /// @return @c osal::ok() on success, or @c error_code::out_of_resources if the pool is full.
+    /// @param[out] handle    Output handle receiving the initialized @c k_msgq pointer.
+    /// @param[in] buffer     Caller-supplied storage buffer; must be at least @p item_size * @p capacity bytes.
+    /// @param[in] item_size  Size of each queue item in bytes.
+    /// @param[in] capacity   Maximum number of items the queue can hold.
+    /// @retval osal::ok()                    On success,.
+    /// @retval error_code::out_of_resources  If the pool is full.
     osal::result osal_queue_create(osal::active_traits::queue_handle_t* handle, void* buffer, std::size_t item_size,
                                    std::size_t capacity) noexcept
     {
@@ -904,8 +921,8 @@ extern "C"
 
     /// @brief Destroys a message queue, discarding all pending items.
     /// @details Calls @c k_msgq_purge() to drain the queue, then releases the pool slot.
-    /// @param handle Handle of the queue to destroy; a @c nullptr or already-null handle is ignored.
-    /// @return Always @c osal::ok().
+    /// @param[in,out] handle  Handle of the queue to destroy; a @c nullptr or already-null handle is ignored.
+    /// @retval osal::ok()  Always.
     osal::result osal_queue_destroy(osal::active_traits::queue_handle_t* handle) noexcept
     {
         if (handle == nullptr || handle->native == nullptr)
@@ -920,11 +937,12 @@ extern "C"
 
     /// @brief Enqueues an item into the message queue with an optional timeout.
     /// @details Calls @c k_msgq_put() using the converted @c k_timeout_t.
-    /// @param handle        Handle of the queue.
-    /// @param item          Pointer to the data to enqueue; copied by value.
-    /// @param timeout_ticks Maximum wait time if the queue is full.
-    /// @return @c osal::ok() on success, @c error_code::timeout if the queue remains full
-    ///         until the deadline, or @c error_code::not_initialized if @p handle is invalid.
+    /// @param[in] handle         Handle of the queue.
+    /// @param[in] item           Pointer to the data to enqueue; copied by value.
+    /// @param[in] timeout_ticks  Maximum wait time if the queue is full.
+    /// @retval osal::ok()                   On success.
+    /// @retval error_code::timeout          If the queue remains full until the deadline,.
+    /// @retval error_code::not_initialized  If @p handle is invalid.
     osal::result osal_queue_send(osal::active_traits::queue_handle_t* handle, const void* item,
                                  osal::tick_t timeout_ticks) noexcept
     {
@@ -940,9 +958,10 @@ extern "C"
     /// @brief Enqueues an item from an ISR context (non-blocking).
     /// @details Delegates to @c osal_queue_send() with @c NO_WAIT.
     ///          @c k_msgq_put() is ISR-safe on Zephyr.
-    /// @param handle Handle of the queue.
-    /// @param item   Pointer to the data to enqueue.
-    /// @return @c osal::ok() on success, @c error_code::timeout if the queue is full.
+    /// @param[in] handle  Handle of the queue.
+    /// @param[in] item    Pointer to the data to enqueue.
+    /// @retval osal::ok()           On success.
+    /// @retval error_code::timeout  If the queue is full.
     osal::result osal_queue_send_isr(osal::active_traits::queue_handle_t* handle, const void* item) noexcept
     {
         return osal_queue_send(handle, item, osal::NO_WAIT);
@@ -950,11 +969,12 @@ extern "C"
 
     /// @brief Dequeues an item from the message queue with an optional timeout.
     /// @details Calls @c k_msgq_get() using the converted @c k_timeout_t.
-    /// @param handle        Handle of the queue.
-    /// @param item          Destination buffer; receives the dequeued item by copy.
-    /// @param timeout_ticks Maximum wait time if the queue is empty.
-    /// @return @c osal::ok() on success, @c error_code::timeout if the queue remains empty
-    ///         until the deadline, or @c error_code::not_initialized if @p handle is invalid.
+    /// @param[in] handle         Handle of the queue.
+    /// @param[out] item          Destination buffer; receives the dequeued item by copy.
+    /// @param[in] timeout_ticks  Maximum wait time if the queue is empty.
+    /// @retval osal::ok()                   On success.
+    /// @retval error_code::timeout          If the queue remains empty until the deadline,.
+    /// @retval error_code::not_initialized  If @p handle is invalid.
     osal::result osal_queue_receive(osal::active_traits::queue_handle_t* handle, void* item,
                                     osal::tick_t timeout_ticks) noexcept
     {
@@ -969,9 +989,10 @@ extern "C"
 
     /// @brief Dequeues an item from an ISR context (non-blocking).
     /// @details Delegates to @c osal_queue_receive() with @c NO_WAIT.
-    /// @param handle Handle of the queue.
-    /// @param item   Destination buffer for the dequeued item.
-    /// @return @c osal::ok() on success, @c error_code::timeout if the queue is empty.
+    /// @param[in] handle  Handle of the queue.
+    /// @param[out] item   Destination buffer for the dequeued item.
+    /// @retval osal::ok()           On success.
+    /// @retval error_code::timeout  If the queue is empty.
     osal::result osal_queue_receive_isr(osal::active_traits::queue_handle_t* handle, void* item) noexcept
     {
         return osal_queue_receive(handle, item, osal::NO_WAIT);
@@ -980,11 +1001,12 @@ extern "C"
     /// @brief Copies the front item of the queue without removing it.
     /// @details Calls @c k_msgq_peek().  The timeout parameter is unused because
     ///          @c k_msgq_peek() is non-blocking.
-    /// @param handle         Handle of the queue.
-    /// @param item           Destination buffer; receives a copy of the head item.
-    /// @param timeout_ticks  Unused — peek is always non-blocking on Zephyr.
-    /// @return @c osal::ok() if an item was peeked, @c error_code::would_block if the queue is empty,
-    ///         or @c error_code::not_initialized if @p handle is invalid.
+    /// @param[in] handle         Handle of the queue.
+    /// @param[out] item          Destination buffer; receives a copy of the head item.
+    /// @param[in] timeout_ticks  Unused — peek is always non-blocking on Zephyr.
+    /// @retval osal::ok()                   If an item was peeked.
+    /// @retval error_code::would_block      If the queue is empty,.
+    /// @retval error_code::not_initialized  If @p handle is invalid.
     osal::result osal_queue_peek(osal::active_traits::queue_handle_t* handle, void* item,
                                  osal::tick_t /*timeout_ticks*/) noexcept
     {
@@ -998,7 +1020,7 @@ extern "C"
 
     /// @brief Returns the number of items currently enqueued.
     /// @details Calls @c k_msgq_num_used_get().
-    /// @param handle Handle of the queue.
+    /// @param[in] handle  Handle of the queue.
     /// @return Number of items waiting in the queue, or 0 if @p handle is invalid.
     std::size_t osal_queue_count(const osal::active_traits::queue_handle_t* handle) noexcept
     {
@@ -1011,7 +1033,7 @@ extern "C"
 
     /// @brief Returns the number of free slots remaining in the queue.
     /// @details Calls @c k_msgq_num_free_get().
-    /// @param handle Handle of the queue.
+    /// @param[in] handle  Handle of the queue.
     /// @return Number of free slots, or 0 if @p handle is invalid.
     std::size_t osal_queue_free(const osal::active_traits::queue_handle_t* handle) noexcept
     {
@@ -1042,12 +1064,13 @@ extern "C"
     /// @details Allocates a @c k_timer from the static pool and a @c zephyr_timer_ctx slot,
     ///          registers the expiry callback via @c k_timer_user_data_set(), and calls
     ///          @c k_timer_init().  The timer is not started until @c osal_timer_start() is called.
-    /// @param handle       Output handle receiving the initialized @c k_timer pointer.
-    /// @param callback     Function invoked on each expiry.
-    /// @param arg          User argument forwarded to @p callback.
-    /// @param period_ticks Timer period expressed in kernel ticks.
-    /// @param auto_reload  If @c true the timer repeats; if @c false it fires once.
-    /// @return @c osal::ok() on success, or @c error_code::out_of_resources if any pool is exhausted.
+    /// @param[out] handle       Output handle receiving the initialized @c k_timer pointer.
+    /// @param[in] callback      Function invoked on each expiry.
+    /// @param[in] arg           User argument forwarded to @p callback.
+    /// @param[in] period_ticks  Timer period expressed in kernel ticks.
+    /// @param[in] auto_reload   If @c true the timer repeats; if @c false it fires once.
+    /// @retval osal::ok()                    On success,.
+    /// @retval error_code::out_of_resources  If any pool is exhausted.
     osal::result osal_timer_create(osal::active_traits::timer_handle_t* handle, const char* /*name*/,
                                    osal_timer_callback_t callback, void* arg, osal::tick_t period_ticks,
                                    bool auto_reload) noexcept
@@ -1099,8 +1122,8 @@ extern "C"
     /// @brief Stops and destroys a timer, returning it to the static pool.
     /// @details Calls @c k_timer_stop(), clears the context callback to mark the slot free,
     ///          then releases the @c k_timer pool entry.
-    /// @param handle Handle of the timer to destroy; a @c nullptr or already-null handle is ignored.
-    /// @return Always @c osal::ok().
+    /// @param[in,out] handle  Handle of the timer to destroy; a @c nullptr or already-null handle is ignored.
+    /// @retval osal::ok()  Always.
     osal::result osal_timer_destroy(osal::active_traits::timer_handle_t* handle) noexcept
     {
         if (handle == nullptr || handle->native == nullptr)
@@ -1121,8 +1144,9 @@ extern "C"
     /// @brief Starts or restarts the timer.
     /// @details Reads the period and auto-reload flag from the stored @c zephyr_timer_ctx and
     ///          calls @c k_timer_start().  For one-shot timers the repeat period is @c K_NO_WAIT.
-    /// @param handle Handle of the timer to start.
-    /// @return @c osal::ok() on success, or @c error_code::not_initialized if @p handle is invalid.
+    /// @param[in] handle  Handle of the timer to start.
+    /// @retval osal::ok()                   On success,.
+    /// @retval error_code::not_initialized  If @p handle is invalid.
     osal::result osal_timer_start(osal::active_traits::timer_handle_t* handle) noexcept
     {
         if (handle == nullptr || handle->native == nullptr)
@@ -1138,8 +1162,9 @@ extern "C"
 
     /// @brief Stops a running timer.
     /// @details Calls @c k_timer_stop().  Has no effect if the timer is already stopped.
-    /// @param handle Handle of the timer to stop.
-    /// @return @c osal::ok() on success, or @c error_code::not_initialized if @p handle is invalid.
+    /// @param[in] handle  Handle of the timer to stop.
+    /// @retval osal::ok()                   On success,.
+    /// @retval error_code::not_initialized  If @p handle is invalid.
     osal::result osal_timer_stop(osal::active_traits::timer_handle_t* handle) noexcept
     {
         if (handle == nullptr || handle->native == nullptr)
@@ -1153,8 +1178,9 @@ extern "C"
     /// @brief Resets the timer, restarting it from the beginning of its period.
     /// @details Delegates to @c osal_timer_start(), which calls @c k_timer_start() with the
     ///          stored period.
-    /// @param handle Handle of the timer to reset.
-    /// @return @c osal::ok() on success, or @c error_code::not_initialized if @p handle is invalid.
+    /// @param[in] handle  Handle of the timer to reset.
+    /// @retval osal::ok()                   On success,.
+    /// @retval error_code::not_initialized  If @p handle is invalid.
     osal::result osal_timer_reset(osal::active_traits::timer_handle_t* handle) noexcept
     {
         return osal_timer_start(handle);
@@ -1163,9 +1189,10 @@ extern "C"
     /// @brief Changes the timer period and immediately restarts it.
     /// @details Calls @c k_timer_start() with both the initial duration and the repeat period
     ///          set to @p new_period_ticks.  The old auto-reload state is superseded.
-    /// @param handle          Handle of the timer.
-    /// @param new_period_ticks New period expressed in kernel ticks.
-    /// @return @c osal::ok() on success, or @c error_code::not_initialized if @p handle is invalid.
+    /// @param[in] handle            Handle of the timer.
+    /// @param[in] new_period_ticks  New period expressed in kernel ticks.
+    /// @retval osal::ok()                   On success,.
+    /// @retval error_code::not_initialized  If @p handle is invalid.
     osal::result osal_timer_set_period(osal::active_traits::timer_handle_t* handle,
                                        osal::tick_t                         new_period_ticks) noexcept
     {
@@ -1180,7 +1207,7 @@ extern "C"
 
     /// @brief Checks whether the timer is currently running.
     /// @details Calls @c k_timer_remaining_get(); a non-zero result indicates an active timer.
-    /// @param handle Handle of the timer.
+    /// @param[in] handle  Handle of the timer.
     /// @return @c true if the timer is running, @c false if stopped or @p handle is invalid.
     bool osal_timer_is_active(const osal::active_traits::timer_handle_t* handle) noexcept
     {
@@ -1204,9 +1231,10 @@ extern "C"
     /// @brief Creates an event-flags object backed by a Zephyr @c k_event.
     /// @details Allocates a @c k_event from the static pool and calls @c k_event_init().
     ///          Requires @c CONFIG_EVENTS=y in the Zephyr build.
-    /// @param handle Output handle receiving the initialized @c k_event pointer.
-    /// @return @c osal::ok() on success, @c error_code::out_of_resources if the pool is full,
-    ///         or @c error_code::invalid_argument if @p handle is @c nullptr.
+    /// @param[out] handle  Output handle receiving the initialized @c k_event pointer.
+    /// @retval osal::ok()                    On success.
+    /// @retval error_code::out_of_resources  If the pool is full,.
+    /// @retval error_code::invalid_argument  If @p handle is @c nullptr.
     osal::result osal_event_flags_create(osal::active_traits::event_flags_handle_t* handle) noexcept
     {
         if (handle == nullptr)
@@ -1233,8 +1261,8 @@ extern "C"
     }
 
     /// @brief Destroys an event-flags object and returns it to the static pool.
-    /// @param handle Handle of the event-flags object; a @c nullptr or already-null handle is ignored.
-    /// @return Always @c osal::ok().
+    /// @param[in] handle  Handle of the event-flags object; a @c nullptr or already-null handle is ignored.
+    /// @retval osal::ok()  Always.
     osal::result osal_event_flags_destroy(osal::active_traits::event_flags_handle_t* handle) noexcept
     {
         if (handle == nullptr || handle->native == nullptr)
@@ -1256,9 +1284,10 @@ extern "C"
 
     /// @brief Sets (posts) event bits, waking any waiters whose mask is satisfied.
     /// @details Calls @c k_event_post().
-    /// @param handle Handle of the event-flags object.
-    /// @param bits   Bitmask of event bits to set.
-    /// @return @c osal::ok() on success, or @c error_code::not_initialized if @p handle is invalid.
+    /// @param[in] handle  Handle of the event-flags object.
+    /// @param[in] bits    Bitmask of event bits to set.
+    /// @retval osal::ok()                   On success,.
+    /// @retval error_code::not_initialized  If @p handle is invalid.
     osal::result osal_event_flags_set(osal::active_traits::event_flags_handle_t* handle,
                                       osal::event_bits_t                         bits) noexcept
     {
@@ -1272,9 +1301,10 @@ extern "C"
 
     /// @brief Clears the specified event bits.
     /// @details Calls @c k_event_clear().
-    /// @param handle Handle of the event-flags object.
-    /// @param bits   Bitmask of event bits to clear.
-    /// @return @c osal::ok() on success, or @c error_code::not_initialized if @p handle is invalid.
+    /// @param[in] handle  Handle of the event-flags object.
+    /// @param[in] bits    Bitmask of event bits to clear.
+    /// @retval osal::ok()                   On success,.
+    /// @retval error_code::not_initialized  If @p handle is invalid.
     osal::result osal_event_flags_clear(osal::active_traits::event_flags_handle_t* handle,
                                         osal::event_bits_t                         bits) noexcept
     {
@@ -1288,7 +1318,7 @@ extern "C"
 
     /// @brief Returns the current event-flag bitmask without waiting.
     /// @details Reads the @c .events field of the underlying @c k_event atomically.
-    /// @param handle Handle of the event-flags object.
+    /// @param[in] handle  Handle of the event-flags object.
     /// @return Current bitmask of set bits, or 0 if @p handle is invalid.
     osal::event_bits_t osal_event_flags_get(const osal::active_traits::event_flags_handle_t* handle) noexcept
     {
@@ -1304,14 +1334,15 @@ extern "C"
     /// @details Calls @c k_event_wait() with @c reset=false.  When @p clear_on_exit is @c true
     ///          the matched bits are cleared manually via @c k_event_clear() after the wait succeeds.
     ///          Returns @c error_code::would_block when called with @c NO_WAIT and no bits match.
-    /// @param handle      Handle of the event-flags object.
-    /// @param wait_bits   Bitmask of bits to wait for (any of these).
-    /// @param actual      Optional output; receives the matched bits on success.
-    /// @param clear_on_exit If @c true, matched bits are atomically cleared after waking.
-    /// @param timeout     Maximum wait time in ticks.
-    /// @return @c osal::ok() on success, @c error_code::timeout on deadline,
-    ///         @c error_code::would_block when @c NO_WAIT and no bits are set,
-    ///         or @c error_code::not_initialized if @p handle is invalid.
+    /// @param[in] handle         Handle of the event-flags object.
+    /// @param[in] wait_bits      Bitmask of bits to wait for (any of these).
+    /// @param[out] actual        Optional output; receives the matched bits on success.
+    /// @param[in] clear_on_exit  If @c true, matched bits are atomically cleared after waking.
+    /// @param[in] timeout        Maximum wait time in ticks.
+    /// @retval osal::ok()                   On success.
+    /// @retval error_code::timeout          On deadline.
+    /// @retval error_code::would_block      When @c NO_WAIT and no bits are set,.
+    /// @retval error_code::not_initialized  If @p handle is invalid.
     osal::result osal_event_flags_wait_any(osal::active_traits::event_flags_handle_t* handle,
                                            osal::event_bits_t wait_bits, osal::event_bits_t* actual, bool clear_on_exit,
                                            osal::tick_t timeout) noexcept
@@ -1347,14 +1378,15 @@ extern "C"
     /// @details Calls @c k_event_wait_all() with @c reset=false.  When @p clear_on_exit is @c true
     ///          the matched bits are cleared manually via @c k_event_clear() after the wait succeeds.
     ///          Returns @c error_code::would_block when called with @c NO_WAIT and not all bits match.
-    /// @param handle       Handle of the event-flags object.
-    /// @param wait_bits    Bitmask of bits that must ALL be set before waking.
-    /// @param actual       Optional output; receives the full matched bitmask on success.
-    /// @param clear_on_exit If @c true, matched bits are cleared after waking.
-    /// @param timeout      Maximum wait time in ticks.
-    /// @return @c osal::ok() on success, @c error_code::timeout on deadline,
-    ///         @c error_code::would_block when @c NO_WAIT and the condition is not met,
-    ///         or @c error_code::not_initialized if @p handle is invalid.
+    /// @param[in] handle         Handle of the event-flags object.
+    /// @param[in] wait_bits      Bitmask of bits that must ALL be set before waking.
+    /// @param[out] actual        Optional output; receives the full matched bitmask on success.
+    /// @param[in] clear_on_exit  If @c true, matched bits are cleared after waking.
+    /// @param[in] timeout        Maximum wait time in ticks.
+    /// @retval osal::ok()                   On success.
+    /// @retval error_code::timeout          On deadline.
+    /// @retval error_code::would_block      When @c NO_WAIT and the condition is not met,.
+    /// @retval error_code::not_initialized  If @p handle is invalid.
     osal::result osal_event_flags_wait_all(osal::active_traits::event_flags_handle_t* handle,
                                            osal::event_bits_t wait_bits, osal::event_bits_t* actual, bool clear_on_exit,
                                            osal::tick_t timeout) noexcept
@@ -1386,9 +1418,10 @@ extern "C"
 
     /// @brief Sets event bits from an ISR context.
     /// @details Calls @c k_event_post(), which is ISR-safe on Zephyr.
-    /// @param handle Handle of the event-flags object.
-    /// @param bits   Bitmask of event bits to set.
-    /// @return @c osal::ok() on success, or @c error_code::not_initialized if @p handle is invalid.
+    /// @param[in] handle  Handle of the event-flags object.
+    /// @param[in] bits    Bitmask of event bits to set.
+    /// @retval osal::ok()                   On success,.
+    /// @retval error_code::not_initialized  If @p handle is invalid.
     osal::result osal_event_flags_set_isr(osal::active_traits::event_flags_handle_t* handle,
                                           osal::event_bits_t                         bits) noexcept
     {
@@ -1406,37 +1439,37 @@ extern "C"
     // ---------------------------------------------------------------------------
 
     /// @brief Not supported on Zephyr — always returns @c error_code::not_supported.
-    /// @param[out] handle Unused.
-    /// @return @c error_code::not_supported.
+    /// @param[out] handle  Unused.
+    /// @retval error_code::not_supported  The operation is not supported.
     osal::result osal_wait_set_create(osal::active_traits::wait_set_handle_t*) noexcept
     {
         return osal::error_code::not_supported;
     }
     /// @brief Not supported on Zephyr — always returns @c error_code::not_supported.
-    /// @param handle Unused.
-    /// @return @c error_code::not_supported.
+    /// @param[in] handle  Unused.
+    /// @retval error_code::not_supported  The operation is not supported.
     osal::result osal_wait_set_destroy(osal::active_traits::wait_set_handle_t*) noexcept
     {
         return osal::error_code::not_supported;
     }
     /// @brief Not supported on Zephyr — always returns @c error_code::not_supported.
-    /// @param handle Unused.
-    /// @return @c error_code::not_supported.
+    /// @param[in] handle  Unused.
+    /// @retval error_code::not_supported  The operation is not supported.
     osal::result osal_wait_set_add(osal::active_traits::wait_set_handle_t*, int, std::uint32_t) noexcept
     {
         return osal::error_code::not_supported;
     }
     /// @brief Not supported on Zephyr — always returns @c error_code::not_supported.
-    /// @param handle Unused.
-    /// @return @c error_code::not_supported.
+    /// @param[in] handle  Unused.
+    /// @retval error_code::not_supported  The operation is not supported.
     osal::result osal_wait_set_remove(osal::active_traits::wait_set_handle_t*, int) noexcept
     {
         return osal::error_code::not_supported;
     }
     /// @brief Not supported on Zephyr — always returns @c error_code::not_supported.
     /// @details Sets @p *n to 0 if non-null.
-    /// @param n Optional output; set to 0.
-    /// @return @c error_code::not_supported.
+    /// @param[out] n  Optional output; set to 0.
+    /// @retval error_code::not_supported  The operation is not supported.
     osal::result osal_wait_set_wait(osal::active_traits::wait_set_handle_t*, int*, std::size_t, std::size_t* n,
                                     osal::tick_t) noexcept
     {
@@ -1477,9 +1510,10 @@ extern "C"
 
     /// @brief Creates a condition variable backed by a Zephyr @c k_condvar.
     /// @details Allocates a @c zephyr_condvar_obj from the static pool and calls @c k_condvar_init().
-    /// @param handle Output handle receiving the initialized condvar pointer.
-    /// @return @c osal::ok() on success, @c error_code::out_of_resources if the pool is full,
-    ///         or @c error_code::invalid_argument if @p handle is @c nullptr.
+    /// @param[out] handle  Output handle receiving the initialized condvar pointer.
+    /// @retval osal::ok()                    On success.
+    /// @retval error_code::out_of_resources  If the pool is full,.
+    /// @retval error_code::invalid_argument  If @p handle is @c nullptr.
     osal::result osal_condvar_create(osal::active_traits::condvar_handle_t* handle) noexcept
     {
         if (handle == nullptr)
@@ -1497,8 +1531,8 @@ extern "C"
     }
 
     /// @brief Destroys a condition variable and returns its pool slot.
-    /// @param handle Handle of the condvar to destroy; a @c nullptr or already-null handle is ignored.
-    /// @return Always @c osal::ok().
+    /// @param[in,out] handle  Handle of the condvar to destroy; a @c nullptr or already-null handle is ignored.
+    /// @retval osal::ok()  Always.
     osal::result osal_condvar_destroy(osal::active_traits::condvar_handle_t* handle) noexcept
     {
         if (handle == nullptr || handle->native == nullptr)
@@ -1514,11 +1548,12 @@ extern "C"
     /// @brief Atomically releases the mutex and waits for a condition variable signal.
     /// @details Calls @c k_condvar_wait(), which atomically releases @p mutex and blocks.
     ///          On waking (or timeout) the mutex is re-acquired before returning.
-    /// @param handle  Handle of the condition variable.
-    /// @param mutex   Handle of the mutex to release atomically during the wait.
-    /// @param timeout Maximum wait time in ticks.
-    /// @return @c osal::ok() on success, @c error_code::timeout if the deadline expires,
-    ///         or @c error_code::not_initialized if either handle is invalid.
+    /// @param[in] handle   Handle of the condition variable.
+    /// @param[in] mutex    Handle of the mutex to release atomically during the wait.
+    /// @param[in] timeout  Maximum wait time in ticks.
+    /// @retval osal::ok()                   On success.
+    /// @retval error_code::timeout          If the deadline expires,.
+    /// @retval error_code::not_initialized  If either handle is invalid.
     osal::result osal_condvar_wait(osal::active_traits::condvar_handle_t* handle,
                                    osal::active_traits::mutex_handle_t* mutex, osal::tick_t timeout) noexcept
     {
@@ -1544,8 +1579,9 @@ extern "C"
 
     /// @brief Wakes one thread waiting on the condition variable.
     /// @details Calls @c k_condvar_signal().
-    /// @param handle Handle of the condition variable.
-    /// @return @c osal::ok() on success, or @c error_code::not_initialized if @p handle is invalid.
+    /// @param[in] handle  Handle of the condition variable.
+    /// @retval osal::ok()                   On success,.
+    /// @retval error_code::not_initialized  If @p handle is invalid.
     osal::result osal_condvar_notify_one(osal::active_traits::condvar_handle_t* handle) noexcept
     {
         if (handle == nullptr || handle->native == nullptr)
@@ -1559,8 +1595,9 @@ extern "C"
 
     /// @brief Wakes all threads waiting on the condition variable.
     /// @details Calls @c k_condvar_broadcast().
-    /// @param handle Handle of the condition variable.
-    /// @return @c osal::ok() on success, or @c error_code::not_initialized if @p handle is invalid.
+    /// @param[in] handle  Handle of the condition variable.
+    /// @retval osal::ok()                   On success,.
+    /// @retval error_code::not_initialized  If @p handle is invalid.
     osal::result osal_condvar_notify_all(osal::active_traits::condvar_handle_t* handle) noexcept
     {
         if (handle == nullptr || handle->native == nullptr)
@@ -1643,13 +1680,14 @@ extern "C"
     /// @details Allocates a @c zephyr_wq_obj_s from the static pool, initialises each
     ///          @c zephyr_wq_entry with @c k_work_init(), and starts the queue thread via
     ///          @c k_work_queue_start().
-    /// @param handle      Output handle receiving the work-queue object pointer.
-    /// @param stack       Caller-supplied stack for the work-queue thread.
-    /// @param stack_bytes Size of @p stack in bytes.
-    /// @param depth       Maximum number of pending work items; must not exceed
+    /// @param[out] handle      Output handle receiving the work-queue object pointer.
+    /// @param[in] stack        Caller-supplied stack for the work-queue thread.
+    /// @param[in] stack_bytes  Size of @p stack in bytes.
+    /// @param[in] depth        Maximum number of pending work items; must not exceed
     ///                    @c OSAL_ZEPHYR_WQ_MAX_DEPTH.
-    /// @return @c osal::ok() on success, @c error_code::out_of_resources if the pool is full,
-    ///         or @c error_code::invalid_argument for invalid parameters or depth overflow.
+    /// @retval osal::ok()                    On success.
+    /// @retval error_code::out_of_resources  If the pool is full,.
+    /// @retval error_code::invalid_argument  For invalid parameters or depth overflow.
     osal::result osal_work_queue_create(osal::active_traits::work_queue_handle_t* handle, void* stack,
                                         std::size_t stack_bytes, std::size_t depth, const char* /*name*/) noexcept
     {
@@ -1686,8 +1724,8 @@ extern "C"
     ///          then @c k_thread_abort() to stop the queue thread, and finally
     ///          releases the pool slot.  The internal @c k_work_q is zeroed so the
     ///          slot can be reused.
-    /// @param handle Handle of the work queue to destroy; a @c nullptr or already-null handle is ignored.
-    /// @return Always @c osal::ok().
+    /// @param[in,out] handle  Handle of the work queue to destroy; a @c nullptr or already-null handle is ignored.
+    /// @retval osal::ok()  Always.
     osal::result osal_work_queue_destroy(osal::active_traits::work_queue_handle_t* handle) noexcept
     {
         if (handle == nullptr || handle->native == nullptr)
@@ -1709,11 +1747,12 @@ extern "C"
     /// @brief Submits a work item to the work queue.
     /// @details Finds a free @c zephyr_wq_entry slot, populates it, marks it in-use, and
     ///          calls @c k_work_submit_to_queue().
-    /// @param handle Handle of the work queue.
-    /// @param func   Callback function to execute on the work queue thread.
-    /// @param arg    Argument forwarded to @p func.
-    /// @return @c osal::ok() on success, @c error_code::overflow if all slots are busy,
-    ///         or @c error_code::invalid_argument for invalid inputs.
+    /// @param[in] handle  Handle of the work queue.
+    /// @param[in] func    Callback function to execute on the work queue thread.
+    /// @param[in] arg     Argument forwarded to @p func.
+    /// @retval osal::ok()                    On success.
+    /// @retval error_code::overflow          If all slots are busy,.
+    /// @retval error_code::invalid_argument  For invalid inputs.
     osal::result osal_work_queue_submit(osal::active_traits::work_queue_handle_t* handle, osal_work_func_t func,
                                         void* arg) noexcept
     {
@@ -1740,10 +1779,11 @@ extern "C"
     /// @brief Submits a work item from an ISR context.
     /// @details Delegates to @c osal_work_queue_submit() — @c k_work_submit_to_queue() is
     ///          ISR-safe on Zephyr.
-    /// @param handle Handle of the work queue.
-    /// @param func   Callback function to execute.
-    /// @param arg    Argument forwarded to @p func.
-    /// @return @c osal::ok() on success, or @c error_code::overflow if all slots are busy.
+    /// @param[in] handle  Handle of the work queue.
+    /// @param[in] func    Callback function to execute.
+    /// @param[in] arg     Argument forwarded to @p func.
+    /// @retval osal::ok()            On success,.
+    /// @retval error_code::overflow  If all slots are busy.
     osal::result osal_work_queue_submit_from_isr(osal::active_traits::work_queue_handle_t* handle,
                                                  osal_work_func_t func, void* arg) noexcept
     {
@@ -1755,11 +1795,12 @@ extern "C"
     /// @details Submits a sentinel entry (func == nullptr) whose handler calls
     ///          @c k_sem_give() on the queue's flush semaphore, then waits on that
     ///          semaphore with the given timeout.
-    /// @param handle  Handle of the work queue.
-    /// @param timeout Maximum wait time in ticks.
-    /// @return @c osal::ok() when the flush sentinel is executed, @c error_code::timeout
-    ///         on deadline, @c error_code::overflow if no slot is available for the sentinel,
-    ///         or @c error_code::not_initialized if @p handle is invalid.
+    /// @param[in] handle   Handle of the work queue.
+    /// @param[in] timeout  Maximum wait time in ticks.
+    /// @retval osal::ok()                   When the flush sentinel is executed.
+    /// @retval error_code::timeout          On deadline.
+    /// @retval error_code::overflow         If no slot is available for the sentinel,.
+    /// @retval error_code::not_initialized  If @p handle is invalid.
     osal::result osal_work_queue_flush(osal::active_traits::work_queue_handle_t* handle, osal::tick_t timeout) noexcept
     {
         if (handle == nullptr || handle->native == nullptr)
@@ -1788,8 +1829,9 @@ extern "C"
     /// @brief Cancels all pending work items in the queue.
     /// @details Calls @c k_work_cancel() on every in-use entry and clears the in-use flag.
     ///          Items that are already executing cannot be cancelled.
-    /// @param handle Handle of the work queue.
-    /// @return @c osal::ok() on success, or @c error_code::not_initialized if @p handle is invalid.
+    /// @param[in] handle  Handle of the work queue.
+    /// @retval osal::ok()                   On success,.
+    /// @retval error_code::not_initialized  If @p handle is invalid.
     osal::result osal_work_queue_cancel_all(osal::active_traits::work_queue_handle_t* handle) noexcept
     {
         if (handle == nullptr || handle->native == nullptr)
@@ -1810,7 +1852,7 @@ extern "C"
 
     /// @brief Returns the number of work items currently marked as in-use (pending or executing).
     /// @details Counts @c zephyr_wq_entry slots where @c in_use is @c true.
-    /// @param handle Handle of the work queue.
+    /// @param[in] handle  Handle of the work queue.
     /// @return Count of in-use entries, or 0 if @p handle is invalid.
     std::size_t osal_work_queue_pending(const osal::active_traits::work_queue_handle_t* handle) noexcept
     {

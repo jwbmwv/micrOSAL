@@ -82,6 +82,52 @@ TEST_CASE("memory_pool: allocate returns non-null and decrements available")
     CHECK(pool.available() == 4U);
 }
 
+#if defined(__cpp_lib_expected) && __cpp_lib_expected >= 202202L
+TEST_CASE("memory_pool: allocate_expected returns expected void*")
+{
+    alignas(32) static std::uint8_t buf[32 * 2];
+    osal::memory_pool               pool{buf, sizeof(buf), 32, 2};
+    REQUIRE(pool.valid());
+
+    auto exp_b1 = pool.allocate_expected();
+    REQUIRE(exp_b1.has_value());
+    CHECK(*exp_b1 != nullptr);
+
+    auto exp_b2 = pool.allocate_expected();
+    REQUIRE(exp_b2.has_value());
+    CHECK(*exp_b2 != *exp_b1);
+    CHECK(pool.available() == 0U);
+
+    auto exp_fail = pool.allocate_expected();
+    REQUIRE_FALSE(exp_fail.has_value());
+    CHECK(exp_fail.error() == osal::error_code::out_of_resources);
+
+    REQUIRE(pool.deallocate(*exp_b1).ok());
+    const auto recovered = pool.allocate_expected();
+    REQUIRE(recovered.has_value());
+    CHECK(*recovered == *exp_b1);
+    REQUIRE(pool.deallocate(*recovered).ok());
+    REQUIRE(pool.deallocate(*exp_b2).ok());
+    CHECK(pool.available() == 2U);
+}
+
+TEST_CASE("memory_pool: allocate_expected distinguishes an invalid pool from exhaustion")
+{
+    if constexpr (osal::active_capabilities::has_native_memory_pool)
+    {
+        return;
+    }
+
+    alignas(std::size_t) std::uint8_t storage[sizeof(std::size_t)]{};
+    osal::memory_pool                 pool{storage, sizeof(storage), std::numeric_limits<std::size_t>::max(), 2U};
+    REQUIRE_FALSE(pool.valid());
+
+    const auto allocated = pool.allocate_expected();
+    REQUIRE_FALSE(allocated.has_value());
+    CHECK(allocated.error() == osal::error_code::not_initialized);
+}
+#endif
+
 // ---------------------------------------------------------------------------
 // Exhaust the pool — allocate returns nullptr when empty
 // ---------------------------------------------------------------------------

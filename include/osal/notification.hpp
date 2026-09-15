@@ -25,6 +25,7 @@
 
 #include "concepts.hpp"
 #include "condvar.hpp"
+#include "detail/cpp_compat.hpp"
 #include "error.hpp"
 #include "mutex.hpp"
 #include "types.hpp"
@@ -70,12 +71,13 @@ public:
     [[nodiscard]] bool valid() const noexcept { return mtx_.valid() && cv_.valid(); }
 
     /// @brief Apply a notification action to one slot.
-    /// @param value Value used by the selected @p action.
-    /// @param action Update rule applied to the slot.
-    /// @param index Slot index in the range `[0, Slots)`.
-    /// @return `error_code::ok` on success, `error_code::would_block` for
-    ///         `notification_action::no_overwrite` when the slot is already
-    ///         pending, or `error_code::invalid_argument` for an invalid slot.
+    /// @param[in] value   Value used by the selected @p action.
+    /// @param[in] action  Update rule applied to the slot.
+    /// @param[in] index   Slot index in the range `[0, Slots)`.
+    /// @retval error_code::ok              The notification was applied.
+    /// @retval error_code::not_initialized The notification object is not initialized.
+    /// @retval error_code::would_block     A no-overwrite notification found a pending slot.
+    /// @retval error_code::invalid_argument The slot index or notification action is invalid.
     result notify(std::uint32_t value = 0U, notification_action action = notification_action::overwrite,
                   std::size_t index = 0U) const noexcept
     {
@@ -122,9 +124,11 @@ public:
     }
 
     /// @brief Clear a subset of bits in a slot without changing pending state.
-    /// @param bits Bit mask to clear.
-    /// @param index Slot index in the range `[0, Slots)`.
-    /// @return `error_code::ok` on success or an argument/init error.
+    /// @param[in] bits   Bit mask to clear.
+    /// @param[in] index  Slot index in the range `[0, Slots)`.
+    /// @retval error_code::ok              The bits were cleared.
+    /// @retval error_code::not_initialized The notification object is not initialized.
+    /// @retval error_code::invalid_argument The slot index is invalid.
     result clear(std::uint32_t bits, std::size_t index = 0U) const noexcept
     {
         if (!valid())
@@ -142,8 +146,10 @@ public:
     }
 
     /// @brief Reset a slot to value `0` with no pending notification.
-    /// @param index Slot index in the range `[0, Slots)`.
-    /// @return `error_code::ok` on success or an argument/init error.
+    /// @param[in] index  Slot index in the range `[0, Slots)`.
+    /// @retval error_code::ok              The slot was reset.
+    /// @retval error_code::not_initialized The notification object is not initialized.
+    /// @retval error_code::invalid_argument The slot index is invalid.
     result reset(std::size_t index = 0U) const noexcept
     {
         if (!valid())
@@ -161,14 +167,16 @@ public:
     }
 
     /// @brief Wait for one slot to become pending.
-    /// @param index Slot index in the range `[0, Slots)`.
-    /// @param timeout Maximum time to wait. A negative value waits forever.
-    /// @param value_out Optional pointer that receives the slot value observed
+    /// @param[in] index       Slot index in the range `[0, Slots)`.
+    /// @param[in] timeout     Maximum time to wait. A negative value waits forever.
+    /// @param[out] value_out  Optional pointer that receives the slot value observed
     ///                  when the wait succeeds.
-    /// @param clear_on_entry Bits cleared before starting the wait.
-    /// @param clear_on_exit Bits cleared after the wait completes.
-    /// @return `error_code::ok` on success, `error_code::timeout` on expiry, or
-    ///         an argument/init error.
+    /// @param[in] clear_on_entry  Bits cleared before starting the wait.
+    /// @param[in] clear_on_exit   Bits cleared after the wait completes.
+    /// @retval error_code::ok              The slot became pending.
+    /// @retval error_code::not_initialized The notification object is not initialized.
+    /// @retval error_code::invalid_argument The slot index is invalid.
+    /// @retval error_code::timeout         The wait expired.
     /// @details A successful wait clears the slot's pending bit before it
     ///          returns.
     result wait(std::size_t index, milliseconds timeout = milliseconds{-1}, std::uint32_t* value_out = nullptr,
@@ -214,7 +222,7 @@ public:
     }
 
     /// @brief Report whether a slot has a pending notification.
-    /// @param index Slot index in the range `[0, Slots)`.
+    /// @param[in] index  Slot index in the range `[0, Slots)`.
     /// @return `true` when the slot is pending.
     [[nodiscard]] bool pending(std::size_t index = 0U) const noexcept
     {
@@ -228,7 +236,7 @@ public:
     }
 
     /// @brief Read the current slot value without consuming pending state.
-    /// @param index Slot index in the range `[0, Slots)`.
+    /// @param[in] index  Slot index in the range `[0, Slots)`.
     /// @return Current 32-bit slot value, or `0` for an invalid slot.
     [[nodiscard]] std::uint32_t peek(std::size_t index = 0U) const noexcept
     {

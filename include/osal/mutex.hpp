@@ -94,7 +94,7 @@ public:
     // ---- construction / destruction ----------------------------------------
 
     /// @brief Constructs and initialises the mutex.
-    /// @param type  normal or recursive.
+    /// @param[in] type  normal or recursive.
     /// @details Calls the backend to initialise the underlying OS primitive.
     ///          If initialisation fails the mutex is left in an uninitialised
     ///          state; check valid() before use in safety-critical code.
@@ -106,7 +106,7 @@ public:
     }
 
     /// @brief Constructs from an immutable config (config may reside in FLASH).
-    /// @param cfg  Configuration — typically declared @c const / @c constexpr.
+    /// @param[in] cfg  Configuration — typically declared @c const / @c constexpr.
     /// @complexity O(1)
     /// @blocking   Never.
     explicit mutex(const mutex_config& cfg) noexcept : valid_(false)
@@ -157,7 +157,7 @@ public:
     bool try_lock() noexcept { return osal_mutex_try_lock(&handle_).ok(); }
 
     /// @brief Acquires the mutex, blocking up to @p timeout_ms milliseconds.
-    /// @param  timeout_ms Maximum time to wait.
+    /// @param[in] timeout_ms  Maximum time to wait.
     /// @return true if acquired within the timeout; false on timeout.
     /// @note   Requires capabilities<active_backend>::has_timed_mutex.
     ///         Returns false immediately if the backend does not support timed locks.
@@ -198,7 +198,7 @@ public:
     {
     public:
         /// @brief Constructs the guard and locks @p m.
-        /// @param m  The mutex to lock.
+        /// @param[in] m  The mutex to lock.
         explicit lock_guard(mutex& m) noexcept : m_(m) { m_.lock(); }
         /// @brief Destructs the guard and unlocks the mutex.
         ~lock_guard() noexcept { m_.unlock(); }

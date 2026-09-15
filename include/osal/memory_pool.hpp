@@ -33,20 +33,25 @@
 
 #include "backends.hpp"
 #include "clock.hpp"
+#include "detail/cpp_compat.hpp"
 #include "error.hpp"
 #include "types.hpp"
 #include <cstddef>
 #include <cstdint>
 
+#if defined(__cpp_lib_expected) && __cpp_lib_expected >= 202202L
+#include <expected>
+#endif
+
 extern "C"
 {
     /// @brief Create a fixed-size block pool.
-    /// @param handle     Output handle.
-    /// @param buffer     Caller-supplied backing storage.
-    /// @param buf_bytes  Total size of buffer in bytes.
-    /// @param block_size Size of each block in bytes.
-    /// @param block_count Number of blocks.
-    /// @param name       Debug name (may be nullptr).
+    /// @param[out] handle      Output handle.
+    /// @param[in] buffer       Caller-supplied backing storage.
+    /// @param[in] buf_bytes    Total size of buffer in bytes.
+    /// @param[in] block_size   Size of each block in bytes.
+    /// @param[in] block_count  Number of blocks.
+    /// @param[in] name         Debug name (may be nullptr).
     osal::result osal_memory_pool_create(osal::active_traits::memory_pool_handle_t* handle, void* buffer,
                                          std::size_t buf_bytes, std::size_t block_size, std::size_t block_count,
                                          const char* name) noexcept;
@@ -113,12 +118,12 @@ public:
     // ---- construction / destruction ----------------------------------------
 
     /// @brief Constructs a memory pool.
-    /// @param buffer       Caller-supplied backing storage (must be
+    /// @param[in] buffer  Caller-supplied backing storage (must be
     ///                     aligned to block_size alignment requirements).
-    /// @param buf_bytes    Size of buffer in bytes.
-    /// @param block_size   Size of each block in bytes.
-    /// @param block_count  Number of blocks that fit in the buffer.
-    /// @param name         Debug name (may be nullptr).
+    /// @param[in] buf_bytes    Size of buffer in bytes.
+    /// @param[in] block_size   Size of each block in bytes.
+    /// @param[in] block_count  Number of blocks that fit in the buffer.
+    /// @param[in] name         Debug name (may be nullptr).
     memory_pool(void* buffer, std::size_t buf_bytes, std::size_t block_size, std::size_t block_count,
                 const char* name = nullptr) noexcept
         : valid_(false), block_size_(block_size)
@@ -127,7 +132,7 @@ public:
     }
 
     /// @brief Constructs from an immutable config (config may reside in FLASH).
-    /// @param cfg  Configuration — typically declared @c const.
+    /// @param[in] cfg  Configuration — typically declared @c const.
     /// @complexity O(1)
     explicit memory_pool(const memory_pool_config& cfg) noexcept : valid_(false), block_size_(cfg.block_size)
     {
@@ -157,7 +162,7 @@ public:
     [[nodiscard]] void* allocate() noexcept { return osal_memory_pool_allocate(&handle_); }
 
     /// @brief Allocate one block with timeout.
-    /// @param timeout  Maximum time to wait for a free block.
+    /// @param[in] timeout  Maximum time to wait for a free block.
     /// @return Pointer to the block, or nullptr on timeout.
     [[nodiscard]] void* allocate_for(milliseconds timeout) noexcept
     {
@@ -166,8 +171,28 @@ public:
     }
 
     /// @brief Return a previously allocated block to the pool.
-    /// @param block  Pointer previously returned by allocate().
+    /// @param[in] block  Pointer previously returned by allocate().
     [[nodiscard]] result deallocate(void* block) noexcept { return osal_memory_pool_deallocate(&handle_, block); }
+
+#if defined(__cpp_lib_expected) && __cpp_lib_expected >= 202202L
+    /// @brief Non-blocking allocate returning std::expected<void*, error_code> (C++23).
+    /// @retval error_code::not_initialized The pool was not successfully created.
+    /// @retval error_code::out_of_resources The valid pool returned no block.
+    /// @note The pointer-returning backend cannot provide a more specific allocation error.
+    [[nodiscard]] std::expected<void*, error_code> allocate_expected() noexcept
+    {
+        if (!valid())
+        {
+            return std::unexpected(error_code::not_initialized);
+        }
+        void* blk = allocate();
+        if (blk != nullptr)
+        {
+            return blk;
+        }
+        return std::unexpected(error_code::out_of_resources);
+    }
+#endif
 
     // ---- query -------------------------------------------------------------
 

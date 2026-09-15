@@ -5,6 +5,9 @@ interface to common RTOS primitives, portable across seventeen embedded and
 hosted operating systems.
 
 - Requires a C++20 compiler; backend selection, capability checks, and fixed-storage constraints are validated at compile time with concepts and consteval helpers.
+- Optional C++23 expected-returning adapters and C++26 bounded-container storage
+    are selected by standard-library feature macros. C++20 remains the default;
+    see the [optional feature contracts](docs/RELEASE_CONTRACT.md#optional-c-features).
 - No virtual functions — all backend dispatch is resolved at compile time.
 - No RTTI — compiles cleanly with `-fno-rtti`.
 - Allocation-free on static-pool backends; POSIX-family backends use small heap-backed control objects.
@@ -13,23 +16,6 @@ hosted operating systems.
 
 Backend-by-backend storage and allocation profiles are summarized in
 [`docs/threading_model.md`](docs/threading_model.md).
-
-### Memory Analysis Tools
-
-micrOSAL includes tools for analyzing memory footprint:
-
-```bash
-# Analyze backend pool sizes
-./scripts/memory_footprint.py --backend FREERTOS
-
-# Calculate queue memory usage: queue<uint32_t, 32>
-./scripts/memory_footprint.py --queue 4 32
-
-# Build-time memory reporting (CMake)
-make memory_reports
-```
-
-See [`scripts/README.md`](scripts/README.md) for complete documentation.
 
 ```cpp
 #include <osal/osal.hpp>      // or include individual headers
@@ -138,6 +124,19 @@ cmake -B build \
       -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j$(nproc)
 ```
+
+To opt into a newer standard, use a separate build directory:
+
+```bash
+cmake -B build-cxx23 -DOSAL_BACKEND=LINUX -DCMAKE_CXX_STANDARD=23
+cmake --build build-cxx23 --parallel
+```
+
+`CMAKE_CXX_STANDARD=26` is also preserved when supported by CMake and the
+compiler. A newer language mode alone does not provide missing standard-library
+features. Use a consistent language mode and library configuration for MicrOSAL
+and its C++ consumers; the [feature table and examples](docs/RELEASE_CONTRACT.md#optional-c-features)
+describe availability and error handling.
 
 Supported `-DOSAL_BACKEND` values: `FREERTOS ZEPHYR THREADX PX5 POSIX LINUX
 BAREMETAL VXWORKS NUTTX MICRIUM CHIBIOS EMBOS QNX RTEMS INTEGRITY
@@ -295,7 +294,6 @@ coverage matrix and gap analysis.
 | --- | --- |
 | [`docs/design.md`](docs/design.md) | Architecture, design principles, config/data split, capability matrix |
 | [`docs/backend_integration.md`](docs/backend_integration.md) | How to port MicrOSAL to a new backend |
-| [`docs/RELEASE_CONTRACT.md`](docs/RELEASE_CONTRACT.md) | Supported configurations, validation boundary, and release checks |
 | [`docs/TestCoverage.md`](docs/TestCoverage.md) | Test suite inventory and coverage matrix |
 | [`docs/threading_model.md`](docs/threading_model.md) | Thread lifecycle, priorities, and scheduling model |
 | [`docs/c_api.md`](docs/c_api.md) | Pure-C API reference |

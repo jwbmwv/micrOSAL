@@ -225,8 +225,8 @@ public:
     // ---- lifecycle ---------------------------------------------------------
 
     /// @brief Creates and starts the thread.
-    /// @param cfg  Thread configuration.
-    /// @return result::ok() on success.
+    /// @param[in] cfg  Thread configuration.
+    /// @retval osal::ok() The thread was created successfully.
     /// @complexity O(1)
     /// @blocking   Never (the new thread runs independently).
     result create(const thread_config& cfg) noexcept
@@ -238,8 +238,8 @@ public:
     }
 
     /// @brief Joins the thread, blocking until it completes.
-    /// @return result::ok() on success; error_code::not_supported if the backend
-    ///         does not support join.
+    /// @retval osal::ok()                The thread was joined successfully.
+    /// @retval error_code::not_supported The active backend does not support thread joins.
     /// @complexity O(1)
     /// @blocking   Blocks until the thread exits.
     result join() noexcept
@@ -253,9 +253,10 @@ public:
     }
 
     /// @brief Joins with a timeout.
-    /// @param timeout Maximum wait time.
-    /// @return result::ok() if joined; error_code::timeout on expiry.
-    ///         Returns error_code::not_supported on backends without timed join.
+    /// @param[in] timeout  Maximum wait time.
+    /// @retval osal::ok()                The thread was joined successfully.
+    /// @retval error_code::timeout       The join timeout expired.
+    /// @retval error_code::not_supported The active backend does not support timed joins.
     /// @complexity O(1)
     /// @blocking   Up to timeout.
     result join_for(milliseconds timeout) noexcept
@@ -277,9 +278,10 @@ public:
     }
 
     /// @brief Joins until an absolute deadline.
-    /// @param deadline Absolute monotonic time point.
-    /// @return result::ok() if joined before deadline; error_code::timeout on
-    ///         expiry; error_code::not_supported if the backend lacks timed join.
+    /// @param[in] deadline  Absolute monotonic time point.
+    /// @retval osal::ok()                The thread was joined before the deadline.
+    /// @retval error_code::timeout       The deadline expired before the thread completed.
+    /// @retval error_code::not_supported The active backend does not support timed joins.
     /// @details Loops internally so that tick-count saturation (for unusually
     ///          large deadlines) does not cause premature timeout returns.
     result join_until(monotonic_clock::time_point deadline) noexcept
@@ -303,7 +305,7 @@ public:
     }
 
     /// @brief Detaches the thread; resources are reclaimed on exit.
-    /// @return result::ok() on success.
+    /// @retval osal::ok() The thread was detached successfully.
     /// @complexity O(1)
     result detach() noexcept
     {
@@ -318,9 +320,9 @@ public:
     // ---- attributes --------------------------------------------------------
 
     /// @brief Changes the thread priority.
-    /// @param priority New priority value.
-    /// @return result::ok() on success; error_code::not_supported if the backend
-    ///         does not support dynamic priority changes.
+    /// @param[in] priority  New priority value.
+    /// @retval osal::ok()                The priority was updated successfully.
+    /// @retval error_code::not_supported The active backend has no dynamic-priority support.
     result set_priority(priority_t priority) noexcept
     {
         if constexpr (dynamic_thread_priority_backend<active_backend>)
@@ -335,9 +337,9 @@ public:
     }
 
     /// @brief Sets CPU affinity.
-    /// @param affinity Bitmask of allowed CPUs.
-    /// @return result::ok() on success; error_code::not_supported if the backend
-    ///         does not support affinity.
+    /// @param[in] affinity  Bitmask of allowed CPUs.
+    /// @retval osal::ok()                The affinity was updated successfully.
+    /// @retval error_code::not_supported The active backend has no affinity support.
     result set_affinity(affinity_t affinity) noexcept
     {
         if constexpr (thread_affinity_backend<active_backend>)
@@ -352,8 +354,9 @@ public:
     }
 
     /// @brief Sends a direct-to-task notification to this thread.
-    /// @param value  32-bit value; semantics are backend-defined (usually a bitmask or increment).
-    /// @return result::ok() on success; error_code::not_supported if unavailable.
+    /// @param[in] value  32-bit value; semantics are backend-defined (usually a bitmask or increment).
+    /// @retval osal::ok()                The notification was sent successfully.
+    /// @retval error_code::not_supported The active backend has no task-notification support.
     result notify(std::uint32_t value = 0U) noexcept
     {
         if constexpr (task_notification_backend<active_backend>)
@@ -368,8 +371,9 @@ public:
     }
 
     /// @brief Sends a direct-to-task notification from ISR context.
-    /// @param value  32-bit value; semantics are backend-defined.
-    /// @return result::ok() on success; error_code::not_supported if unavailable.
+    /// @param[in] value  32-bit value; semantics are backend-defined.
+    /// @retval osal::ok()                The notification was sent successfully.
+    /// @retval error_code::not_supported The active backend has no task-notification support.
     result notify_isr(std::uint32_t value = 0U) noexcept
     {
         if constexpr (task_notification_backend<active_backend>)
@@ -384,10 +388,11 @@ public:
     }
 
     /// @brief Waits for a direct notification on the calling thread.
-    /// @param timeout         Maximum wait time.
+    /// @param[in] timeout     Maximum wait time.
     /// @param[out] value_out  Receives the notification value (may be nullptr).
-    /// @return result::ok() on notify; error_code::timeout on expiry;
-    ///         error_code::not_supported if the backend lacks task notifications.
+    /// @retval osal::ok()                A notification was received.
+    /// @retval error_code::timeout       The wait expired.
+    /// @retval error_code::not_supported The active backend has no task-notification support.
     static result wait_for_notification(milliseconds timeout, std::uint32_t* value_out = nullptr) noexcept
     {
         if constexpr (task_notification_backend<active_backend>)
@@ -404,13 +409,13 @@ public:
     }
 
     /// @brief Suspends the target thread until resumed.
-    /// @return result::ok() on success; error_code::not_supported if unsupported
-    ///         by the active backend.
+    /// @retval osal::ok()                The thread was suspended successfully.
+    /// @retval error_code::not_supported The active backend does not support suspension.
     [[nodiscard]] result suspend() noexcept { return osal_thread_suspend(&handle_); }
 
     /// @brief Resumes a previously suspended thread.
-    /// @return result::ok() on success; error_code::not_supported if unsupported
-    ///         by the active backend.
+    /// @retval osal::ok()                The thread was resumed successfully.
+    /// @retval error_code::not_supported The active backend does not support resumption.
     [[nodiscard]] result resume() noexcept { return osal_thread_resume(&handle_); }
 
     // ---- query -------------------------------------------------------------
@@ -435,7 +440,8 @@ public:
 
     /// @brief Queries the current priority of this thread.
     /// @param[out] out  Receives the priority on success.
-    /// @return result::ok() on success; error_code::not_supported in the draft API.
+    /// @retval osal::ok()                The priority was written to @p out.
+    /// @retval error_code::not_supported This query is unavailable in the draft API.
     [[nodiscard]] result get_priority(priority_t& out) const noexcept
     {
         if constexpr (thread_priority_query_capability<active_backend>::value)
@@ -448,7 +454,8 @@ public:
 
     /// @brief Queries the current affinity mask of this thread.
     /// @param[out] out  Receives the affinity mask on success.
-    /// @return result::ok() on success; error_code::not_supported in the draft API.
+    /// @retval osal::ok()                The affinity mask was written to @p out.
+    /// @retval error_code::not_supported This query is unavailable in the draft API.
     [[nodiscard]] result get_affinity(affinity_t& out) const noexcept
     {
         if constexpr (thread_affinity_query_capability<active_backend>::value)
@@ -461,7 +468,8 @@ public:
 
     /// @brief Queries the stack low-watermark for this thread.
     /// @param[out] out  Receives the minimum free stack observed in bytes.
-    /// @return result::ok() on success; error_code::not_supported in the draft API.
+    /// @retval osal::ok()                The low-watermark value was written to @p out.
+    /// @retval error_code::not_supported This query is unavailable in the draft API.
     [[nodiscard]] result stack_low_watermark_bytes(std::size_t& out) const noexcept
     {
         if constexpr (supports_stack_watermark)
@@ -474,7 +482,8 @@ public:
 
     /// @brief Queries the accumulated execution time for this thread.
     /// @param[out] out  Receives the execution time on success.
-    /// @return result::ok() on success; error_code::not_supported in the draft API.
+    /// @retval osal::ok()                The execution time was written to @p out.
+    /// @retval error_code::not_supported This query is unavailable in the draft API.
     [[nodiscard]] result execution_time(microseconds& out) const noexcept
     {
         if constexpr (supports_execution_time)
@@ -490,7 +499,8 @@ public:
 
     /// @brief Queries the CPU-load share for this thread.
     /// @param[out] out  Receives the load in permille on success.
-    /// @return result::ok() on success; error_code::not_supported in the draft API.
+    /// @retval osal::ok()                The CPU-load value was written to @p out.
+    /// @retval error_code::not_supported This query is unavailable in the draft API.
     [[nodiscard]] result cpu_load_permille(load_permille_t& out) const noexcept
     {
         out = load_permille_t{0};
@@ -589,7 +599,7 @@ public:
     /// @details Non-positive durations return immediately.  Durations that exceed
     ///          the @c uint32_t range of @c osal_thread_sleep_ms are saturated
     ///          rather than wrapping.
-    /// @param duration Sleep duration.
+    /// @param[in] duration  Sleep duration.
     /// @complexity O(1)
     /// @blocking   Blocks for at least the requested duration.
     static void sleep_for(milliseconds duration) noexcept
@@ -608,7 +618,7 @@ public:
     /// @details If @p tp is already in the past, returns immediately.  Loops in
     ///          chunks so that (a) uint32_t overflow in @c osal_thread_sleep_ms
     ///          is impossible and (b) early wakeups are corrected before return.
-    /// @param tp  Absolute monotonic deadline.
+    /// @param[in] tp  Absolute monotonic deadline.
     /// @complexity O(duration / chunk)
     /// @blocking   Until @p tp is reached.
     static void sleep_until(monotonic_clock::time_point tp) noexcept
@@ -696,14 +706,14 @@ inline void yield() noexcept
 }
 
 /// @brief Blocks the current thread for at least @p d.
-/// @param d  Duration to sleep.
+/// @param[in] d  Duration to sleep.
 inline void sleep_for(milliseconds d) noexcept
 {
     thread::sleep_for(d);
 }
 
 /// @brief Blocks the current thread until the absolute time point @p tp.
-/// @param tp  Monotonic deadline.  If in the past, returns immediately.
+/// @param[in] tp  Monotonic deadline.  If in the past, returns immediately.
 inline void sleep_until(monotonic_clock::time_point tp) noexcept
 {
     thread::sleep_until(tp);

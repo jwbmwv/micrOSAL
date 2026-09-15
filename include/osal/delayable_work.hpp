@@ -64,10 +64,10 @@ public:
     }
 
     /// @brief Construct a delayable work item.
-    /// @param queue Target work queue used to execute the callback.
-    /// @param func Callback invoked when the delay expires.
-    /// @param arg Opaque pointer passed back to @p func.
-    /// @param name Optional debug name for the backing timer.
+    /// @param[in] queue  Target work queue used to execute the callback.
+    /// @param[in] func   Callback invoked when the delay expires.
+    /// @param[in] arg    Opaque pointer passed back to @p func.
+    /// @param[in] name   Optional debug name for the backing timer.
     delayable_work(work_queue& queue, work_func_t func, void* arg = nullptr, const char* name = "dw") noexcept
         : queue_(&queue), func_(func), arg_(arg),
           timer_{timer_thunk, this, milliseconds{1}, timer_mode::one_shot, name},
@@ -85,11 +85,13 @@ public:
     delayable_work& operator=(delayable_work&&)      = delete;
 
     /// @brief Arm the work item to run after @p delay.
-    /// @param delay Delay before the callback is submitted to the queue.
+    /// @param[in] delay  Delay before the callback is submitted to the queue.
     ///              Zero or negative delays enqueue immediately.
-    /// @return `error_code::ok` on success, `error_code::already_exists` if a
-    ///         delay or queued callback is already pending, or a backend error
-    ///         if the timer/work-queue operation fails.
+    /// @retval error_code::ok             The callback was scheduled successfully.
+    /// @retval error_code::not_initialized The helper was not initialized successfully.
+    /// @retval error_code::already_exists  A delay or queued callback is already pending.
+    /// @par Propagated errors
+    /// Errors from the backing timer or work queue are propagated unchanged.
     result schedule(milliseconds delay) noexcept
     {
         if (!valid_)
@@ -108,10 +110,12 @@ public:
     }
 
     /// @brief Replace any currently armed delay with a new one.
-    /// @param delay New delay before queue submission.
-    /// @return `error_code::ok` on success, `error_code::would_block` if the
-    ///         callback has already reached the queue or is executing, or a
-    ///         backend error if the timer/work-queue operation fails.
+    /// @param[in] delay  New delay before queue submission.
+    /// @retval error_code::ok             The callback was rescheduled successfully.
+    /// @retval error_code::not_initialized The helper was not initialized successfully.
+    /// @retval error_code::would_block     The callback is queued or already executing.
+    /// @par Propagated errors
+    /// Errors from the backing timer or work queue are propagated unchanged.
     result reschedule(milliseconds delay) noexcept
     {
         if (!valid_)
@@ -147,9 +151,11 @@ public:
     }
 
     /// @brief Cancel an armed delay before it reaches the work queue.
-    /// @return `error_code::ok` if the item is idle or the timer was stopped,
-    ///         `error_code::would_block` if the callback has already been
-    ///         queued or is running, or a backend error from the timer stop.
+    /// @retval error_code::ok             The item was idle or its timer was stopped.
+    /// @retval error_code::not_initialized The helper was not initialized successfully.
+    /// @retval error_code::would_block     The callback is queued or already running.
+    /// @par Propagated errors
+    /// Errors from stopping the backing timer are propagated unchanged.
     result cancel() noexcept
     {
         if (!valid_)
@@ -175,10 +181,12 @@ public:
     }
 
     /// @brief Wait until the item becomes idle.
-    /// @param timeout Maximum time to wait. A negative value waits forever.
-    /// @return `error_code::ok` once the item is idle, `error_code::timeout`
-    ///         if the deadline expires first, or any deferred submission error
-    ///         captured when the timer tried to queue the callback.
+    /// @param[in] timeout  Maximum time to wait. A negative value waits forever.
+    /// @retval error_code::ok             The item became idle.
+    /// @retval error_code::not_initialized The helper was not initialized successfully.
+    /// @retval error_code::timeout         The deadline expired before the item became idle.
+    /// @par Deferred errors
+    /// A submission error captured when the timer tried to queue the callback is returned unchanged.
     /// @details This operation polls at the platform tick interval so it
     ///          remains safe on backends where timer callbacks run in ISR
     ///          context and cannot signal a condition variable directly.

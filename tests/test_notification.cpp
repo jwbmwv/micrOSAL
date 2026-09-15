@@ -67,6 +67,26 @@ TEST_CASE("notification: no_overwrite reports would_block when pending")
     CHECK(note.peek(0U) == 0xAAU);
 }
 
+TEST_CASE("notification: invalid actions and indices leave slot state unchanged")
+{
+    osal::notification<1> notification;
+    REQUIRE(notification.valid());
+    constexpr auto invalid_action = static_cast<osal::notification_action>(255U);
+
+    CHECK(notification.notify(0x55U, invalid_action) == osal::error_code::invalid_argument);
+    CHECK_FALSE(notification.pending());
+    CHECK(notification.peek() == 0U);
+
+    REQUIRE(notification.notify(0xAAU).ok());
+    CHECK(notification.notify(0x55U, invalid_action) == osal::error_code::invalid_argument);
+    CHECK(notification.notify(0x55U, osal::notification_action::overwrite, 1U) == osal::error_code::invalid_argument);
+    CHECK(notification.pending());
+    CHECK(notification.peek() == 0xAAU);
+
+    REQUIRE(notification.notify(0x33U).ok());
+    CHECK(notification.peek() == 0x33U);
+}
+
 TEST_CASE("notification: set_bits and increment update the slot")
 {
     osal::notification<1> note;

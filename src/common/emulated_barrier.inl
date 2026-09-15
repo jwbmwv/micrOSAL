@@ -62,8 +62,9 @@ static void emu_barrier_release(emulated_barrier_obj* barrier) noexcept
 }  // namespace
 
 /// @brief Create an emulated barrier.
-/// @return `osal::ok()` on success, `invalid_argument` for null or zero-count,
-///         `out_of_resources` if the pool is exhausted.
+/// @retval osal::ok()                    On success.
+/// @retval error_code::invalid_argument  For null or zero-count.
+/// @retval error_code::out_of_resources  If the pool is exhausted.
 osal::result osal_barrier_create(osal::active_traits::barrier_handle_t* handle, unsigned count) noexcept
 {
     if (!handle || (count == 0U)) [[unlikely]]

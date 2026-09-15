@@ -19,6 +19,7 @@
 #pragma once
 
 #include "delayable_work.hpp"
+#include "detail/cpp_compat.hpp"
 #include "event_flags.hpp"
 #include "mailbox.hpp"
 #include "message_buffer.hpp"
@@ -32,6 +33,10 @@
 #include <cstddef>
 #include <cstdint>
 #include <span>
+
+#if defined(__cpp_lib_expected) && __cpp_lib_expected >= 202202L
+#include <expected>
+#endif
 
 #ifndef OSAL_OBJECT_WAIT_SET_MAX_ENTRIES
 #define OSAL_OBJECT_WAIT_SET_MAX_ENTRIES 16U
@@ -77,9 +82,11 @@ public:
     [[nodiscard]] static constexpr bool valid() noexcept { return true; }
 
     /// @brief Register a queue and mark it ready when non-empty.
-    /// @param q Queue to observe.
-    /// @param id Caller-defined identifier returned by wait().
-    /// @return `error_code::ok` on success or an initialization/capacity error.
+    /// @param[in] q   Queue to observe.
+    /// @param[in] id  Caller-defined identifier returned by wait().
+    /// @retval error_code::ok              The queue was registered.
+    /// @retval error_code::not_initialized The queue is not initialized.
+    /// @retval error_code::overflow        The wait-set has reached its entry limit.
     template<queue_element T, queue_depth_t N>
     result add(queue<T, N>& q, int id) noexcept
     {
@@ -91,9 +98,11 @@ public:
     }
 
     /// @brief Register a mailbox and mark it ready when non-empty.
-    /// @param mb Mailbox to observe.
-    /// @param id Caller-defined identifier returned by wait().
-    /// @return `error_code::ok` on success or an initialization/capacity error.
+    /// @param[in] mb  Mailbox to observe.
+    /// @param[in] id  Caller-defined identifier returned by wait().
+    /// @retval error_code::ok              The mailbox was registered.
+    /// @retval error_code::not_initialized The mailbox is not initialized.
+    /// @retval error_code::overflow        The wait-set has reached its entry limit.
     template<queue_element T>
     result add(mailbox<T>& mb, int id) noexcept
     {
@@ -105,12 +114,15 @@ public:
     }
 
     /// @brief Register an event-flags object and wait for any bit in @p bits.
-    /// @param flags Event flags to observe.
-    /// @param bits Bit mask that triggers readiness when any bit is set.
-    /// @param id Caller-defined identifier returned by wait().
-    /// @param clear_on_exit When `true`, the matched bits are cleared once the
+    /// @param[in] flags          Event flags to observe.
+    /// @param[in] bits           Bit mask that triggers readiness when any bit is set.
+    /// @param[in] id             Caller-defined identifier returned by wait().
+    /// @param[in] clear_on_exit  When `true`, the matched bits are cleared once the
     ///                      entry reports ready.
-    /// @return `error_code::ok` on success or an argument/init/capacity error.
+    /// @retval error_code::ok               The event-flags object was registered.
+    /// @retval error_code::not_initialized  The event-flags object is not initialized.
+    /// @retval error_code::invalid_argument @p bits is zero.
+    /// @retval error_code::overflow         The wait-set has reached its entry limit.
     result add_any(event_flags& flags, event_bits_t bits, int id, bool clear_on_exit = false) noexcept
     {
         if (!flags.valid())
@@ -125,12 +137,15 @@ public:
     }
 
     /// @brief Register an event-flags object and wait for all bits in @p bits.
-    /// @param flags Event flags to observe.
-    /// @param bits Bit mask that must be fully set for readiness.
-    /// @param id Caller-defined identifier returned by wait().
-    /// @param clear_on_exit When `true`, the matched bits are cleared once the
+    /// @param[in] flags          Event flags to observe.
+    /// @param[in] bits           Bit mask that must be fully set for readiness.
+    /// @param[in] id             Caller-defined identifier returned by wait().
+    /// @param[in] clear_on_exit  When `true`, the matched bits are cleared once the
     ///                      entry reports ready.
-    /// @return `error_code::ok` on success or an argument/init/capacity error.
+    /// @retval error_code::ok               The event-flags object was registered.
+    /// @retval error_code::not_initialized  The event-flags object is not initialized.
+    /// @retval error_code::invalid_argument @p bits is zero.
+    /// @retval error_code::overflow         The wait-set has reached its entry limit.
     result add_all(event_flags& flags, event_bits_t bits, int id, bool clear_on_exit = false) noexcept
     {
         if (!flags.valid())
@@ -145,10 +160,13 @@ public:
     }
 
     /// @brief Register a stream buffer and require at least @p min_bytes ready.
-    /// @param sb Stream buffer to observe.
-    /// @param min_bytes Minimum readable byte count that triggers readiness.
-    /// @param id Caller-defined identifier returned by wait().
-    /// @return `error_code::ok` on success or an argument/init/capacity error.
+    /// @param[in] sb         Stream buffer to observe.
+    /// @param[in] min_bytes  Minimum readable byte count that triggers readiness.
+    /// @param[in] id         Caller-defined identifier returned by wait().
+    /// @retval error_code::ok               The stream buffer was registered.
+    /// @retval error_code::not_initialized  The stream buffer is not initialized.
+    /// @retval error_code::invalid_argument @p min_bytes is zero.
+    /// @retval error_code::overflow         The wait-set has reached its entry limit.
     template<std::size_t N, std::size_t TriggerLevel>
     result add(stream_buffer<N, TriggerLevel>& sb, std::size_t min_bytes, int id) noexcept
     {
@@ -164,9 +182,11 @@ public:
     }
 
     /// @brief Register a message buffer and mark it ready when a message exists.
-    /// @param mb Message buffer to observe.
-    /// @param id Caller-defined identifier returned by wait().
-    /// @return `error_code::ok` on success or an initialization/capacity error.
+    /// @param[in] mb  Message buffer to observe.
+    /// @param[in] id  Caller-defined identifier returned by wait().
+    /// @retval error_code::ok              The message buffer was registered.
+    /// @retval error_code::not_initialized The message buffer is not initialized.
+    /// @retval error_code::overflow        The wait-set has reached its entry limit.
     template<std::size_t N>
     result add(message_buffer<N>& mb, int id) noexcept
     {
@@ -178,9 +198,11 @@ public:
     }
 
     /// @brief Register a work queue and mark it ready when items are pending.
-    /// @param wq Work queue to observe.
-    /// @param id Caller-defined identifier returned by wait().
-    /// @return `error_code::ok` on success or an initialization/capacity error.
+    /// @param[in] wq  Work queue to observe.
+    /// @param[in] id  Caller-defined identifier returned by wait().
+    /// @retval error_code::ok              The work queue was registered.
+    /// @retval error_code::not_initialized The work queue is not initialized.
+    /// @retval error_code::overflow        The wait-set has reached its entry limit.
     result add(work_queue& wq, int id) noexcept
     {
         if (!wq.valid())
@@ -191,9 +213,11 @@ public:
     }
 
     /// @brief Register a delayable work item and mark it ready while pending.
-    /// @param work Delayable work item to observe.
-    /// @param id Caller-defined identifier returned by wait().
-    /// @return `error_code::ok` on success or an initialization/capacity error.
+    /// @param[in] work  Delayable work item to observe.
+    /// @param[in] id    Caller-defined identifier returned by wait().
+    /// @retval error_code::ok              The delayable work item was registered.
+    /// @retval error_code::not_initialized The delayable work item is not initialized.
+    /// @retval error_code::overflow        The wait-set has reached its entry limit.
     result add(delayable_work& work, int id) noexcept
     {
         if (!work.valid())
@@ -204,12 +228,14 @@ public:
     }
 
     /// @brief Register one notification slot and mark it ready when pending.
-    /// @param note Notification object to observe.
-    /// @param index Slot index inside @p note.
-    /// @param id Caller-defined identifier returned by wait().
-    /// @param clear_on_exit When `true`, the slot is reset after readiness is
+    /// @param[in] note           Notification object to observe.
+    /// @param[in] index          Slot index inside @p note.
+    /// @param[in] id             Caller-defined identifier returned by wait().
+    /// @param[in] clear_on_exit  When `true`, the slot is reset after readiness is
     ///                      reported.
-    /// @return `error_code::ok` on success or an initialization/capacity error.
+    /// @retval error_code::ok              The notification slot was registered.
+    /// @retval error_code::not_initialized The notification object is not initialized.
+    /// @retval error_code::overflow        The wait-set has reached its entry limit.
     template<std::size_t Slots>
     result add(notification<Slots>& note, std::size_t index, int id, bool clear_on_exit = false) noexcept
     {
@@ -222,9 +248,9 @@ public:
     }
 
     /// @brief Remove one previously registered identifier.
-    /// @param id Identifier originally passed to add().
-    /// @return `error_code::ok` when removed or `error_code::invalid_argument`
-    ///         when the identifier is not currently registered.
+    /// @param[in] id  Identifier originally passed to add().
+    /// @retval error_code::ok               The identifier was removed.
+    /// @retval error_code::invalid_argument The identifier is not currently registered.
     result remove(int id) noexcept
     {
         for (auto& entry : entries_)
@@ -239,15 +265,14 @@ public:
     }
 
     /// @brief Wait until one or more registered objects become ready.
-    /// @param ready_ids Output buffer that receives ready identifiers.
-    /// @param max_ready Capacity of @p ready_ids.
-    /// @param n_ready Number of identifiers written to @p ready_ids.
-    /// @param timeout Maximum time to wait. A negative value waits forever and
+    /// @param[out] ready_ids  Output buffer that receives ready identifiers.
+    /// @param[in] max_ready   Capacity of @p ready_ids.
+    /// @param[out] n_ready    Number of identifiers written to @p ready_ids.
+    /// @param[in] timeout     Maximum time to wait. A negative value waits forever and
     ///                zero performs a poll-only check.
-    /// @return `error_code::ok` when at least one entry is ready,
-    ///         `error_code::timeout` when no entry becomes ready before the
-    ///         deadline, or `error_code::invalid_argument` for an invalid
-    ///         output buffer.
+    /// @retval error_code::ok               At least one entry is ready.
+    /// @retval error_code::timeout          No entry became ready before the deadline.
+    /// @retval error_code::invalid_argument @p ready_ids is null with a nonzero @p max_ready.
     result wait(int* ready_ids, std::size_t max_ready, std::size_t& n_ready,
                 milliseconds timeout = milliseconds{-1}) noexcept
     {
@@ -308,6 +333,28 @@ public:
         return wait(ready_ids.data(), ready_ids.size(), n_ready, timeout);
     }
 
+#if defined(__cpp_lib_expected) && __cpp_lib_expected >= 202202L
+    /// @brief Value-returning wait overload using std::expected and bounded_vector (C++23/26).
+    /// @tparam MaxReady Positive output capacity; excess ready identifiers are truncated as in wait().
+    /// @details Uses capacity-sized result storage directly, without a separate scratch array.
+    template<std::size_t MaxReady = OSAL_OBJECT_WAIT_SET_MAX_ENTRIES>
+        requires(MaxReady > 0U)
+    [[nodiscard]] std::expected<detail::bounded_vector<int, MaxReady>, error_code>
+    wait_expected(milliseconds timeout = milliseconds{-1}) noexcept
+    {
+        std::expected<detail::bounded_vector<int, MaxReady>, error_code> ready{std::in_place};
+        (void)ready->resize(MaxReady);
+        std::size_t  n_ready = 0U;
+        const result status  = wait(ready->data(), MaxReady, n_ready, timeout);
+        if (!status.ok())
+        {
+            return std::unexpected(status.code());
+        }
+        (void)ready->resize(n_ready);
+        return ready;
+    }
+#endif
+
 private:
     enum class wait_kind : std::uint8_t
     {
@@ -367,17 +414,20 @@ private:
     template<queue_element T, queue_depth_t N>
     static bool queue_probe(entry_state& entry) noexcept
     {
+        OSAL_ASSUME(entry.object != nullptr);
         return !static_cast<queue<T, N>*>(entry.object)->empty();
     }
 
     template<queue_element T>
     static bool mailbox_probe(entry_state& entry) noexcept
     {
+        OSAL_ASSUME(entry.object != nullptr);
         return !static_cast<mailbox<T>*>(entry.object)->empty();
     }
 
     static bool event_probe(entry_state& entry) noexcept
     {
+        OSAL_ASSUME(entry.object != nullptr);
         auto* const flags = static_cast<event_flags*>(entry.object);
         const auto  bits  = flags->get();
         const bool  ready =
@@ -393,28 +443,33 @@ private:
     template<std::size_t N, std::size_t TriggerLevel>
     static bool stream_probe(entry_state& entry) noexcept
     {
+        OSAL_ASSUME(entry.object != nullptr);
         return static_cast<stream_buffer<N, TriggerLevel>*>(entry.object)->available() >= entry.arg;
     }
 
     template<std::size_t N>
     static bool message_probe(entry_state& entry) noexcept
     {
+        OSAL_ASSUME(entry.object != nullptr);
         return !static_cast<message_buffer<N>*>(entry.object)->empty();
     }
 
     static bool work_queue_probe(entry_state& entry) noexcept
     {
+        OSAL_ASSUME(entry.object != nullptr);
         return static_cast<work_queue*>(entry.object)->pending() > 0U;
     }
 
     static bool delayable_work_probe(entry_state& entry) noexcept
     {
+        OSAL_ASSUME(entry.object != nullptr);
         return static_cast<delayable_work*>(entry.object)->pending();
     }
 
     template<std::size_t Slots>
     static bool notification_probe(entry_state& entry) noexcept
     {
+        OSAL_ASSUME(entry.object != nullptr);
         auto* const note  = static_cast<notification<Slots>*>(entry.object);
         const bool  ready = note->pending(entry.arg);
         if (ready && entry.clear_on_exit)

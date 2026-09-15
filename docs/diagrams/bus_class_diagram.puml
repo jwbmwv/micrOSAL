@@ -19,12 +19,19 @@ namespace osal {
         -valid_ : bool
     }
 
-    class "osal_bus<T,Capacity,\nbus_backend_zephyr>" as BusZephyr {
+    class "osal_bus<T,Capacity,\nbus_backend_zephyr>\n[real Zephyr]" as BusZephyr {
+        -queue_ : k_msgq
+        -storage_ : uint8_t[Capacity*sizeof(T)]
+        -valid_ : bool
+    }
+
+    class "osal_bus<T,Capacity,\nbus_backend_zephyr>\n[hosted fallback]" as BusZephyrHosted {
         -impl_ : osal_bus<T,Capacity,bus_backend_generic>
     }
 
     Bus <|.. BusGeneric
     Bus <|.. BusZephyr
+    Bus <|.. BusZephyrHosted
 
     class "osal_signal<T,N,M,BackendTag>" as Signal << (T,#ADD1B2) template >> {
         +subscribe(out_id : subscriber_id&) : bool
@@ -41,12 +48,31 @@ namespace osal {
         -subscriber_count_ : size_t
     }
 
-    class "osal_signal<T,N,M,\nbus_backend_zephyr>" as SignalZephyr {
+    class "osal_signal<T,N,M,\nbus_backend_zephyr>\n[real Zephyr]" as SignalZephyr {
+        -slots_ : subscriber_slot[N]
+        -mutex_ : osal::mutex
+        -observers_ : observer_fn[N]
+        -observer_count_ : size_t
+        -subscriber_count_ : size_t
+        +native_subscribe_observer(fn) : bool
+        +native_unsubscribe_observer(fn) : bool
+        +native_publish_observers(msg) : bool
+        +native_observer_count() : size_t
+    }
+
+    class "osal_signal<T,N,M,\nbus_backend_zephyr>\n[hosted fallback]" as SignalZephyrHosted {
     }
 
     class subscriber_slot {
+        +generation_ : subscriber_id
         +in_use_ : bool
         +queue_ : osal_bus<T,M,bus_backend_generic>
+    }
+
+    class "subscriber_slot (Zephyr)" as ZephyrSubscriberSlot {
+        +generation_ : subscriber_id
+        +in_use_ : bool
+        +queue_ : osal_bus<T,M,bus_backend_zephyr>
     }
 
     class "osal_signal_premium<T,N,M,BackendTag>" as SignalPremium {
@@ -70,17 +96,28 @@ namespace osal {
         Signal <|.. SignalGeneric
         Signal <|.. SignalZephyr
         SignalPremium --|> Signal
-        SignalZephyr --|> SignalGeneric
+        SignalZephyrHosted --|> SignalGeneric
         SignalGeneric *-- subscriber_slot
         subscriber_slot *-- BusGeneric
-        BusZephyr *-- BusGeneric : impl_
+        SignalZephyr *-- ZephyrSubscriberSlot
+        ZephyrSubscriberSlot *-- BusZephyr
+        BusZephyrHosted *-- BusGeneric : impl_
+        SignalPremium ..> SignalZephyr : backend observer hooks
         SignalPremium ..> Caps : constexpr query
 
         note right of BusZephyr
-            Current Zephyr specialisations
-            delegate to the generic runtime.
-            A future native Zbus path can
-            replace this wrapper.
+            Real Zephyr builds use k_msgq directly.
+            Hosted tag instantiations use generic storage.
+            These are alternative compile-time definitions,
+            not runtime backend selection.
+            No Zbus dependency.
+        end note
+
+        note right of SignalZephyr
+            Observer snapshots use checked bounded storage.
+            Callbacks run outside the registration mutex.
+            native_pubsub and native_observers are true;
+            native_routing and zero_copy remain false.
         end note
 }
 

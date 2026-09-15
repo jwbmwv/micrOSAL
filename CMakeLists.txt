@@ -21,9 +21,13 @@ cmake_minimum_required(VERSION 3.16)
 # ---------------------------------------------------------------------------
 # Language standard
 # ---------------------------------------------------------------------------
-# Set before project()/target creation so Zephyr and standalone builds both
-# inherit the same C++20 baseline.
-set(CMAKE_CXX_STANDARD          20)
+# Set the default before target creation while preserving an explicit newer standard.
+if(NOT DEFINED CMAKE_CXX_STANDARD)
+    set(CMAKE_CXX_STANDARD 20)
+endif()
+if(CMAKE_CXX_STANDARD LESS 20)
+    message(FATAL_ERROR "MicrOSAL requires CMAKE_CXX_STANDARD=20 or newer.")
+endif()
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS        OFF)
 

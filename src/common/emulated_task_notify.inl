@@ -19,7 +19,7 @@
 // ---------------------------------------------------------------------------
 
 /// @brief Send a direct-to-task notification — not supported on this backend.
-/// @return @c error_code::not_supported always.
+/// @retval error_code::not_supported  Always.
 osal::result osal_task_notify(osal::active_traits::thread_handle_t* handle, std::uint32_t value) noexcept
 {
     (void)handle;
@@ -28,7 +28,7 @@ osal::result osal_task_notify(osal::active_traits::thread_handle_t* handle, std:
 }
 
 /// @brief Send a direct-to-task notification from ISR — not supported on this backend.
-/// @return @c error_code::not_supported always.
+/// @retval error_code::not_supported  Always.
 osal::result osal_task_notify_isr(osal::active_traits::thread_handle_t* handle, std::uint32_t value) noexcept
 {
     (void)handle;
@@ -37,7 +37,7 @@ osal::result osal_task_notify_isr(osal::active_traits::thread_handle_t* handle, 
 }
 
 /// @brief Wait for a task notification — not supported on this backend.
-/// @return @c error_code::not_supported always.
+/// @retval error_code::not_supported  Always.
 osal::result osal_task_notify_wait(std::uint32_t clear_on_entry, std::uint32_t clear_on_exit, std::uint32_t* value_out,
                                    osal::tick_t timeout_ticks) noexcept
 {

@@ -19,7 +19,15 @@
 #error "micrOSAL requires at least C++20. Compile with -std=c++20 (or newer)."
 #endif
 
+#include "detail/cpp_compat.hpp"
 #include <cstdint>
+#include <functional>
+#include <type_traits>
+#include <utility>
+
+#if defined(__cpp_lib_expected) && __cpp_lib_expected >= 202202L
+#include <expected>
+#endif
 
 namespace osal
 {
@@ -76,7 +84,7 @@ struct result
     constexpr result() noexcept : code_(error_code::ok) {}
 
     /// @brief Constructs from an error code.
-    /// @param c The error code.
+    /// @param[in] c  The error code.
     constexpr result(error_code c) noexcept : code_(c) {}  // NOLINT(google-explicit-constructor)
 
     /// @brief Returns true if the operation succeeded.
@@ -98,6 +106,52 @@ struct result
     constexpr bool operator==(error_code c) const noexcept { return code_ == c; }
     /// @brief Comparison with raw error_code.
     constexpr bool operator!=(error_code c) const noexcept { return code_ != c; }
+
+    /// @brief Runs a result-returning callback on success; otherwise preserves the error.
+    /// @details Available in C++20. Use to_expected() for value-returning monadic chains.
+    template<typename Function>
+        requires std::is_same_v<std::invoke_result_t<Function>, result>
+    constexpr result and_then(Function&& function) const noexcept(std::is_nothrow_invocable_v<Function>)
+    {
+        if (ok())
+        {
+            return std::invoke(std::forward<Function>(function));
+        }
+        return *this;
+    }
+
+    /// @brief Status-only synonym for and_then(); the callback must return result.
+    /// @details This does not transform a value. Use to_expected().transform() for that operation.
+    template<typename Function>
+        requires std::is_same_v<std::invoke_result_t<Function>, result>
+    constexpr result transform(Function&& function) const noexcept(std::is_nothrow_invocable_v<Function>)
+    {
+        return and_then(std::forward<Function>(function));
+    }
+
+    /// @brief Runs a result-returning error handler on failure; otherwise preserves success.
+    template<typename Function>
+        requires std::is_same_v<std::invoke_result_t<Function, error_code>, result>
+    constexpr result or_else(Function&& function) const noexcept(std::is_nothrow_invocable_v<Function, error_code>)
+    {
+        if (!ok())
+        {
+            return std::invoke(std::forward<Function>(function), code());
+        }
+        return *this;
+    }
+
+#if defined(__cpp_lib_expected) && __cpp_lib_expected >= 202202L
+    /// @brief Converts result to std::expected<void, error_code> (C++23).
+    [[nodiscard]] constexpr std::expected<void, error_code> to_expected() const noexcept
+    {
+        if (ok())
+        {
+            return {};
+        }
+        return std::unexpected(code_);
+    }
+#endif
 
 private:
     error_code code_;

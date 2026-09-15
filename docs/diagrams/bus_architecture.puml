@@ -17,20 +17,20 @@ package "Bus / Signal API" {
 package "Implemented Runtime" {
     component "bus_backend_generic\ncanonical LCD runtime" as GEN
     component "delegated bus_backend_* tags\n16 tags -> generic" as DEL
-    component "bus_backend_zephyr\ncurrent generic fallback" as ZEP
+    component "bus_backend_zephyr\nhosted-only fallback" as ZEP_HOST
     component "bus_backend_mock\ntest-only premium tag" as MOCK
 }
 
 package "Premium Helpers" {
-    component "observer table" as OBS
+    component "portable observer table" as OBS
     component "publish_zero_copy()\ncopy fallback today" as ZCOPY
     component "route_to()\nstub today" as ROUTE
 }
 
-package "Planned Zephyr Native Path" {
-    component "future native Zephyr path\n(not implemented)" as ZEP_NATIVE
-    component "zbus_chan_pub()" as ZPUB
-    component "zbus_sub_wait()" as ZWAIT
+package "Native Zephyr Runtime (OSAL_BACKEND_ZEPHYR)" {
+    component "bus_backend_zephyr\ndedicated channel / signal runtime" as ZEP
+    component "k_msgq\nchannel and per-subscriber queues" as ZQUEUE
+    component "backend-owned observer table\nchecked bounded callback snapshot" as ZOBS
 }
 
 package "MicrOSAL Primitives" {
@@ -46,18 +46,28 @@ Observer --> PREMIUM : subscribe_observer()
 PREMIUM --> SIGNAL : extends API
 SIGNAL --> GEN : canonical runtime
 SIGNAL --> DEL : delegated tags
-SIGNAL --> ZEP : Zephyr default tag
-BUS --> QABI : transport path
+SIGNAL --> ZEP_HOST : hosted Zephyr tag
+SIGNAL --> ZEP : real Zephyr build
+BUS --> GEN : generic / delegated / hosted
+BUS --> ZEP : real Zephyr build
 GEN --> QABI : queue path
 GEN --> MUTEX : slot guard
 DEL --> GEN : delegates
-ZEP --> GEN : delegates today
+ZEP_HOST --> GEN : non-Zephyr builds only
 MOCK --> GEN : reuses runtime
-PREMIUM --> OBS : local callbacks
+PREMIUM --> OBS : portable callbacks
+PREMIUM --> ZEP : native observer hooks
+PREMIUM --> MOCK : mock observer hooks
 PREMIUM --> ZCOPY
 PREMIUM --> ROUTE
-ZEP ..> ZEP_NATIVE : future replacement
-ZEP_NATIVE --> ZPUB
-ZEP_NATIVE --> ZWAIT
+ZEP --> ZQUEUE : direct k_msgq calls
+ZEP --> ZOBS : register / snapshot / dispatch
+ZEP --> MUTEX : slot / observer guard
+
+note bottom of ZOBS
+    Snapshot under the mutex;
+    invoke callbacks after unlocking.
+    Native routing and zero-copy remain unsupported.
+end note
 
 @enduml

@@ -25,6 +25,7 @@ INPUT_DIR="$ROOT_DIR/docs/diagrams"
 OUTPUT_DIR="$ROOT_DIR/docs/diagrams/print"
 PRINT_PROFILE="$ROOT_DIR/docs/diagrams/_render_profile_print.puml"
 SVG_TO_PDF="$ROOT_DIR/scripts/svg_to_pdf.py"
+export PLANTUML_LIMIT_SIZE="${PLANTUML_LIMIT_SIZE:-16384}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in

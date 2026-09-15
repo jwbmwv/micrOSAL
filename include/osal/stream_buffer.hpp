@@ -70,20 +70,20 @@
 extern "C"
 {
     /// @brief Initialise a stream buffer.
-    /// @param handle        Output handle.
-    /// @param buffer        Caller-supplied backing storage (must be capacity+1 bytes).
-    /// @param capacity      Usable byte capacity (N).
-    /// @param trigger_level Receive unblock threshold (1 = wake on any byte).
+    /// @param[out] handle        Output handle.
+    /// @param[in] buffer         Caller-supplied backing storage (must be capacity+1 bytes).
+    /// @param[in] capacity       Usable byte capacity (N).
+    /// @param[in] trigger_level  Receive unblock threshold (1 = wake on any byte).
     osal::result osal_stream_buffer_create(osal::active_traits::stream_buffer_handle_t* handle, void* buffer,
                                            std::size_t capacity, std::size_t trigger_level) noexcept;
 
     osal::result osal_stream_buffer_destroy(osal::active_traits::stream_buffer_handle_t* handle) noexcept;
 
     /// @brief Write bytes to the stream buffer from task context.
-    /// @param handle        Stream-buffer handle.
-    /// @param data          Source data.
-    /// @param len           Number of bytes to write.  Must be ≤ capacity.
-    /// @param timeout_ticks WAIT_FOREVER / NO_WAIT / tick count.
+    /// @param[in] handle         Stream-buffer handle.
+    /// @param[in] data           Source data.
+    /// @param[in] len            Number of bytes to write.  Must be ≤ capacity.
+    /// @param[in] timeout_ticks  WAIT_FOREVER / NO_WAIT / tick count.
     osal::result osal_stream_buffer_send(osal::active_traits::stream_buffer_handle_t* handle, const void* data,
                                          std::size_t len, osal::tick_t timeout_ticks) noexcept;
 
@@ -173,10 +173,10 @@ public:
     // ---- send (producer API) -----------------------------------------------
 
     /// @brief Blocks until @p len bytes of space are available, then writes.
-    /// @param data  Source buffer.
-    /// @param len   Bytes to write.  Must be ≤ N.
-    /// @return result::ok() on success; error_code::timeout is never returned
-    ///         from this overload (blocks indefinitely).
+    /// @param[in] data  Source buffer.
+    /// @param[in] len   Bytes to write.  Must be ≤ N.
+    /// @retval osal::ok() The bytes were written successfully.
+    /// @note This overload blocks indefinitely and does not return error_code::timeout.
     /// @complexity O(len)
     /// @blocking   Until @p len bytes of space are available.
     [[nodiscard]] result send(const void* data, std::size_t len) noexcept
@@ -200,9 +200,9 @@ public:
     bool try_send(std::span<const std::byte> data) noexcept { return try_send(data.data(), data.size()); }
 
     /// @brief Writes with a timeout.
-    /// @param data Source byte sequence.
-    /// @param len Number of bytes to write.
-    /// @param timeout Maximum time to wait for space.
+    /// @param[in] data     Source byte sequence.
+    /// @param[in] len      Number of bytes to write.
+    /// @param[in] timeout  Maximum time to wait for space.
     /// @return true if all @p len bytes were written within the timeout.
     /// @complexity O(len)
     /// @blocking   Up to @p timeout.
@@ -241,8 +241,8 @@ public:
 
     /// @brief Blocks until TriggerLevel bytes are available, then reads up to
     ///        @p max_len bytes.
-    /// @param[out] buf      Destination buffer.
-    /// @param      max_len  Maximum bytes to read.
+    /// @param[out] buf     Destination buffer.
+    /// @param[in] max_len  Maximum bytes to read.
     /// @return  Number of bytes placed in @p buf (always ≥ TriggerLevel unless
     ///          the buffer is reset concurrently).
     /// @complexity O(n read)
