@@ -18,7 +18,7 @@
 #include <thread>
 
 // Declared in c_api_c_check.c (linked as a C object).
-extern "C" int osal_c_smoke_test(void);
+extern "C" int           osal_c_smoke_test(void);
 extern "C" osal_result_t osal_c_test_invalid_notification_action(osal_notification_handle* handle);
 
 alignas(16) static std::uint8_t c_api_delayable_wq_stack[65536];

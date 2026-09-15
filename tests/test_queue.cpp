@@ -329,6 +329,7 @@ TEST_CASE("queue: snapshots are safe during concurrent mutation")
         CHECK(q.count() <= q.capacity);
         CHECK(q.free_slots() <= q.capacity);
         (void)q.try_receive(value);
+        osal::thread::yield();
     }
 
     REQUIRE(t.join().ok());
