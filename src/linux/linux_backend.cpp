@@ -1142,7 +1142,7 @@ extern "C"
         ctx->release_from_watcher.store(false, std::memory_order_relaxed);
         ctx->watcher_started = false;
 
-        ctx->timerfd = timerfd_create(CLOCK_MONOTONIC, TFD_CLOEXEC);
+        ctx->timerfd = timerfd_create(CLOCK_MONOTONIC, TFD_CLOEXEC | TFD_NONBLOCK);
         if (ctx->timerfd < 0)
         {
             delete ctx;

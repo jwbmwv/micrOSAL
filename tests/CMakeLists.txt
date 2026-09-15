@@ -64,6 +64,10 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Cla
         "LINKER:--wrap=osal_queue_create"
         "LINKER:--wrap=osal_queue_receive"
     )
+    if(OSAL_BACKEND STREQUAL "LINUX")
+        target_compile_definitions(test_timer PRIVATE OSAL_TEST_TIMER_FAULT_INJECTION)
+        target_link_options(test_timer PRIVATE "LINKER:--wrap=poll")
+    endif()
 endif()
 
 # ---------------------------------------------------------------------------
