@@ -11,6 +11,7 @@
 /// @ingroup osal_core
 #pragma once
 
+#include "detail/cpp_compat.hpp"
 #include <cstdint>
 #include <cstddef>
 #include <limits>

@@ -99,7 +99,7 @@ public:
     // ---- observer management -----------------------------------------------
 
     /// @brief Registers a callback observer.
-    /// @param fn  Function pointer to invoke on each publish.
+    /// @param[in] fn  Function pointer to invoke on each publish.
     /// @return true if the observer was registered; false when the observer
     ///         table is full or @p fn is nullptr.
     [[nodiscard]] bool subscribe_observer(observer_fn fn) noexcept
@@ -119,7 +119,7 @@ public:
     }
 
     /// @brief Removes a previously registered callback observer.
-    /// @param fn  The function pointer to remove.
+    /// @param[in] fn  The function pointer to remove.
     /// @return true if found and removed; false if not registered.
     [[nodiscard]] bool unsubscribe_observer(observer_fn fn) noexcept
     {
@@ -158,7 +158,7 @@ public:
     // ---- enhanced publish --------------------------------------------------
 
     /// @brief Publishes a message to queue-subscribers AND observer callbacks.
-    /// @param msg  Message to broadcast.
+    /// @param[in] msg  Message to broadcast.
     /// @return true if at least one queue-subscriber or observer received it.
     [[nodiscard]] bool publish(const T& msg) noexcept
     {
@@ -175,7 +175,7 @@ public:
     }
 
     /// @brief Zero-copy publish — avoids an extra copy on capable backends.
-    /// @param ptr  Pointer to the message buffer.  Must not be nullptr.
+    /// @param[in] ptr  Pointer to the message buffer.  Must not be nullptr.
     ///             On non-zero-copy backends the message is copied from @p ptr.
     /// @return true on success.
     [[nodiscard]] bool publish_zero_copy(T* ptr) noexcept
@@ -196,8 +196,8 @@ public:
     /// @details Full implementation requires a topic registry.
     ///          This method is a stub — it always returns false until a
     ///          registry is introduced in a future release.
-    /// @param dest  Destination topic ID (see signal_id).
-    /// @param msg   Message to route.
+    /// @param[in] dest  Destination topic ID (see signal_id).
+    /// @param[in] msg   Message to route.
     /// @return false (stub).
     /// @todo Implement topic registry and cross-topic routing.
     [[nodiscard]] bool route_to([[maybe_unused]] signal_id dest, [[maybe_unused]] const T& msg) noexcept

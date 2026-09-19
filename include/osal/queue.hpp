@@ -121,22 +121,22 @@ public:
     // ---- send --------------------------------------------------------------
 
     /// @brief Sends an item, blocking indefinitely if the queue is full.
-    /// @param item  Item to enqueue (copied by value).
-    /// @return result::ok() on success.
+    /// @param[in] item  Item to enqueue (copied by value).
+    /// @retval osal::ok() The item was enqueued successfully.
     /// @complexity O(1)
     /// @blocking   Potentially blocking.
     [[nodiscard]] result send(const T& item) noexcept { return osal_queue_send(&handle_, &item, WAIT_FOREVER); }
 
     /// @brief Attempts to send without blocking.
-    /// @param item  Item to enqueue.
+    /// @param[in] item  Item to enqueue.
     /// @return true if enqueued; false if the queue was full.
     /// @complexity O(1)
     /// @blocking   Never.
     [[nodiscard]] bool try_send(const T& item) noexcept { return osal_queue_send(&handle_, &item, NO_WAIT).ok(); }
 
     /// @brief Sends with a timeout.
-    /// @param item    Item to enqueue.
-    /// @param timeout Maximum wait time.
+    /// @param[in] item     Item to enqueue.
+    /// @param[in] timeout  Maximum wait time.
     /// @return true if enqueued within the timeout.
     /// @complexity O(1)
     /// @blocking   Up to timeout.
@@ -154,7 +154,7 @@ public:
     }
 
     /// @brief Sends from ISR context.
-    /// @param item  Item to enqueue.
+    /// @param[in] item  Item to enqueue.
     /// @return true on success.
     /// @warning Only safe when capabilities<active_backend>::has_isr_queue.
     /// @complexity O(1)
@@ -165,7 +165,7 @@ public:
 
     /// @brief Receives an item, blocking indefinitely if the queue is empty.
     /// @param[out] item  Destination for received item.
-    /// @return result::ok() on success.
+    /// @retval osal::ok() An item was received successfully.
     /// @complexity O(1)
     /// @blocking   Potentially blocking.
     [[nodiscard]] result receive(T& item) noexcept { return osal_queue_receive(&handle_, &item, WAIT_FOREVER); }
@@ -177,7 +177,7 @@ public:
 
     /// @brief Receives with a timeout.
     /// @param[out] item    Destination.
-    /// @param      timeout Maximum wait time.
+    /// @param[in] timeout  Maximum wait time.
     bool receive_for(T& item, milliseconds timeout) noexcept
     {
         if constexpr (timed_queue_backend<active_backend>)
@@ -195,6 +195,44 @@ public:
     /// @param[out] item  Destination.
     /// @return true on success.
     [[nodiscard]] bool receive_isr(T& item) noexcept { return osal_queue_receive_isr(&handle_, &item).ok(); }
+
+#if defined(__cpp_lib_expected) && __cpp_lib_expected >= 202202L
+    /// @brief Receives an item returning std::expected<T, error_code> (C++23).
+    /// @details Requires non-throwing default and move construction of T; preserves backend errors.
+    [[nodiscard]] std::expected<T, error_code> receive_expected() noexcept
+        requires(std::is_nothrow_default_constructible_v<T> && std::is_nothrow_move_constructible_v<T>)
+    {
+        if (!valid())
+        {
+            return std::unexpected(error_code::not_initialized);
+        }
+        T            item{};
+        const result status = receive(item);
+        if (status.ok())
+        {
+            return item;
+        }
+        return std::unexpected(status.code());
+    }
+
+    /// @brief Non-blocking receive returning std::expected<T, error_code> (C++23).
+    /// @details Requires non-throwing default and move construction of T; preserves backend errors.
+    [[nodiscard]] std::expected<T, error_code> try_receive_expected() noexcept
+        requires(std::is_nothrow_default_constructible_v<T> && std::is_nothrow_move_constructible_v<T>)
+    {
+        if (!valid())
+        {
+            return std::unexpected(error_code::not_initialized);
+        }
+        T            item{};
+        const result status = osal_queue_receive(&handle_, &item, NO_WAIT);
+        if (status.ok())
+        {
+            return item;
+        }
+        return std::unexpected(status.code());
+    }
+#endif
 
     /// @brief Peeks at the front item without removing it.
     /// @param[out] item  Destination.

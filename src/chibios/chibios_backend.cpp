@@ -238,13 +238,14 @@ extern "C"
     // ---------------------------------------------------------------------------
 
     /// @brief Create a ChibiOS static thread via chThdCreateStatic().
-    /// @param handle      Output handle populated with the ch_thread_slot pointer.
-    /// @param entry       Thread entry function.
-    /// @param arg         Opaque argument forwarded to @p entry.
-    /// @param priority    OSAL priority [0=lowest, 255=highest]; mapped to ChibiOS tprio_t.
-    /// @param stack       Pointer to a static stack buffer supplied by the caller.
-    /// @param stack_bytes Size of @p stack in bytes.
-    /// @return osal::ok() on success; osal::error_code::out_of_resources on failure.
+    /// @param[out] handle      Output handle populated with the ch_thread_slot pointer.
+    /// @param[in] entry        Thread entry function.
+    /// @param[in] arg          Opaque argument forwarded to @p entry.
+    /// @param[in] priority     OSAL priority [0=lowest, 255=highest]; mapped to ChibiOS tprio_t.
+    /// @param[in] stack        Pointer to a static stack buffer supplied by the caller.
+    /// @param[in] stack_bytes  Size of @p stack in bytes.
+    /// @retval osal::ok()                          On success.
+    /// @retval osal::error_code::out_of_resources  On failure.
     osal::result osal_thread_create(osal::active_traits::thread_handle_t* handle, void (*entry)(void*), void* arg,
                                     osal::priority_t priority, osal::affinity_t /*affinity*/, void* stack,
                                     osal::stack_size_t stack_bytes, const char* name) noexcept
@@ -274,8 +275,9 @@ extern "C"
     }
 
     /// @brief Wait for a thread to exit via chThdWait() (or chThdTerminate() if waitexit disabled).
-    /// @param handle Thread handle to join.
-    /// @return osal::ok() on success; osal::error_code::not_initialized if the handle is null.
+    /// @param[in,out] handle  Thread handle to join.
+    /// @retval osal::ok()                         On success.
+    /// @retval osal::error_code::not_initialized  If the handle is null.
     osal::result osal_thread_join(osal::active_traits::thread_handle_t* handle, osal::tick_t /*timeout*/) noexcept
     {
         if (handle == nullptr || handle->native == nullptr)
@@ -294,8 +296,9 @@ extern "C"
     }
 
     /// @brief Detach a thread, releasing its pool slot without waiting for exit.
-    /// @param handle Thread handle to detach.
-    /// @return osal::ok() on success; osal::error_code::not_initialized if the handle is null.
+    /// @param[in,out] handle  Thread handle to detach.
+    /// @retval osal::ok()                         On success.
+    /// @retval osal::error_code::not_initialized  If the handle is null.
     osal::result osal_thread_detach(osal::active_traits::thread_handle_t* handle) noexcept
     {
         if (handle == nullptr || handle->native == nullptr)
@@ -308,9 +311,10 @@ extern "C"
     }
 
     /// @brief Change the calling thread's priority via chThdSetPriority().
-    /// @param handle   Thread handle (used to verify validity; ChibiOS sets current thread's priority).
-    /// @param priority New OSAL priority mapped to tprio_t.
-    /// @return osal::ok() on success; osal::error_code::not_initialized if the handle is null.
+    /// @param[in] handle    Thread handle (used to verify validity; ChibiOS sets current thread's priority).
+    /// @param[in] priority  New OSAL priority mapped to tprio_t.
+    /// @retval osal::ok()                         On success.
+    /// @retval osal::error_code::not_initialized  If the handle is null.
     osal::result osal_thread_set_priority(osal::active_traits::thread_handle_t* handle,
                                           osal::priority_t                      priority) noexcept
     {
@@ -325,7 +329,7 @@ extern "C"
     }
 
     /// @brief Set thread CPU affinity (not supported on ChibiOS).
-    /// @return osal::error_code::not_supported always.
+    /// @retval osal::error_code::not_supported  Always.
     osal::result osal_thread_set_affinity(osal::active_traits::thread_handle_t* /*handle*/,
                                           osal::affinity_t /*affinity*/) noexcept
     {
@@ -333,7 +337,7 @@ extern "C"
     }
 
     /// @brief Suspend a thread (not supported through this OSAL on ChibiOS).
-    /// @return osal::error_code::not_supported always.
+    /// @retval osal::error_code::not_supported  Always.
     osal::result osal_thread_suspend(osal::active_traits::thread_handle_t* handle) noexcept
     {
         (void)handle;
@@ -341,7 +345,7 @@ extern "C"
     }
 
     /// @brief Resume a suspended thread (not supported through this OSAL on ChibiOS).
-    /// @return osal::error_code::not_supported always.
+    /// @retval osal::error_code::not_supported  Always.
     osal::result osal_thread_resume(osal::active_traits::thread_handle_t* handle) noexcept
     {
         (void)handle;
@@ -355,7 +359,7 @@ extern "C"
     }
 
     /// @brief Sleep for at least @p ms milliseconds via chThdSleepMilliseconds().
-    /// @param ms Delay in milliseconds.
+    /// @param[in] ms  Delay in milliseconds.
     void osal_thread_sleep_ms(std::uint32_t ms) noexcept
     {
         chThdSleepMilliseconds(ms);
@@ -366,8 +370,9 @@ extern "C"
     // ---------------------------------------------------------------------------
 
     /// @brief Acquire a pool slot and initialise a ChibiOS mutex via chMtxObjectInit().
-    /// @param handle Output handle pointing to the initialised mutex_t.
-    /// @return osal::ok() on success; osal::error_code::out_of_resources if the pool is full.
+    /// @param[out] handle  Output handle pointing to the initialised mutex_t.
+    /// @retval osal::ok()                          On success.
+    /// @retval osal::error_code::out_of_resources  If the pool is full.
     osal::result osal_mutex_create(osal::active_traits::mutex_handle_t* handle, bool /*recursive*/) noexcept
     {
         mutex_t* m = pool_simple_acquire(ch_mutexes, ch_mutex_used);
@@ -382,8 +387,8 @@ extern "C"
 
     /// @brief Release a mutex slot back to the pool.
     /// @details ChibiOS has no mutex destructor; the slot is simply marked unused.
-    /// @param handle Mutex handle; no-op if null or already destroyed.
-    /// @return osal::ok() always.
+    /// @param[in,out] handle  Mutex handle; no-op if null or already destroyed.
+    /// @retval osal::ok()  Always.
     osal::result osal_mutex_destroy(osal::active_traits::mutex_handle_t* handle) noexcept
     {
         if (handle == nullptr || handle->native == nullptr)
@@ -399,9 +404,11 @@ extern "C"
     /// @brief Acquire a mutex via chMtxLock() (blocking) or chMtxTryLock() (non-blocking).
     /// @details ChibiOS does not provide a timed mutex lock; any finite timeout uses try-lock
     ///          and returns osal::error_code::timeout if the lock cannot be taken immediately.
-    /// @param handle        Mutex handle.
-    /// @param timeout_ticks Maximum wait in OSAL ticks (only WAIT_FOREVER is truly blocking).
-    /// @return osal::ok() if acquired; osal::error_code::would_block or ::timeout otherwise.
+    /// @param[in] handle         Mutex handle.
+    /// @param[in] timeout_ticks  Maximum wait in OSAL ticks (only WAIT_FOREVER is truly blocking).
+    /// @retval osal::ok()                     If acquired.
+    /// @retval osal::error_code::would_block  Otherwise.
+    /// @retval osal::error_code::timeout      Otherwise.
     osal::result osal_mutex_lock(osal::active_traits::mutex_handle_t* handle, osal::tick_t timeout_ticks) noexcept
     {
         if (handle == nullptr || handle->native == nullptr)
@@ -425,16 +432,18 @@ extern "C"
     }
 
     /// @brief Try to acquire a mutex without blocking.
-    /// @param handle Mutex handle.
-    /// @return osal::ok() if acquired; osal::error_code::would_block if unavailable.
+    /// @param[in] handle  Mutex handle.
+    /// @retval osal::ok()                     If acquired.
+    /// @retval osal::error_code::would_block  If unavailable.
     osal::result osal_mutex_try_lock(osal::active_traits::mutex_handle_t* handle) noexcept
     {
         return osal_mutex_lock(handle, osal::NO_WAIT);
     }
 
     /// @brief Release a mutex via chMtxUnlock().
-    /// @param handle Mutex handle.
-    /// @return osal::ok() on success; osal::error_code::not_initialized if the handle is null.
+    /// @param[in] handle  Mutex handle.
+    /// @retval osal::ok()                         On success.
+    /// @retval osal::error_code::not_initialized  If the handle is null.
     osal::result osal_mutex_unlock(osal::active_traits::mutex_handle_t* handle) noexcept
     {
         if (handle == nullptr || handle->native == nullptr)
@@ -450,9 +459,10 @@ extern "C"
     // ---------------------------------------------------------------------------
 
     /// @brief Acquire a pool slot and initialise a ChibiOS semaphore via chSemObjectInit().
-    /// @param handle        Output handle pointing to the initialised semaphore_t.
-    /// @param initial_count Initial token count.
-    /// @return osal::ok() on success; osal::error_code::out_of_resources if the pool is full.
+    /// @param[out] handle        Output handle pointing to the initialised semaphore_t.
+    /// @param[in] initial_count  Initial token count.
+    /// @retval osal::ok()                          On success.
+    /// @retval osal::error_code::out_of_resources  If the pool is full.
     osal::result osal_semaphore_create(osal::active_traits::semaphore_handle_t* handle, unsigned initial_count,
                                        unsigned /*max_count*/) noexcept
     {
@@ -467,8 +477,8 @@ extern "C"
     }
 
     /// @brief Reset and release a semaphore slot back to the pool.
-    /// @param handle Semaphore handle; no-op if null or already destroyed.
-    /// @return osal::ok() always.
+    /// @param[in,out] handle  Semaphore handle; no-op if null or already destroyed.
+    /// @retval osal::ok()  Always.
     osal::result osal_semaphore_destroy(osal::active_traits::semaphore_handle_t* handle) noexcept
     {
         if (handle == nullptr || handle->native == nullptr)
@@ -483,8 +493,9 @@ extern "C"
     }
 
     /// @brief Increment (signal) a semaphore via chSemSignal().
-    /// @param handle Semaphore handle.
-    /// @return osal::ok() on success; osal::error_code::not_initialized if the handle is null.
+    /// @param[in] handle  Semaphore handle.
+    /// @retval osal::ok()                         On success.
+    /// @retval osal::error_code::not_initialized  If the handle is null.
     osal::result osal_semaphore_give(osal::active_traits::semaphore_handle_t* handle) noexcept
     {
         if (handle == nullptr || handle->native == nullptr)
@@ -496,8 +507,9 @@ extern "C"
     }
 
     /// @brief Increment a semaphore from ISR context via chSemSignalI() (syscall locked).
-    /// @param handle Semaphore handle.
-    /// @return osal::ok() on success; osal::error_code::not_initialized if the handle is null.
+    /// @param[in] handle  Semaphore handle.
+    /// @retval osal::ok()                         On success.
+    /// @retval osal::error_code::not_initialized  If the handle is null.
     osal::result osal_semaphore_give_isr(osal::active_traits::semaphore_handle_t* handle) noexcept
     {
         if (handle == nullptr || handle->native == nullptr)
@@ -511,9 +523,11 @@ extern "C"
     }
 
     /// @brief Decrement (wait on) a semaphore via chSemWaitTimeout().
-    /// @param handle        Semaphore handle.
-    /// @param timeout_ticks Maximum wait in OSAL ticks (mapped to ChibiOS sysinterval_t).
-    /// @return osal::ok() on success; osal::error_code::would_block or ::timeout on failure.
+    /// @param[in] handle         Semaphore handle.
+    /// @param[in] timeout_ticks  Maximum wait in OSAL ticks (mapped to ChibiOS sysinterval_t).
+    /// @retval osal::ok()                     On success.
+    /// @retval osal::error_code::would_block  On failure.
+    /// @retval osal::error_code::timeout      On failure.
     osal::result osal_semaphore_take(osal::active_traits::semaphore_handle_t* handle,
                                      osal::tick_t                             timeout_ticks) noexcept
     {
@@ -530,8 +544,9 @@ extern "C"
     }
 
     /// @brief Try to decrement a semaphore without blocking.
-    /// @param handle Semaphore handle.
-    /// @return osal::ok() if a token was available; osal::error_code::would_block otherwise.
+    /// @param[in] handle  Semaphore handle.
+    /// @retval osal::ok()                     If a token was available.
+    /// @retval osal::error_code::would_block  Otherwise.
     osal::result osal_semaphore_try_take(osal::active_traits::semaphore_handle_t* handle) noexcept
     {
         return osal_semaphore_take(handle, osal::NO_WAIT);
@@ -544,9 +559,9 @@ extern "C"
     /// @brief Initialise a ChibiOS queue using the caller's payload storage.
     /// @details Two native mailboxes transport indices into @p buffer: one
     ///          tracks free entries and the other tracks FIFO-ready entries.
-    /// @param handle Output handle pointing to the ch_mailbox_slot.
-    /// @return osal::ok() on success; osal::error_code::not_supported when
-    ///         @p capacity exceeds OSAL_CH_MAILBOX_DEPTH.
+    /// @param[out] handle  Output handle pointing to the ch_mailbox_slot.
+    /// @retval osal::ok()                       On success.
+    /// @retval osal::error_code::not_supported  When @p capacity exceeds OSAL_CH_MAILBOX_DEPTH.
     osal::result osal_queue_create(osal::active_traits::queue_handle_t* handle, void* buffer, std::size_t item_size,
                                    std::size_t capacity) noexcept
     {
@@ -584,8 +599,8 @@ extern "C"
     }
 
     /// @brief Reset a queue's native mailboxes and release its static slot.
-    /// @param handle Queue handle; no-op if null or already destroyed.
-    /// @return osal::ok() always.
+    /// @param[in,out] handle  Queue handle; no-op if null or already destroyed.
+    /// @retval osal::ok()  Always.
     osal::result osal_queue_destroy(osal::active_traits::queue_handle_t* handle) noexcept
     {
         if (handle == nullptr || handle->native == nullptr)
@@ -604,10 +619,12 @@ extern "C"
     }
 
     /// @brief Copy an item into a free caller-storage entry and enqueue its index.
-    /// @param handle        Queue handle.
-    /// @param item          Pointer to the message data.
-    /// @param timeout_ticks Maximum wait in OSAL ticks.
-    /// @return osal::ok() on success; osal::error_code::would_block or ::timeout if the mailbox is full.
+    /// @param[in] handle         Queue handle.
+    /// @param[in] item           Pointer to the message data.
+    /// @param[in] timeout_ticks  Maximum wait in OSAL ticks.
+    /// @retval osal::ok()                     On success.
+    /// @retval osal::error_code::would_block  If the mailbox is full.
+    /// @retval osal::error_code::timeout      If the mailbox is full.
     osal::result osal_queue_send(osal::active_traits::queue_handle_t* handle, const void* item,
                                  osal::tick_t timeout_ticks) noexcept
     {
@@ -642,9 +659,10 @@ extern "C"
     }
 
     /// @brief Copy an item into a free caller-storage entry from ISR context.
-    /// @param handle Queue handle.
-    /// @param item   Pointer to the message data.
-    /// @return osal::ok() on success; osal::error_code::would_block if the mailbox is full.
+    /// @param[in] handle  Queue handle.
+    /// @param[in] item    Pointer to the message data.
+    /// @retval osal::ok()                     On success.
+    /// @retval osal::error_code::would_block  If the mailbox is full.
     osal::result osal_queue_send_isr(osal::active_traits::queue_handle_t* handle, const void* item) noexcept
     {
         if (handle == nullptr || handle->native == nullptr)
@@ -678,10 +696,12 @@ extern "C"
     }
 
     /// @brief Dequeue an index, copy its caller-stored item, and release the entry.
-    /// @param handle        Queue handle.
-    /// @param item          Buffer to receive the dequeued message into.
-    /// @param timeout_ticks Maximum wait in OSAL ticks.
-    /// @return osal::ok() on success; osal::error_code::would_block or ::timeout if the mailbox is empty.
+    /// @param[in] handle         Queue handle.
+    /// @param[in] item           Buffer to receive the dequeued message into.
+    /// @param[in] timeout_ticks  Maximum wait in OSAL ticks.
+    /// @retval osal::ok()                     On success.
+    /// @retval osal::error_code::would_block  If the mailbox is empty.
+    /// @retval osal::error_code::timeout      If the mailbox is empty.
     osal::result osal_queue_receive(osal::active_traits::queue_handle_t* handle, void* item,
                                     osal::tick_t timeout_ticks) noexcept
     {
@@ -714,9 +734,10 @@ extern "C"
     }
 
     /// @brief Dequeue an item into caller storage from ISR context.
-    /// @param handle Queue handle.
-    /// @param item   Buffer to receive the dequeued message into.
-    /// @return osal::ok() on success; osal::error_code::would_block if the mailbox is empty.
+    /// @param[in] handle  Queue handle.
+    /// @param[in] item    Buffer to receive the dequeued message into.
+    /// @retval osal::ok()                     On success.
+    /// @retval osal::error_code::would_block  If the mailbox is empty.
     osal::result osal_queue_receive_isr(osal::active_traits::queue_handle_t* handle, void* item) noexcept
     {
         if (handle == nullptr || handle->native == nullptr)
@@ -749,7 +770,7 @@ extern "C"
     }
 
     /// @brief Peek at the front message without removing it (not supported on ChibiOS mailbox).
-    /// @return osal::error_code::not_supported always.
+    /// @retval osal::error_code::not_supported  Always.
     osal::result osal_queue_peek(osal::active_traits::queue_handle_t* /*handle*/, void* /*item*/,
                                  osal::tick_t /*timeout*/) noexcept
     {
@@ -757,7 +778,7 @@ extern "C"
     }
 
     /// @brief Return the number of ready entries in the queue.
-    /// @param handle Queue handle.
+    /// @param[in] handle  Queue handle.
     /// @return Message count, or 0 if the handle is invalid.
     std::size_t osal_queue_count(const osal::active_traits::queue_handle_t* handle) noexcept
     {
@@ -773,7 +794,7 @@ extern "C"
     }
 
     /// @brief Return the number of free caller-storage entries in the queue.
-    /// @param handle Queue handle.
+    /// @param[in] handle  Queue handle.
     /// @return Free slot count, or 0 if the handle is invalid.
     std::size_t osal_queue_free(const osal::active_traits::queue_handle_t* handle) noexcept
     {
@@ -794,12 +815,13 @@ extern "C"
 
     /// @brief Initialise a ChibiOS virtual timer slot via chVTObjectInit().
     /// @details The timer is created but not started; call osal_timer_start() to arm it.
-    /// @param handle       Output handle pointing to the ch_vt_slot.
-    /// @param callback     Callback invoked on each expiry (runs in ISR context).
-    /// @param arg          Opaque argument forwarded to @p callback.
-    /// @param period_ticks Expiry period in OSAL ticks (stored as sysinterval_t).
-    /// @param auto_reload  If true, the virtual timer is re-armed inside the callback.
-    /// @return osal::ok() on success; osal::error_code::out_of_resources if no slot is available.
+    /// @param[out] handle       Output handle pointing to the ch_vt_slot.
+    /// @param[in] callback      Callback invoked on each expiry (runs in ISR context).
+    /// @param[in] arg           Opaque argument forwarded to @p callback.
+    /// @param[in] period_ticks  Expiry period in OSAL ticks (stored as sysinterval_t).
+    /// @param[in] auto_reload   If true, the virtual timer is re-armed inside the callback.
+    /// @retval osal::ok()                          On success.
+    /// @retval osal::error_code::out_of_resources  If no slot is available.
     osal::result osal_timer_create(osal::active_traits::timer_handle_t* handle, const char* /*name*/,
                                    osal_timer_callback_t callback, void* arg, osal::tick_t period_ticks,
                                    bool auto_reload) noexcept
@@ -820,8 +842,8 @@ extern "C"
     }
 
     /// @brief Cancel the virtual timer via chVTReset() and release the slot.
-    /// @param handle Timer handle; no-op if null or already destroyed.
-    /// @return osal::ok() always.
+    /// @param[in,out] handle  Timer handle; no-op if null or already destroyed.
+    /// @retval osal::ok()  Always.
     osal::result osal_timer_destroy(osal::active_traits::timer_handle_t* handle) noexcept
     {
         if (handle == nullptr || handle->native == nullptr)
@@ -837,8 +859,9 @@ extern "C"
     }
 
     /// @brief Arm the virtual timer via chVTSet().
-    /// @param handle Timer handle.
-    /// @return osal::ok() on success; osal::error_code::not_initialized if the handle is null.
+    /// @param[in] handle  Timer handle.
+    /// @retval osal::ok()                         On success.
+    /// @retval osal::error_code::not_initialized  If the handle is null.
     osal::result osal_timer_start(osal::active_traits::timer_handle_t* handle) noexcept
     {
         if (handle == nullptr || handle->native == nullptr)
@@ -851,8 +874,9 @@ extern "C"
     }
 
     /// @brief Disarm the virtual timer via chVTReset().
-    /// @param handle Timer handle.
-    /// @return osal::ok() on success; osal::error_code::not_initialized if the handle is null.
+    /// @param[in] handle  Timer handle.
+    /// @retval osal::ok()                         On success.
+    /// @retval osal::error_code::not_initialized  If the handle is null.
     osal::result osal_timer_stop(osal::active_traits::timer_handle_t* handle) noexcept
     {
         if (handle == nullptr || handle->native == nullptr)
@@ -864,7 +888,7 @@ extern "C"
     }
 
     /// @brief Stop and immediately restart the virtual timer.
-    /// @param handle Timer handle.
+    /// @param[in] handle  Timer handle.
     /// @return osal::ok() on success; forwarded error from osal_timer_start().
     osal::result osal_timer_reset(osal::active_traits::timer_handle_t* handle) noexcept
     {
@@ -873,9 +897,10 @@ extern "C"
     }
 
     /// @brief Update the stored period; takes effect on next chVTSet().
-    /// @param handle          Timer handle.
-    /// @param new_period_ticks New period in OSAL ticks.
-    /// @return osal::ok() on success; osal::error_code::not_initialized if the handle is null.
+    /// @param[in] handle            Timer handle.
+    /// @param[in] new_period_ticks  New period in OSAL ticks.
+    /// @retval osal::ok()                         On success.
+    /// @retval osal::error_code::not_initialized  If the handle is null.
     osal::result osal_timer_set_period(osal::active_traits::timer_handle_t* handle,
                                        osal::tick_t                         new_period_ticks) noexcept
     {
@@ -888,7 +913,7 @@ extern "C"
     }
 
     /// @brief Query whether the virtual timer is currently armed via chVTIsArmed().
-    /// @param handle Timer handle.
+    /// @param[in] handle  Timer handle.
     /// @return True if the timer is armed; false otherwise.
     bool osal_timer_is_active(const osal::active_traits::timer_handle_t* handle) noexcept
     {
@@ -908,8 +933,9 @@ extern "C"
 
     /// @brief Initialise a ChibiOS event source slot via chEvtObjectInit().
     /// @details A shadow flags register is maintained for osal_event_flags_get().
-    /// @param handle Output handle pointing to the ch_event_slot.
-    /// @return osal::ok() on success; osal::error_code::out_of_resources if no slot is available.
+    /// @param[out] handle  Output handle pointing to the ch_event_slot.
+    /// @retval osal::ok()                          On success.
+    /// @retval osal::error_code::out_of_resources  If no slot is available.
     osal::result osal_event_flags_create(osal::active_traits::event_flags_handle_t* handle) noexcept
     {
         auto* slot = pool_acquire_by_used(ch_events);
@@ -924,8 +950,8 @@ extern "C"
     }
 
     /// @brief Release the event source slot back to the pool.
-    /// @param handle Event-flags handle; no-op if null or already destroyed.
-    /// @return osal::ok() always.
+    /// @param[in,out] handle  Event-flags handle; no-op if null or already destroyed.
+    /// @retval osal::ok()  Always.
     osal::result osal_event_flags_destroy(osal::active_traits::event_flags_handle_t* handle) noexcept
     {
         if (handle == nullptr || handle->native == nullptr)
@@ -939,9 +965,10 @@ extern "C"
     }
 
     /// @brief Set (OR) flags and broadcast via chEvtBroadcastFlags().
-    /// @param handle Event-flags handle.
-    /// @param bits   Bitmask of flags to set.
-    /// @return osal::ok() on success; osal::error_code::not_initialized if the handle is null.
+    /// @param[in] handle  Event-flags handle.
+    /// @param[in] bits    Bitmask of flags to set.
+    /// @retval osal::ok()                         On success.
+    /// @retval osal::error_code::not_initialized  If the handle is null.
     osal::result osal_event_flags_set(osal::active_traits::event_flags_handle_t* handle,
                                       osal::event_bits_t                         bits) noexcept
     {
@@ -957,9 +984,10 @@ extern "C"
 
     /// @brief Clear (AND NOT) flags in the shadow register.
     /// @details No broadcast is issued for cleared flags; waiting threads are not woken.
-    /// @param handle Event-flags handle.
-    /// @param bits   Bitmask of flags to clear.
-    /// @return osal::ok() on success; osal::error_code::not_initialized if the handle is null.
+    /// @param[in] handle  Event-flags handle.
+    /// @param[in] bits    Bitmask of flags to clear.
+    /// @retval osal::ok()                         On success.
+    /// @retval osal::error_code::not_initialized  If the handle is null.
     osal::result osal_event_flags_clear(osal::active_traits::event_flags_handle_t* handle,
                                         osal::event_bits_t                         bits) noexcept
     {
@@ -973,7 +1001,7 @@ extern "C"
     }
 
     /// @brief Read the current shadow flags register without modifying it.
-    /// @param handle Event-flags handle.
+    /// @param[in] handle  Event-flags handle.
     /// @return Current flag bitmask, or 0 if the handle is invalid.
     osal::event_bits_t osal_event_flags_get(const osal::active_traits::event_flags_handle_t* handle) noexcept
     {
@@ -985,12 +1013,13 @@ extern "C"
     }
 
     /// @brief Register a listener on the event source and wait for any of @p bits via chEvtWaitAnyTimeout().
-    /// @param handle        Event-flags handle.
-    /// @param bits          Bitmask of flags to watch.
-    /// @param actual        Output for the flags that woke the caller; may be null.
-    /// @param clear_on_exit If true, matched flags are cleared in the shadow register on return.
-    /// @param timeout       Maximum wait in OSAL ticks.
-    /// @return osal::ok() on success; osal::error_code::timeout if no matching flags arrived.
+    /// @param[in] handle         Event-flags handle.
+    /// @param[in] bits           Bitmask of flags to watch.
+    /// @param[out] actual        Output for the flags that woke the caller; may be null.
+    /// @param[in] clear_on_exit  If true, matched flags are cleared in the shadow register on return.
+    /// @param[in] timeout        Maximum wait in OSAL ticks.
+    /// @retval osal::ok()                 On success.
+    /// @retval osal::error_code::timeout  If no matching flags arrived.
     osal::result osal_event_flags_wait_any(osal::active_traits::event_flags_handle_t* handle, osal::event_bits_t bits,
                                            osal::event_bits_t* actual, bool clear_on_exit,
                                            osal::tick_t timeout) noexcept
@@ -1030,12 +1059,13 @@ extern "C"
     }
 
     /// @brief Register a listener and spin until all bits in @p bits are collected.
-    /// @param handle        Event-flags handle.
-    /// @param bits          Bitmask of flags that must all be received.
-    /// @param actual        Output for the collected flags; may be null.
-    /// @param clear_on_exit If true, matched flags are cleared in the shadow register on return.
-    /// @param timeout       Maximum wait in OSAL ticks.
-    /// @return osal::ok() when all flags have been received; osal::error_code::timeout otherwise.
+    /// @param[in] handle         Event-flags handle.
+    /// @param[in] bits           Bitmask of flags that must all be received.
+    /// @param[out] actual        Output for the collected flags; may be null.
+    /// @param[in] clear_on_exit  If true, matched flags are cleared in the shadow register on return.
+    /// @param[in] timeout        Maximum wait in OSAL ticks.
+    /// @retval osal::ok()                 When all flags have been received.
+    /// @retval osal::error_code::timeout  Otherwise.
     osal::result osal_event_flags_wait_all(osal::active_traits::event_flags_handle_t* handle, osal::event_bits_t bits,
                                            osal::event_bits_t* actual, bool clear_on_exit,
                                            osal::tick_t timeout) noexcept
@@ -1100,9 +1130,10 @@ extern "C"
     }
 
     /// @brief Set flags from ISR context via chEvtBroadcastFlagsI() (syscall locked).
-    /// @param handle Event-flags handle.
-    /// @param bits   Bitmask of flags to set.
-    /// @return osal::ok() on success; osal::error_code::not_initialized if the handle is null.
+    /// @param[in] handle  Event-flags handle.
+    /// @param[in] bits    Bitmask of flags to set.
+    /// @retval osal::ok()                         On success.
+    /// @retval osal::error_code::not_initialized  If the handle is null.
     osal::result osal_event_flags_set_isr(osal::active_traits::event_flags_handle_t* handle,
                                           osal::event_bits_t                         bits) noexcept
     {
@@ -1137,8 +1168,9 @@ extern "C"
     }  // namespace
 
     /// @brief Initialise a ChibiOS condition variable via chCondObjectInit().
-    /// @param handle Output handle pointing to the ch_condvar_slot.
-    /// @return osal::ok() on success; osal::error_code::out_of_resources if no slot is available.
+    /// @param[out] handle  Output handle pointing to the ch_condvar_slot.
+    /// @retval osal::ok()                          On success.
+    /// @retval osal::error_code::out_of_resources  If no slot is available.
     osal::result osal_condvar_create(osal::active_traits::condvar_handle_t* handle) noexcept
     {
         if (handle == nullptr)
@@ -1156,8 +1188,8 @@ extern "C"
     }
 
     /// @brief Release the condition variable slot back to the pool.
-    /// @param handle Condvar handle; no-op if null or already destroyed.
-    /// @return osal::ok() always.
+    /// @param[in,out] handle  Condvar handle; no-op if null or already destroyed.
+    /// @retval osal::ok()  Always.
     osal::result osal_condvar_destroy(osal::active_traits::condvar_handle_t* handle) noexcept
     {
         if (handle == nullptr || handle->native == nullptr)
@@ -1172,10 +1204,11 @@ extern "C"
 
     /// @brief Atomically release @p mutex and block on the condition via chCondWaitTimeout().
     /// @details ChibiOS implicitly unlocks the top-of-stack mutex during the wait.
-    /// @param handle  Condvar handle.
-    /// @param mutex   Mutex that must be held by the caller before this call.
-    /// @param timeout Maximum wait in OSAL ticks.
-    /// @return osal::ok() on success; osal::error_code::timeout if @p timeout expired.
+    /// @param[in] handle   Condvar handle.
+    /// @param[in] mutex    Mutex that must be held by the caller before this call.
+    /// @param[in] timeout  Maximum wait in OSAL ticks.
+    /// @retval osal::ok()                 On success.
+    /// @retval osal::error_code::timeout  If @p timeout expired.
     osal::result osal_condvar_wait(osal::active_traits::condvar_handle_t* handle,
                                    osal::active_traits::mutex_handle_t* mutex, osal::tick_t timeout) noexcept
     {
@@ -1200,8 +1233,9 @@ extern "C"
     }
 
     /// @brief Wake one thread waiting on the condition via chCondSignal().
-    /// @param handle Condvar handle.
-    /// @return osal::ok() on success; osal::error_code::not_initialized if the handle is null.
+    /// @param[in] handle  Condvar handle.
+    /// @retval osal::ok()                         On success.
+    /// @retval osal::error_code::not_initialized  If the handle is null.
     osal::result osal_condvar_notify_one(osal::active_traits::condvar_handle_t* handle) noexcept
     {
         if (handle == nullptr || handle->native == nullptr)
@@ -1214,8 +1248,9 @@ extern "C"
     }
 
     /// @brief Wake all threads waiting on the condition via chCondBroadcast().
-    /// @param handle Condvar handle.
-    /// @return osal::ok() on success; osal::error_code::not_initialized if the handle is null.
+    /// @param[in] handle  Condvar handle.
+    /// @retval osal::ok()                         On success.
+    /// @retval osal::error_code::not_initialized  If the handle is null.
     osal::result osal_condvar_notify_all(osal::active_traits::condvar_handle_t* handle) noexcept
     {
         if (handle == nullptr || handle->native == nullptr)
@@ -1232,32 +1267,32 @@ extern "C"
     // ---------------------------------------------------------------------------
 
     /// @brief Create a wait-set (not supported on ChibiOS).
-    /// @return osal::error_code::not_supported always.
+    /// @retval osal::error_code::not_supported  Always.
     osal::result osal_wait_set_create(osal::active_traits::wait_set_handle_t*) noexcept
     {
         return osal::error_code::not_supported;
     }
     /// @brief Destroy a wait-set (not supported on ChibiOS).
-    /// @return osal::error_code::not_supported always.
+    /// @retval osal::error_code::not_supported  Always.
     osal::result osal_wait_set_destroy(osal::active_traits::wait_set_handle_t*) noexcept
     {
         return osal::error_code::not_supported;
     }
     /// @brief Add an object to a wait-set (not supported on ChibiOS).
-    /// @return osal::error_code::not_supported always.
+    /// @retval osal::error_code::not_supported  Always.
     osal::result osal_wait_set_add(osal::active_traits::wait_set_handle_t*, int, std::uint32_t) noexcept
     {
         return osal::error_code::not_supported;
     }
     /// @brief Remove an object from a wait-set (not supported on ChibiOS).
-    /// @return osal::error_code::not_supported always.
+    /// @retval osal::error_code::not_supported  Always.
     osal::result osal_wait_set_remove(osal::active_traits::wait_set_handle_t*, int) noexcept
     {
         return osal::error_code::not_supported;
     }
     /// @brief Wait on a wait-set for any registered object to signal (not supported on ChibiOS).
-    /// @param n Sets *n to 0.
-    /// @return osal::error_code::not_supported always.
+    /// @param[in] n  Sets *n to 0.
+    /// @retval osal::error_code::not_supported  Always.
     osal::result osal_wait_set_wait(osal::active_traits::wait_set_handle_t*, int*, std::size_t, std::size_t* n,
                                     osal::tick_t) noexcept
     {

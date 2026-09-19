@@ -270,12 +270,13 @@ extern "C"
     // ---------------------------------------------------------------------------
 
     /// @brief Create and immediately start a CMSIS-RTOS v1 thread.
-    /// @param handle      Output handle populated with the cmsis1_thread_slot pointer.
-    /// @param entry       Thread entry function (cast to os_pthread).
-    /// @param arg         Opaque argument forwarded to @p entry.
-    /// @param priority    OSAL priority [0=lowest, 255=highest]; mapped to osPriority enum.
-    /// @param stack_bytes Requested stack size in bytes.
-    /// @return osal::ok() on success; osal::error_code::out_of_resources on failure.
+    /// @param[out] handle      Output handle populated with the cmsis1_thread_slot pointer.
+    /// @param[in] entry        Thread entry function (cast to os_pthread).
+    /// @param[in] arg          Opaque argument forwarded to @p entry.
+    /// @param[in] priority     OSAL priority [0=lowest, 255=highest]; mapped to osPriority enum.
+    /// @param[in] stack_bytes  Requested stack size in bytes.
+    /// @retval osal::ok()                          On success.
+    /// @retval osal::error_code::out_of_resources  On failure.
     osal::result osal_thread_create(osal::active_traits::thread_handle_t* handle, void (*entry)(void*), void* arg,
                                     osal::priority_t   priority, osal::affinity_t /*affinity*/, void* /*stack*/,
                                     osal::stack_size_t stack_bytes, const char* /*name*/) noexcept
@@ -304,8 +305,9 @@ extern "C"
     }
 
     /// @brief Terminate a thread and release its slot.
-    /// @param handle Thread handle to join.
-    /// @return osal::ok() on success; osal::error_code::not_initialized if the handle is null.
+    /// @param[in,out] handle  Thread handle to join.
+    /// @retval osal::ok()                         On success.
+    /// @retval osal::error_code::not_initialized  If the handle is null.
     osal::result osal_thread_join(osal::active_traits::thread_handle_t* handle, osal::tick_t /*timeout*/) noexcept
     {
         if (handle == nullptr || handle->native == nullptr)
@@ -320,8 +322,9 @@ extern "C"
     }
 
     /// @brief Detach a thread, releasing its slot without waiting.
-    /// @param handle Thread handle to detach.
-    /// @return osal::ok() on success; osal::error_code::not_initialized if the handle is null.
+    /// @param[in,out] handle  Thread handle to detach.
+    /// @retval osal::ok()                         On success.
+    /// @retval osal::error_code::not_initialized  If the handle is null.
     osal::result osal_thread_detach(osal::active_traits::thread_handle_t* handle) noexcept
     {
         if (handle == nullptr || handle->native == nullptr)
@@ -335,9 +338,11 @@ extern "C"
     }
 
     /// @brief Change the priority of a running thread via osThreadSetPriority().
-    /// @param handle   Thread handle.
-    /// @param priority New OSAL priority; mapped to osPriority enum.
-    /// @return osal::ok() on success; osal::error_code::not_initialized or ::unknown on failure.
+    /// @param[in] handle    Thread handle.
+    /// @param[in] priority  New OSAL priority; mapped to osPriority enum.
+    /// @retval osal::ok()                         On success.
+    /// @retval osal::error_code::not_initialized  On failure.
+    /// @retval osal::error_code::unknown          On failure.
     osal::result osal_thread_set_priority(osal::active_traits::thread_handle_t* handle,
                                           osal::priority_t                      priority) noexcept
     {
@@ -351,7 +356,7 @@ extern "C"
     }
 
     /// @brief Set thread CPU affinity (not supported on CMSIS-RTOS v1).
-    /// @return osal::error_code::not_supported always.
+    /// @retval osal::error_code::not_supported  Always.
     osal::result osal_thread_set_affinity(osal::active_traits::thread_handle_t* /*handle*/,
                                           osal::affinity_t /*affinity*/) noexcept
     {
@@ -359,7 +364,7 @@ extern "C"
     }
 
     /// @brief Suspend a thread (not supported on CMSIS-RTOS v1 through this OSAL).
-    /// @return osal::error_code::not_supported always.
+    /// @retval osal::error_code::not_supported  Always.
     osal::result osal_thread_suspend(osal::active_traits::thread_handle_t* handle) noexcept
     {
         (void)handle;
@@ -367,7 +372,7 @@ extern "C"
     }
 
     /// @brief Resume a suspended thread (not supported on CMSIS-RTOS v1 through this OSAL).
-    /// @return osal::error_code::not_supported always.
+    /// @retval osal::error_code::not_supported  Always.
     osal::result osal_thread_resume(osal::active_traits::thread_handle_t* handle) noexcept
     {
         (void)handle;
@@ -381,7 +386,7 @@ extern "C"
     }
 
     /// @brief Sleep for at least @p ms milliseconds via osDelay().
-    /// @param ms Delay in milliseconds.
+    /// @param[in] ms  Delay in milliseconds.
     void osal_thread_sleep_ms(std::uint32_t ms) noexcept
     {
         osDelay(ms);
@@ -392,8 +397,9 @@ extern "C"
     // ---------------------------------------------------------------------------
 
     /// @brief Create a CMSIS-RTOS v1 mutex via osMutexCreate().
-    /// @param handle Output handle populated with the cmsis1_mutex_slot pointer.
-    /// @return osal::ok() on success; osal::error_code::out_of_resources on failure.
+    /// @param[out] handle  Output handle populated with the cmsis1_mutex_slot pointer.
+    /// @retval osal::ok()                          On success.
+    /// @retval osal::error_code::out_of_resources  On failure.
     osal::result osal_mutex_create(osal::active_traits::mutex_handle_t* handle, bool /*recursive*/) noexcept
     {
         assert(handle != nullptr);
@@ -415,8 +421,8 @@ extern "C"
     }
 
     /// @brief Destroy a mutex via osMutexDelete() and release its slot.
-    /// @param handle Mutex handle; no-op if null or already destroyed.
-    /// @return osal::ok() always.
+    /// @param[in,out] handle  Mutex handle; no-op if null or already destroyed.
+    /// @retval osal::ok()  Always.
     osal::result osal_mutex_destroy(osal::active_traits::mutex_handle_t* handle) noexcept
     {
         if (handle == nullptr || handle->native == nullptr)
@@ -431,9 +437,11 @@ extern "C"
     }
 
     /// @brief Acquire a mutex via osMutexWait(), blocking up to @p timeout_ticks ticks.
-    /// @param handle        Mutex handle.
-    /// @param timeout_ticks Maximum wait in OSAL ticks (mapped to milliseconds).
-    /// @return osal::ok() on success; osal::error_code::would_block or ::timeout on failure.
+    /// @param[in] handle         Mutex handle.
+    /// @param[in] timeout_ticks  Maximum wait in OSAL ticks (mapped to milliseconds).
+    /// @retval osal::ok()                     On success.
+    /// @retval osal::error_code::would_block  On failure.
+    /// @retval osal::error_code::timeout      On failure.
     osal::result osal_mutex_lock(osal::active_traits::mutex_handle_t* handle, osal::tick_t timeout_ticks) noexcept
     {
         if (handle == nullptr || handle->native == nullptr)
@@ -454,16 +462,19 @@ extern "C"
     }
 
     /// @brief Try to acquire a mutex without blocking.
-    /// @param handle Mutex handle.
-    /// @return osal::ok() if acquired; osal::error_code::would_block if not immediately available.
+    /// @param[in] handle  Mutex handle.
+    /// @retval osal::ok()                     If acquired.
+    /// @retval osal::error_code::would_block  If not immediately available.
     osal::result osal_mutex_try_lock(osal::active_traits::mutex_handle_t* handle) noexcept
     {
         return osal_mutex_lock(handle, osal::NO_WAIT);
     }
 
     /// @brief Release a mutex via osMutexRelease().
-    /// @param handle Mutex handle.
-    /// @return osal::ok() on success; osal::error_code::not_initialized or ::unknown on failure.
+    /// @param[in] handle  Mutex handle.
+    /// @retval osal::ok()                         On success.
+    /// @retval osal::error_code::not_initialized  On failure.
+    /// @retval osal::error_code::unknown          On failure.
     osal::result osal_mutex_unlock(osal::active_traits::mutex_handle_t* handle) noexcept
     {
         if (handle == nullptr || handle->native == nullptr)
@@ -480,9 +491,10 @@ extern "C"
     // ---------------------------------------------------------------------------
 
     /// @brief Create a counting semaphore via osSemaphoreCreate().
-    /// @param handle        Output handle populated with the cmsis1_sem_slot pointer.
-    /// @param initial_count Initial token count.
-    /// @return osal::ok() on success; osal::error_code::out_of_resources on failure.
+    /// @param[out] handle        Output handle populated with the cmsis1_sem_slot pointer.
+    /// @param[in] initial_count  Initial token count.
+    /// @retval osal::ok()                          On success.
+    /// @retval osal::error_code::out_of_resources  On failure.
     osal::result osal_semaphore_create(osal::active_traits::semaphore_handle_t* handle, unsigned initial_count,
                                        unsigned /*max_count*/) noexcept
     {
@@ -505,8 +517,8 @@ extern "C"
     }
 
     /// @brief Destroy a semaphore via osSemaphoreDelete() and release its slot.
-    /// @param handle Semaphore handle; no-op if null or already destroyed.
-    /// @return osal::ok() always.
+    /// @param[in,out] handle  Semaphore handle; no-op if null or already destroyed.
+    /// @retval osal::ok()  Always.
     osal::result osal_semaphore_destroy(osal::active_traits::semaphore_handle_t* handle) noexcept
     {
         if (handle == nullptr || handle->native == nullptr)
@@ -521,8 +533,9 @@ extern "C"
     }
 
     /// @brief Increment (release) a semaphore via osSemaphoreRelease().
-    /// @param handle Semaphore handle.
-    /// @return osal::ok() on success; osal::error_code::unknown on OS failure.
+    /// @param[in] handle  Semaphore handle.
+    /// @retval osal::ok()                 On success.
+    /// @retval osal::error_code::unknown  On OS failure.
     osal::result osal_semaphore_give(osal::active_traits::semaphore_handle_t* handle) noexcept
     {
         if (handle == nullptr || handle->native == nullptr)
@@ -535,17 +548,20 @@ extern "C"
     }
 
     /// @brief Increment a semaphore from ISR context (CMSIS-RTOS v1 Release is ISR-safe).
-    /// @param handle Semaphore handle.
-    /// @return osal::ok() on success; osal::error_code::unknown on OS failure.
+    /// @param[in] handle  Semaphore handle.
+    /// @retval osal::ok()                 On success.
+    /// @retval osal::error_code::unknown  On OS failure.
     osal::result osal_semaphore_give_isr(osal::active_traits::semaphore_handle_t* handle) noexcept
     {
         return osal_semaphore_give(handle);  // CMSIS-RTOS v1 Release is ISR-safe
     }
 
     /// @brief Decrement (wait on) a semaphore via osSemaphoreWait().
-    /// @param handle        Semaphore handle.
-    /// @param timeout_ticks Maximum wait in OSAL ticks (mapped to milliseconds).
-    /// @return osal::ok() on success; osal::error_code::would_block or ::timeout on failure.
+    /// @param[in] handle         Semaphore handle.
+    /// @param[in] timeout_ticks  Maximum wait in OSAL ticks (mapped to milliseconds).
+    /// @retval osal::ok()                     On success.
+    /// @retval osal::error_code::would_block  On failure.
+    /// @retval osal::error_code::timeout      On failure.
     osal::result osal_semaphore_take(osal::active_traits::semaphore_handle_t* handle,
                                      osal::tick_t                             timeout_ticks) noexcept
     {
@@ -563,8 +579,9 @@ extern "C"
     }
 
     /// @brief Try to decrement a semaphore without blocking.
-    /// @param handle Semaphore handle.
-    /// @return osal::ok() if decremented; osal::error_code::would_block if no tokens available.
+    /// @param[in] handle  Semaphore handle.
+    /// @retval osal::ok()                     If decremented.
+    /// @retval osal::error_code::would_block  If no tokens available.
     osal::result osal_semaphore_try_take(osal::active_traits::semaphore_handle_t* handle) noexcept
     {
         return osal_semaphore_take(handle, osal::NO_WAIT);
@@ -575,10 +592,11 @@ extern "C"
     // ---------------------------------------------------------------------------
 
     /// @brief Create a CMSIS-RTOS v1 message queue via osMessageCreate().
-    /// @param handle    Output handle populated with the cmsis1_queue_slot pointer.
-    /// @param item_size Size in bytes of each message (maximum 4 bytes).
-    /// @param capacity  Maximum number of messages the queue can hold.
-    /// @return osal::ok() on success; osal::error_code::out_of_resources on failure.
+    /// @param[out] handle    Output handle populated with the cmsis1_queue_slot pointer.
+    /// @param[in] item_size  Size in bytes of each message (maximum 4 bytes).
+    /// @param[in] capacity   Maximum number of messages the queue can hold.
+    /// @retval osal::ok()                          On success.
+    /// @retval osal::error_code::out_of_resources  On failure.
     osal::result osal_queue_create(osal::active_traits::queue_handle_t* handle, void* /*buffer*/, std::size_t item_size,
                                    std::size_t capacity) noexcept
     {
@@ -624,8 +642,8 @@ extern "C"
     /// @brief Destroy a queue and release its slot.
     /// @details CMSIS-RTOS v1 has no portable queue-delete operation. The
     ///          native queue is drained and retained for compatible reuse.
-    /// @param handle Queue handle; no-op if null or already destroyed.
-    /// @return osal::ok() always.
+    /// @param[in,out] handle  Queue handle; no-op if null or already destroyed.
+    /// @retval osal::ok()  Always.
     osal::result osal_queue_destroy(osal::active_traits::queue_handle_t* handle) noexcept
     {
         if (handle == nullptr || handle->native == nullptr)
@@ -640,10 +658,12 @@ extern "C"
     }
 
     /// @brief Send a value of at most 32 bits to a queue via osMessagePut().
-    /// @param handle        Queue handle.
-    /// @param item          Pointer to the message data.
-    /// @param timeout_ticks Maximum wait in OSAL ticks (mapped to milliseconds).
-    /// @return osal::ok() on success; osal::error_code::would_block or ::timeout if the queue is full.
+    /// @param[in] handle         Queue handle.
+    /// @param[in] item           Pointer to the message data.
+    /// @param[in] timeout_ticks  Maximum wait in OSAL ticks (mapped to milliseconds).
+    /// @retval osal::ok()                     On success.
+    /// @retval osal::error_code::would_block  If the queue is full.
+    /// @retval osal::error_code::timeout      If the queue is full.
     osal::result osal_queue_send(osal::active_traits::queue_handle_t* handle, const void* item,
                                  osal::tick_t timeout_ticks) noexcept
     {
@@ -664,19 +684,22 @@ extern "C"
     }
 
     /// @brief Send a message from ISR context (osMessagePut is ISR-safe in CMSIS-RTOS v1).
-    /// @param handle Queue handle.
-    /// @param item   Pointer to the message data.
-    /// @return osal::ok() on success; osal::error_code::would_block if the queue is full.
+    /// @param[in] handle  Queue handle.
+    /// @param[in] item    Pointer to the message data.
+    /// @retval osal::ok()                     On success.
+    /// @retval osal::error_code::would_block  If the queue is full.
     osal::result osal_queue_send_isr(osal::active_traits::queue_handle_t* handle, const void* item) noexcept
     {
         return osal_queue_send(handle, item, osal::NO_WAIT);  // ISR-safe in CMSIS-RTOS v1
     }
 
     /// @brief Receive a message from a queue via osMessageGet().
-    /// @param handle        Queue handle.
-    /// @param item          Buffer to receive the dequeued message into.
-    /// @param timeout_ticks Maximum wait in OSAL ticks (mapped to milliseconds).
-    /// @return osal::ok() on success; osal::error_code::would_block or ::timeout if the queue is empty.
+    /// @param[in] handle         Queue handle.
+    /// @param[in] item           Buffer to receive the dequeued message into.
+    /// @param[in] timeout_ticks  Maximum wait in OSAL ticks (mapped to milliseconds).
+    /// @retval osal::ok()                     On success.
+    /// @retval osal::error_code::would_block  If the queue is empty.
+    /// @retval osal::error_code::timeout      If the queue is empty.
     osal::result osal_queue_receive(osal::active_traits::queue_handle_t* handle, void* item,
                                     osal::tick_t timeout_ticks) noexcept
     {
@@ -701,16 +724,17 @@ extern "C"
     }
 
     /// @brief Receive a message from ISR context (non-blocking).
-    /// @param handle Queue handle.
-    /// @param item   Buffer to receive the dequeued message into.
-    /// @return osal::ok() on success; osal::error_code::would_block if the queue is empty.
+    /// @param[in] handle  Queue handle.
+    /// @param[in] item    Buffer to receive the dequeued message into.
+    /// @retval osal::ok()                     On success.
+    /// @retval osal::error_code::would_block  If the queue is empty.
     osal::result osal_queue_receive_isr(osal::active_traits::queue_handle_t* handle, void* item) noexcept
     {
         return osal_queue_receive(handle, item, osal::NO_WAIT);
     }
 
     /// @brief Peek at the front message without removing it (not supported on CMSIS-RTOS v1).
-    /// @return osal::error_code::not_supported always.
+    /// @retval osal::error_code::not_supported  Always.
     osal::result osal_queue_peek(osal::active_traits::queue_handle_t* /*handle*/, void* /*item*/,
                                  osal::tick_t /*timeout*/) noexcept
     {
@@ -745,12 +769,13 @@ extern "C"
     // ---------------------------------------------------------------------------
 
     /// @brief Create (but do not start) a CMSIS-RTOS v1 timer via osTimerCreate().
-    /// @param handle       Output handle populated with the cmsis1_timer_slot pointer.
-    /// @param callback     Callback invoked on each expiry.
-    /// @param arg          Opaque argument forwarded to @p callback.
-    /// @param period_ticks Expiry period in OSAL ticks (milliseconds).
-    /// @param auto_reload  True for periodic (osTimerPeriodic); false for one-shot (osTimerOnce).
-    /// @return osal::ok() on success; osal::error_code::out_of_resources on failure.
+    /// @param[out] handle       Output handle populated with the cmsis1_timer_slot pointer.
+    /// @param[in] callback      Callback invoked on each expiry.
+    /// @param[in] arg           Opaque argument forwarded to @p callback.
+    /// @param[in] period_ticks  Expiry period in OSAL ticks (milliseconds).
+    /// @param[in] auto_reload   True for periodic (osTimerPeriodic); false for one-shot (osTimerOnce).
+    /// @retval osal::ok()                          On success.
+    /// @retval osal::error_code::out_of_resources  On failure.
     osal::result osal_timer_create(osal::active_traits::timer_handle_t* handle, const char* /*name*/,
                                    osal_timer_callback_t callback, void* arg, osal::tick_t period_ticks,
                                    bool auto_reload) noexcept
@@ -780,8 +805,8 @@ extern "C"
     }
 
     /// @brief Destroy a timer via osTimerDelete() and release its slot.
-    /// @param handle Timer handle; no-op if null or already destroyed.
-    /// @return osal::ok() always.
+    /// @param[in,out] handle  Timer handle; no-op if null or already destroyed.
+    /// @retval osal::ok()  Always.
     osal::result osal_timer_destroy(osal::active_traits::timer_handle_t* handle) noexcept
     {
         if (handle == nullptr || handle->native == nullptr)
@@ -797,8 +822,10 @@ extern "C"
     }
 
     /// @brief Activate (start) a timer via osTimerStart() using the stored period.
-    /// @param handle Timer handle.
-    /// @return osal::ok() on success; osal::error_code::not_initialized or ::unknown on failure.
+    /// @param[in] handle  Timer handle.
+    /// @retval osal::ok()                         On success.
+    /// @retval osal::error_code::not_initialized  On failure.
+    /// @retval osal::error_code::unknown          On failure.
     osal::result osal_timer_start(osal::active_traits::timer_handle_t* handle) noexcept
     {
         if (handle == nullptr || handle->native == nullptr)
@@ -811,8 +838,10 @@ extern "C"
     }
 
     /// @brief Deactivate (stop) a timer via osTimerStop().
-    /// @param handle Timer handle.
-    /// @return osal::ok() on success; osal::error_code::not_initialized or ::unknown on failure.
+    /// @param[in] handle  Timer handle.
+    /// @retval osal::ok()                         On success.
+    /// @retval osal::error_code::not_initialized  On failure.
+    /// @retval osal::error_code::unknown          On failure.
     osal::result osal_timer_stop(osal::active_traits::timer_handle_t* handle) noexcept
     {
         if (handle == nullptr || handle->native == nullptr)
@@ -825,7 +854,7 @@ extern "C"
     }
 
     /// @brief Stop and immediately restart a timer.
-    /// @param handle Timer handle.
+    /// @param[in] handle  Timer handle.
     /// @return osal::ok() on success; forwarded error from osal_timer_start().
     osal::result osal_timer_reset(osal::active_traits::timer_handle_t* handle) noexcept
     {
@@ -834,9 +863,10 @@ extern "C"
     }
 
     /// @brief Change the period stored in the slot; takes effect on next osTimerStart().
-    /// @param handle          Timer handle.
-    /// @param new_period_ticks New period in OSAL ticks.
-    /// @return osal::ok() on success; osal::error_code::not_initialized if the handle is null.
+    /// @param[in] handle            Timer handle.
+    /// @param[in] new_period_ticks  New period in OSAL ticks.
+    /// @retval osal::ok()                         On success.
+    /// @retval osal::error_code::not_initialized  If the handle is null.
     osal::result osal_timer_set_period(osal::active_traits::timer_handle_t* handle,
                                        osal::tick_t                         new_period_ticks) noexcept
     {
@@ -869,32 +899,32 @@ extern "C"
     // ---------------------------------------------------------------------------
 
     /// @brief Create a wait-set (not supported on CMSIS-RTOS v1).
-    /// @return osal::error_code::not_supported always.
+    /// @retval osal::error_code::not_supported  Always.
     osal::result osal_wait_set_create(osal::active_traits::wait_set_handle_t*) noexcept
     {
         return osal::error_code::not_supported;
     }
     /// @brief Destroy a wait-set (not supported on CMSIS-RTOS v1).
-    /// @return osal::error_code::not_supported always.
+    /// @retval osal::error_code::not_supported  Always.
     osal::result osal_wait_set_destroy(osal::active_traits::wait_set_handle_t*) noexcept
     {
         return osal::error_code::not_supported;
     }
     /// @brief Add an object to a wait-set (not supported on CMSIS-RTOS v1).
-    /// @return osal::error_code::not_supported always.
+    /// @retval osal::error_code::not_supported  Always.
     osal::result osal_wait_set_add(osal::active_traits::wait_set_handle_t*, int, std::uint32_t) noexcept
     {
         return osal::error_code::not_supported;
     }
     /// @brief Remove an object from a wait-set (not supported on CMSIS-RTOS v1).
-    /// @return osal::error_code::not_supported always.
+    /// @retval osal::error_code::not_supported  Always.
     osal::result osal_wait_set_remove(osal::active_traits::wait_set_handle_t*, int) noexcept
     {
         return osal::error_code::not_supported;
     }
     /// @brief Wait on a wait-set for any registered object to signal (not supported on CMSIS-RTOS v1).
-    /// @param n Sets *n to 0.
-    /// @return osal::error_code::not_supported always.
+    /// @param[in] n  Sets *n to 0.
+    /// @retval osal::error_code::not_supported  Always.
     osal::result osal_wait_set_wait(osal::active_traits::wait_set_handle_t*, int*, std::size_t, std::size_t* n,
                                     osal::tick_t) noexcept
     {
@@ -922,10 +952,11 @@ extern "C"
     // ---------------------------------------------------------------------------
 
     /// @brief Create a fixed-block memory pool via osPoolCreate().
-    /// @param handle      Output handle populated with the cmsis1_pool_slot pointer.
-    /// @param block_size  Size in bytes of each block.
-    /// @param block_count Total number of blocks in the pool.
-    /// @return osal::ok() on success; osal::error_code::out_of_resources on failure.
+    /// @param[out] handle      Output handle populated with the cmsis1_pool_slot pointer.
+    /// @param[in] block_size   Size in bytes of each block.
+    /// @param[in] block_count  Total number of blocks in the pool.
+    /// @retval osal::ok()                          On success.
+    /// @retval osal::error_code::out_of_resources  On failure.
     osal::result osal_memory_pool_create(osal::active_traits::memory_pool_handle_t* handle, void* /*buffer*/,
                                          std::size_t /*buf_bytes*/, std::size_t block_size, std::size_t block_count,
                                          const char* /*name*/) noexcept
@@ -955,8 +986,8 @@ extern "C"
 
     /// @brief Release a memory pool slot.
     /// @details CMSIS-RTOS v1 has no osPoolDelete; only the tracking slot is freed.
-    /// @param handle Memory pool handle; no-op if null or already destroyed.
-    /// @return osal::ok() always.
+    /// @param[in,out] handle  Memory pool handle; no-op if null or already destroyed.
+    /// @retval osal::ok()  Always.
     osal::result osal_memory_pool_destroy(osal::active_traits::memory_pool_handle_t* handle) noexcept
     {
         if (handle == nullptr || handle->native == nullptr)
@@ -971,7 +1002,7 @@ extern "C"
     }
 
     /// @brief Allocate a block from the pool via osPoolAlloc() (non-blocking).
-    /// @param handle Memory pool handle.
+    /// @param[in] handle  Memory pool handle.
     /// @return Pointer to the allocated block, or nullptr if the pool is empty or the handle is invalid.
     void* osal_memory_pool_allocate(osal::active_traits::memory_pool_handle_t* handle) noexcept
     {
@@ -985,7 +1016,7 @@ extern "C"
 
     /// @brief Allocate a block with optional timeout (CMSIS-RTOS v1 is non-blocking only).
     /// @details Timeout is ignored; delegates to osal_memory_pool_allocate().
-    /// @param handle Memory pool handle.
+    /// @param[in] handle  Memory pool handle.
     /// @return Pointer to the allocated block, or nullptr if the pool is empty.
     void* osal_memory_pool_allocate_timed(osal::active_traits::memory_pool_handle_t* handle,
                                           osal::tick_t /*timeout*/) noexcept
@@ -995,9 +1026,11 @@ extern "C"
     }
 
     /// @brief Return a block to the pool via osPoolFree().
-    /// @param handle Memory pool handle.
-    /// @param block  Block pointer previously returned by osal_memory_pool_allocate().
-    /// @return osal::ok() on success; osal::error_code::not_initialized or ::unknown on failure.
+    /// @param[in] handle  Memory pool handle.
+    /// @param[in] block   Block pointer previously returned by osal_memory_pool_allocate().
+    /// @retval osal::ok()                         On success.
+    /// @retval osal::error_code::not_initialized  On failure.
+    /// @retval osal::error_code::unknown          On failure.
     osal::result osal_memory_pool_deallocate(osal::active_traits::memory_pool_handle_t* handle, void* block) noexcept
     {
         if (handle == nullptr || handle->native == nullptr)

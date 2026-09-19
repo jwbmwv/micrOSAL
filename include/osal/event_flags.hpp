@@ -97,19 +97,19 @@ public:
     // ---- control -----------------------------------------------------------
 
     /// @brief Sets one or more bits (OR operation).
-    /// @param bits  Bitmask of bits to set.
-    /// @return result::ok() on success.
+    /// @param[in] bits  Bitmask of bits to set.
+    /// @retval osal::ok() Bits were set successfully.
     [[nodiscard]] result set(event_bits_t bits) noexcept { return osal_event_flags_set(&handle_, bits); }
 
     /// @brief Sets bits from ISR context.
-    /// @param bits  Bitmask to set.
-    /// @return `error_code::not_supported` when the active backend lacks ISR-safe
-    ///         event-flag support.
+    /// @param[in] bits  Bitmask to set.
+    /// @retval osal::ok()                    Bits were set successfully.
+    /// @retval error_code::not_supported     The active backend lacks ISR-safe event-flag support.
     /// @warning Only call from an ISR when capabilities<active_backend>::has_isr_event_flags.
     [[nodiscard]] result set_isr(event_bits_t bits) noexcept { return osal_event_flags_set_isr(&handle_, bits); }
 
     /// @brief Clears one or more bits.
-    /// @param bits  Bitmask of bits to clear.
+    /// @param[in] bits  Bitmask of bits to clear.
     [[nodiscard]] result clear(event_bits_t bits) noexcept { return osal_event_flags_clear(&handle_, bits); }
 
     /// @brief Returns the current bitmask (non-blocking snapshot).
@@ -118,11 +118,12 @@ public:
     // ---- wait --------------------------------------------------------------
 
     /// @brief Waits until ANY of the specified bits are set.
-    /// @param      bits          Bits to wait for.
+    /// @param[in] bits           Bits to wait for.
     /// @param[out] actual_bits   Value of the group when unblocked (may be nullptr).
-    /// @param      clear_on_exit If true, clears the waited bits after returning.
-    /// @param      timeout       Maximum wait time.
-    /// @return result::ok() if any bit was set; error_code::timeout on expiry.
+    /// @param[in] clear_on_exit  If true, clears the waited bits after returning.
+    /// @param[in] timeout        Maximum wait time.
+    /// @retval osal::ok()           At least one requested bit was set.
+    /// @retval error_code::timeout  The wait expired.
     /// @complexity O(1)
     /// @blocking   Potentially blocking.
     [[nodiscard]] result wait_any(event_bits_t bits, event_bits_t* actual_bits = nullptr, bool clear_on_exit = false,
@@ -135,11 +136,12 @@ public:
     }
 
     /// @brief Waits until ALL of the specified bits are set.
-    /// @param      bits          Bits to wait for.
+    /// @param[in] bits           Bits to wait for.
     /// @param[out] actual_bits   Value of the group when unblocked (may be nullptr).
-    /// @param      clear_on_exit If true, atomically clears the waited bits.
-    /// @param      timeout       Maximum wait time.
-    /// @return result::ok() if all bits were set; error_code::timeout on expiry.
+    /// @param[in] clear_on_exit  If true, atomically clears the waited bits.
+    /// @param[in] timeout        Maximum wait time.
+    /// @retval osal::ok()           All requested bits were set.
+    /// @retval error_code::timeout  The wait expired.
     [[nodiscard]] result wait_all(event_bits_t bits, event_bits_t* actual_bits = nullptr, bool clear_on_exit = false,
                                   milliseconds timeout = milliseconds{-1}) noexcept
     {

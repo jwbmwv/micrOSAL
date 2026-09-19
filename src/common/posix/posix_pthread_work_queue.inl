@@ -90,13 +90,14 @@ static void* posix_wq_worker(void* arg) noexcept
 /// @details Spawns a dedicated `pthread` worker that dequeues and executes submitted
 ///          items in FIFO order using a heap-allocated ring buffer.  @p stack is
 ///          ignored (pthreads manage their own stacks).
-/// @param handle      Output handle; populated on success.
-/// @param stack       Ignored (POSIX pthreads manage their own stack).
-/// @param stack_bytes Ignored.
-/// @param depth       Maximum number of pending work items.
-/// @param name        Ignored (pthread naming requires optional OS support).
-/// @return `osal::ok()` on success, `error_code::invalid_argument` if null,
-///         `error_code::out_of_resources` on allocation or thread creation failure.
+/// @param[out] handle      Output handle; populated on success.
+/// @param[in] stack        Ignored (POSIX pthreads manage their own stack).
+/// @param[in] stack_bytes  Ignored.
+/// @param[in] depth        Maximum number of pending work items.
+/// @param[in] name         Ignored (pthread naming requires optional OS support).
+/// @retval osal::ok()                    On success.
+/// @retval error_code::invalid_argument  If null.
+/// @retval error_code::out_of_resources  On allocation or thread creation failure.
 osal::result osal_work_queue_create(osal::active_traits::work_queue_handle_t* handle, void* /*stack*/,
                                     std::size_t /*stack_bytes*/, std::size_t depth, const char* /*name*/) noexcept
 {
@@ -142,8 +143,8 @@ osal::result osal_work_queue_create(osal::active_traits::work_queue_handle_t* ha
 }
 
 /// @brief Destroy a POSIX work queue, stopping and joining the worker thread.
-/// @param handle Handle to destroy; silently ignored if null.
-/// @return Always `osal::ok()`.
+/// @param[in,out] handle  Handle to destroy; silently ignored if null.
+/// @retval osal::ok()  Always.
 osal::result osal_work_queue_destroy(osal::active_traits::work_queue_handle_t* handle) noexcept
 {
     if (!handle || !handle->native)
@@ -167,12 +168,13 @@ osal::result osal_work_queue_destroy(osal::active_traits::work_queue_handle_t* h
 }
 
 /// @brief Submit a work item to the queue (task context).
-/// @param handle Queue handle.
-/// @param func   Work function to call; must not be null.
-/// @param arg    Opaque argument passed to @p func.
-/// @return `osal::ok()` on success, `error_code::invalid_argument` if @p func is null,
-///         `error_code::overflow` if the ring is full,
-///         `error_code::not_initialized` if @p handle is null.
+/// @param[in] handle  Queue handle.
+/// @param[in] func    Work function to call; must not be null.
+/// @param[in] arg     Opaque argument passed to @p func.
+/// @retval osal::ok()                    On success.
+/// @retval error_code::invalid_argument  If @p func is null.
+/// @retval error_code::overflow          If the ring is full.
+/// @retval error_code::not_initialized   If @p handle is null.
 osal::result osal_work_queue_submit(osal::active_traits::work_queue_handle_t* handle, osal_work_func_t func,
                                     void* arg) noexcept
 {
@@ -200,7 +202,7 @@ osal::result osal_work_queue_submit(osal::active_traits::work_queue_handle_t* ha
 }
 
 /// @brief Submit a work item from ISR context — not supported.
-/// @return Always `error_code::not_supported`.
+/// @retval error_code::not_supported  Always.
 osal::result osal_work_queue_submit_from_isr(osal::active_traits::work_queue_handle_t* /*handle*/,
                                              osal_work_func_t /*func*/, void* /*arg*/) noexcept
 {
@@ -210,10 +212,12 @@ osal::result osal_work_queue_submit_from_isr(osal::active_traits::work_queue_han
 /// @brief Wait until all submitted items have been executed.
 /// @details Enqueues a sentinel item and uses `pthread_cond_timedwait` on a flush
 ///          condition variable to wait for the worker to process it.
-/// @param handle  Queue handle.
-/// @param timeout Maximum ticks to wait; use `osal::WAIT_FOREVER` for indefinite.
-/// @return `osal::ok()` when flushed, `error_code::timeout` on expiry,
-///         `error_code::overflow` if the ring is full, `error_code::not_initialized` if null.
+/// @param[in] handle   Queue handle.
+/// @param[in] timeout  Maximum ticks to wait; use `osal::WAIT_FOREVER` for indefinite.
+/// @retval osal::ok()                   When flushed.
+/// @retval error_code::timeout          On expiry.
+/// @retval error_code::overflow         If the ring is full.
+/// @retval error_code::not_initialized  If null.
 osal::result osal_work_queue_flush(osal::active_traits::work_queue_handle_t* handle, osal::tick_t timeout) noexcept
 {
     if (!handle || !handle->native)
@@ -259,8 +263,9 @@ osal::result osal_work_queue_flush(osal::active_traits::work_queue_handle_t* han
 }
 
 /// @brief Discard all pending (not yet started) work items.
-/// @param handle Queue handle.
-/// @return `osal::ok()` on success, `error_code::not_initialized` if null.
+/// @param[in] handle  Queue handle.
+/// @retval osal::ok()                   On success.
+/// @retval error_code::not_initialized  If null.
 osal::result osal_work_queue_cancel_all(osal::active_traits::work_queue_handle_t* handle) noexcept
 {
     if (!handle || !handle->native)
@@ -277,7 +282,7 @@ osal::result osal_work_queue_cancel_all(osal::active_traits::work_queue_handle_t
 }
 
 /// @brief Return the number of pending (not yet executed) work items.
-/// @param handle Queue handle (const).
+/// @param[in] handle  Queue handle (const).
 /// @return Item count, or 0 if @p handle is null.
 std::size_t osal_work_queue_pending(const osal::active_traits::work_queue_handle_t* handle) noexcept
 {

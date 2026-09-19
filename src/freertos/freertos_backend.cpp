@@ -88,7 +88,7 @@ static_assert(configTICK_RATE_HZ > 0, "MicrOSAL FreeRTOS backend requires config
 namespace
 {
 /// @brief Converts OSAL priority (0–255) to FreeRTOS priority.
-/// @param p OSAL priority value in the range [PRIORITY_LOWEST, PRIORITY_HIGHEST].
+/// @param[in] p  OSAL priority value in the range [PRIORITY_LOWEST, PRIORITY_HIGHEST].
 /// @return Equivalent FreeRTOS priority in [0, configMAX_PRIORITIES-1].
 constexpr UBaseType_t osal_to_freertos_priority(osal::priority_t p) noexcept
 {
@@ -99,7 +99,7 @@ constexpr UBaseType_t osal_to_freertos_priority(osal::priority_t p) noexcept
 }
 
 /// @brief Converts an OSAL tick count to a FreeRTOS @c TickType_t, mapping @c WAIT_FOREVER to @c portMAX_DELAY.
-/// @param t OSAL tick count or @c osal::WAIT_FOREVER.
+/// @param[in] t  OSAL tick count or @c osal::WAIT_FOREVER.
 /// @return Equivalent @c TickType_t for use with FreeRTOS blocking APIs.
 constexpr TickType_t to_freertos_ticks(osal::tick_t t) noexcept
 {
@@ -427,15 +427,15 @@ extern "C"
     ///          @c StaticTask_t followed by the actual stack words.  On the dynamic-alloc path
     ///          (@c OSAL_FREERTOS_DYNAMIC_ALLOC) a heap-allocated join context is created and
     ///          the provided @p stack is ignored.
-    /// @param handle   Output handle populated on success.
-    /// @param entry    Task entry function; must not return (or return is caught by wrapper).
-    /// @param arg      Passed verbatim to @p entry.
-    /// @param priority OSAL priority in [PRIORITY_LOWEST, PRIORITY_HIGHEST].
-    /// @param stack       Pointer to caller-supplied stack/TCB storage (ignored with dynamic alloc).
-    /// @param stack_bytes Total byte size of @p stack (must be >= @c default_stack_bytes).
-    /// @param name     Optional null-terminated task name (may be @c nullptr).
-    /// @return @c osal::ok() on success; @c error_code::out_of_resources if the kernel object
-    ///         could not be allocated.
+    /// @param[out] handle      Output handle populated on success.
+    /// @param[in] entry        Task entry function; must not return (or return is caught by wrapper).
+    /// @param[in] arg          Passed verbatim to @p entry.
+    /// @param[in] priority     OSAL priority in [PRIORITY_LOWEST, PRIORITY_HIGHEST].
+    /// @param[in] stack        Pointer to caller-supplied stack/TCB storage (ignored with dynamic alloc).
+    /// @param[in] stack_bytes  Total byte size of @p stack (must be >= @c default_stack_bytes).
+    /// @param[in] name         Optional null-terminated task name (may be @c nullptr).
+    /// @retval osal::ok()                    On success.
+    /// @retval error_code::out_of_resources  If the kernel object could not be allocated.
     osal::result osal_thread_create(osal::active_traits::thread_handle_t* handle, void (*entry)(void*), void* arg,
                                     osal::priority_t priority,
                                     osal::affinity_t /* affinity — not supported in single-core FreeRTOS */,
@@ -547,9 +547,10 @@ extern "C"
     /// @brief Waits for a task to finish and releases its resources.
     /// @details Both the static-alloc and dynamic-alloc paths wait for the task wrapper to
     ///          signal completion, then release the per-task join context.
-    /// @param handle Handle of the task to join; set to null on return.
-    /// @return @c osal::ok() on success; @c error_code::timeout if the wait expires;
-    ///         @c error_code::not_initialized if the handle is null or detached.
+    /// @param[in,out] handle  Handle of the task to join; set to null on return.
+    /// @retval osal::ok()                   On success.
+    /// @retval error_code::timeout          If the wait expires.
+    /// @retval error_code::not_initialized  If the handle is null or detached.
     osal::result osal_thread_join(osal::active_traits::thread_handle_t* handle, osal::tick_t timeout_ticks) noexcept
     {
         auto* ctx = fr_thread_ctx_from_handle(handle);
@@ -571,8 +572,9 @@ extern "C"
     /// @brief Detaches a task handle so the task manages its own lifecycle.
     /// @details Marks the task as detached; the wrapper frees the join context after the
     ///          task exits.  If the task already finished, cleanup happens immediately.
-    /// @param handle Handle to detach; native field set to @c nullptr.
-    /// @return @c osal::ok() on success; @c error_code::not_initialized if the handle is null.
+    /// @param[in,out] handle  Handle to detach; native field set to @c nullptr.
+    /// @retval osal::ok()                   On success.
+    /// @retval error_code::not_initialized  If the handle is null.
     osal::result osal_thread_detach(osal::active_traits::thread_handle_t* handle) noexcept
     {
         auto* ctx = fr_thread_ctx_from_handle(handle);
@@ -593,9 +595,10 @@ extern "C"
     }
 
     /// @brief Changes the priority of a running task.
-    /// @param handle   Handle of the target task.
-    /// @param priority New OSAL priority; converted via @c osal_to_freertos_priority().
-    /// @return @c osal::ok() on success; @c error_code::not_initialized if the handle is null.
+    /// @param[in] handle    Handle of the target task.
+    /// @param[in] priority  New OSAL priority; converted via @c osal_to_freertos_priority().
+    /// @retval osal::ok()                   On success.
+    /// @retval error_code::not_initialized  If the handle is null.
     osal::result osal_thread_set_priority(osal::active_traits::thread_handle_t* handle,
                                           osal::priority_t                      priority) noexcept
     {
@@ -611,7 +614,7 @@ extern "C"
     /// @brief Sets the CPU affinity of a task.
     /// @note  Single-core FreeRTOS does not support affinity; always returns
     ///        @c error_code::not_supported.
-    /// @return @c error_code::not_supported.
+    /// @retval error_code::not_supported  The operation is not supported.
     osal::result osal_thread_set_affinity(osal::active_traits::thread_handle_t* /* handle */,
                                           osal::affinity_t /* affinity */) noexcept
     {
@@ -733,9 +736,10 @@ extern "C"
 
     /// @brief Suspends a task, preventing it from being scheduled.
     /// @details Requires @c INCLUDE_vTaskSuspend == 1 in @c FreeRTOSConfig.h.
-    /// @param handle Handle of the task to suspend.
-    /// @return @c osal::ok() on success; @c error_code::not_initialized if the handle is null;
-    ///         @c error_code::not_supported if @c INCLUDE_vTaskSuspend is disabled.
+    /// @param[in] handle  Handle of the task to suspend.
+    /// @retval osal::ok()                   On success.
+    /// @retval error_code::not_initialized  If the handle is null.
+    /// @retval error_code::not_supported    If @c INCLUDE_vTaskSuspend is disabled.
     osal::result osal_thread_suspend(osal::active_traits::thread_handle_t* handle) noexcept
     {
         const TaskHandle_t task = fr_task_from_handle(handle);
@@ -753,9 +757,10 @@ extern "C"
 
     /// @brief Resumes a previously suspended task.
     /// @details Requires @c INCLUDE_vTaskSuspend == 1 in @c FreeRTOSConfig.h.
-    /// @param handle Handle of the task to resume.
-    /// @return @c osal::ok() on success; @c error_code::not_initialized if the handle is null;
-    ///         @c error_code::not_supported if @c INCLUDE_vTaskSuspend is disabled.
+    /// @param[in] handle  Handle of the task to resume.
+    /// @retval osal::ok()                   On success.
+    /// @retval error_code::not_initialized  If the handle is null.
+    /// @retval error_code::not_supported    If @c INCLUDE_vTaskSuspend is disabled.
     osal::result osal_thread_resume(osal::active_traits::thread_handle_t* handle) noexcept
     {
         const TaskHandle_t task = fr_task_from_handle(handle);
@@ -780,7 +785,7 @@ extern "C"
     /// @brief Blocks the calling task for at least @p ms milliseconds.
     /// @details Converts milliseconds to ticks using @c portTICK_PERIOD_MS; enforces a minimum
     ///          delay of one tick so the call always yields.
-    /// @param ms Sleep duration in milliseconds.
+    /// @param[in] ms  Sleep duration in milliseconds.
     void osal_thread_sleep_ms(std::uint32_t ms) noexcept
     {
         const TickType_t ticks = static_cast<TickType_t>(ms / portTICK_PERIOD_MS);
@@ -793,11 +798,11 @@ extern "C"
 
     /// @brief Creates a FreeRTOS mutex or recursive mutex.
     /// @details Uses static or dynamic allocation depending on @c OSAL_FREERTOS_DYNAMIC_ALLOC.
-    /// @param handle    Output handle populated on success.
-    /// @param recursive If @c true, creates a recursive mutex (xSemaphoreCreateRecursiveMutex);
+    /// @param[out] handle    Output handle populated on success.
+    /// @param[in] recursive  If @c true, creates a recursive mutex (xSemaphoreCreateRecursiveMutex);
     ///                  otherwise a standard mutex.
-    /// @return @c osal::ok() on success; @c error_code::out_of_resources if no pool slot is
-    ///         available or the kernel object could not be allocated.
+    /// @retval osal::ok()                    On success.
+    /// @retval error_code::out_of_resources  If no pool slot is available or the kernel object could not be allocated.
     osal::result osal_mutex_create(osal::active_traits::mutex_handle_t* handle, bool recursive) noexcept
     {
         assert(handle != nullptr);
@@ -837,8 +842,8 @@ extern "C"
     }
 
     /// @brief Deletes a mutex and, on the static path, releases its pool slot.
-    /// @param handle Handle to destroy; native field set to @c nullptr on return.
-    /// @return Always @c osal::ok().
+    /// @param[in,out] handle  Handle to destroy; native field set to @c nullptr on return.
+    /// @retval osal::ok()  Always.
     osal::result osal_mutex_destroy(osal::active_traits::mutex_handle_t* handle) noexcept
     {
         if (handle != nullptr && handle->native != nullptr)
@@ -856,10 +861,11 @@ extern "C"
     }
 
     /// @brief Acquires the mutex, blocking until @p timeout_ticks elapses.
-    /// @param handle        Handle of the mutex to lock.
-    /// @param timeout_ticks Maximum ticks to wait; use @c osal::WAIT_FOREVER to block indefinitely.
-    /// @return @c osal::ok() if the mutex was acquired; @c error_code::timeout if the wait
-    ///         expired; @c error_code::not_initialized if the handle is null.
+    /// @param[in] handle         Handle of the mutex to lock.
+    /// @param[in] timeout_ticks  Maximum ticks to wait; use @c osal::WAIT_FOREVER to block indefinitely.
+    /// @retval osal::ok()                   If the mutex was acquired.
+    /// @retval error_code::timeout          If the wait expired.
+    /// @retval error_code::not_initialized  If the handle is null.
     osal::result osal_mutex_lock(osal::active_traits::mutex_handle_t* handle, osal::tick_t timeout_ticks) noexcept
     {
         if (handle == nullptr || handle->native == nullptr)
@@ -872,16 +878,18 @@ extern "C"
     }
 
     /// @brief Attempts to acquire the mutex without blocking.
-    /// @param handle Handle of the mutex.
-    /// @return @c osal::ok() if acquired immediately; @c error_code::timeout if not available.
+    /// @param[in] handle  Handle of the mutex.
+    /// @retval osal::ok()           If acquired immediately.
+    /// @retval error_code::timeout  If not available.
     osal::result osal_mutex_try_lock(osal::active_traits::mutex_handle_t* handle) noexcept
     {
         return osal_mutex_lock(handle, osal::NO_WAIT);
     }
 
     /// @brief Releases a previously acquired mutex.
-    /// @param handle Handle of the mutex to unlock.
-    /// @return @c osal::ok() on success; @c error_code::not_initialized if the handle is null.
+    /// @param[in] handle  Handle of the mutex to unlock.
+    /// @retval osal::ok()                   On success.
+    /// @retval error_code::not_initialized  If the handle is null.
     osal::result osal_mutex_unlock(osal::active_traits::mutex_handle_t* handle) noexcept
     {
         if (handle == nullptr || handle->native == nullptr)
@@ -900,10 +908,11 @@ extern "C"
     /// @details A @p max_count of 1 creates a binary semaphore; greater values create a counting
     ///          semaphore with the specified ceiling.  Uses static or dynamic allocation according
     ///          to @c OSAL_FREERTOS_DYNAMIC_ALLOC.
-    /// @param handle        Output handle populated on success.
-    /// @param initial_count Initial signal count placed on the semaphore.
-    /// @param max_count     Maximum count the semaphore can reach.
-    /// @return @c osal::ok() on success; @c error_code::out_of_resources on allocation failure.
+    /// @param[out] handle        Output handle populated on success.
+    /// @param[in] initial_count  Initial signal count placed on the semaphore.
+    /// @param[in] max_count      Maximum count the semaphore can reach.
+    /// @retval osal::ok()                    On success.
+    /// @retval error_code::out_of_resources  On allocation failure.
     osal::result osal_semaphore_create(osal::active_traits::semaphore_handle_t* handle, unsigned initial_count,
                                        unsigned max_count) noexcept
     {
@@ -952,8 +961,8 @@ extern "C"
     }
 
     /// @brief Destroys a semaphore and releases its pool slot on the static-alloc path.
-    /// @param handle Handle to destroy; native field cleared on return.
-    /// @return Always @c osal::ok().
+    /// @param[in,out] handle  Handle to destroy; native field cleared on return.
+    /// @retval osal::ok()  Always.
     osal::result osal_semaphore_destroy(osal::active_traits::semaphore_handle_t* handle) noexcept
     {
         if (handle != nullptr && handle->native != nullptr)
@@ -968,9 +977,10 @@ extern "C"
     }
 
     /// @brief Signals (increments) the semaphore from a task context.
-    /// @param handle Handle of the semaphore.
-    /// @return @c osal::ok() on success; @c error_code::overflow if already at max count;
-    ///         @c error_code::not_initialized if the handle is null.
+    /// @param[in] handle  Handle of the semaphore.
+    /// @retval osal::ok()                   On success.
+    /// @retval error_code::overflow         If already at max count.
+    /// @retval error_code::not_initialized  If the handle is null.
     osal::result osal_semaphore_give(osal::active_traits::semaphore_handle_t* handle) noexcept
     {
         if (handle == nullptr || handle->native == nullptr)
@@ -984,9 +994,10 @@ extern "C"
     /// @brief Signals the semaphore from an ISR context.
     /// @details Calls @c xSemaphoreGiveFromISR and invokes @c portYIELD_FROM_ISR if a
     ///          higher-priority task was unblocked.
-    /// @param handle Handle of the semaphore.
-    /// @return @c osal::ok() on success; @c error_code::overflow if already at max count;
-    ///         @c error_code::not_initialized if the handle is null.
+    /// @param[in] handle  Handle of the semaphore.
+    /// @retval osal::ok()                   On success.
+    /// @retval error_code::overflow         If already at max count.
+    /// @retval error_code::not_initialized  If the handle is null.
     osal::result osal_semaphore_give_isr(osal::active_traits::semaphore_handle_t* handle) noexcept
     {
         if (handle == nullptr || handle->native == nullptr)
@@ -1000,10 +1011,11 @@ extern "C"
     }
 
     /// @brief Waits for the semaphore count to become non-zero, then decrements it.
-    /// @param handle        Handle of the semaphore.
-    /// @param timeout_ticks Maximum ticks to wait; @c osal::WAIT_FOREVER to block indefinitely.
-    /// @return @c osal::ok() if the semaphore was taken; @c error_code::timeout on expiry;
-    ///         @c error_code::not_initialized if the handle is null.
+    /// @param[in] handle         Handle of the semaphore.
+    /// @param[in] timeout_ticks  Maximum ticks to wait; @c osal::WAIT_FOREVER to block indefinitely.
+    /// @retval osal::ok()                   If the semaphore was taken.
+    /// @retval error_code::timeout          On expiry.
+    /// @retval error_code::not_initialized  If the handle is null.
     osal::result osal_semaphore_take(osal::active_traits::semaphore_handle_t* handle,
                                      osal::tick_t                             timeout_ticks) noexcept
     {
@@ -1017,8 +1029,9 @@ extern "C"
     }
 
     /// @brief Non-blocking attempt to take the semaphore.
-    /// @param handle Handle of the semaphore.
-    /// @return @c osal::ok() if taken immediately; @c error_code::timeout if not available.
+    /// @param[in] handle  Handle of the semaphore.
+    /// @retval osal::ok()           If taken immediately.
+    /// @retval error_code::timeout  If not available.
     osal::result osal_semaphore_try_take(osal::active_traits::semaphore_handle_t* handle) noexcept
     {
         return osal_semaphore_take(handle, osal::NO_WAIT);
@@ -1032,11 +1045,12 @@ extern "C"
     /// @details On the static-alloc path the backend obtains a @c StaticQueue_t
     ///          from its fixed control-block pool. @p buffer always contains
     ///          exactly @c capacity * @p item_size bytes of queue payload data.
-    /// @param handle    Output handle populated on success.
-    /// @param buffer    Caller-owned queue payload storage (ignored with dynamic alloc).
-    /// @param item_size Size in bytes of each queue element.
-    /// @param capacity  Maximum number of elements the queue can hold.
-    /// @return @c osal::ok() on success; @c error_code::out_of_resources on failure.
+    /// @param[out] handle    Output handle populated on success.
+    /// @param[in] buffer     Caller-owned queue payload storage (ignored with dynamic alloc).
+    /// @param[in] item_size  Size in bytes of each queue element.
+    /// @param[in] capacity   Maximum number of elements the queue can hold.
+    /// @retval osal::ok()                    On success.
+    /// @retval error_code::out_of_resources  On failure.
     osal::result osal_queue_create(osal::active_traits::queue_handle_t* handle, void* buffer, std::size_t item_size,
                                    std::size_t capacity) noexcept
     {
@@ -1066,8 +1080,8 @@ extern "C"
     }
 
     /// @brief Destroys a queue and frees its resources.
-    /// @param handle Handle to destroy; native field cleared on return.
-    /// @return Always @c osal::ok().
+    /// @param[in,out] handle  Handle to destroy; native field cleared on return.
+    /// @retval osal::ok()  Always.
     osal::result osal_queue_destroy(osal::active_traits::queue_handle_t* handle) noexcept
     {
         if (handle != nullptr && handle->native != nullptr)
@@ -1086,11 +1100,12 @@ extern "C"
     }
 
     /// @brief Posts an item to the back of the queue, blocking if full.
-    /// @param handle        Handle of the target queue.
-    /// @param item          Pointer to the item data to copy into the queue.
-    /// @param timeout_ticks Maximum ticks to block when the queue is full.
-    /// @return @c osal::ok() on success; @c error_code::timeout if the queue remained full;
-    ///         @c error_code::not_initialized if the handle is null.
+    /// @param[in] handle         Handle of the target queue.
+    /// @param[in] item           Pointer to the item data to copy into the queue.
+    /// @param[in] timeout_ticks  Maximum ticks to block when the queue is full.
+    /// @retval osal::ok()                   On success.
+    /// @retval error_code::timeout          If the queue remained full.
+    /// @retval error_code::not_initialized  If the handle is null.
     osal::result osal_queue_send(osal::active_traits::queue_handle_t* handle, const void* item,
                                  osal::tick_t timeout_ticks) noexcept
     {
@@ -1105,10 +1120,11 @@ extern "C"
 
     /// @brief Posts an item to the queue from an ISR context.
     /// @details Calls @c xQueueSendFromISR and yields if a higher-priority task was unblocked.
-    /// @param handle Handle of the target queue.
-    /// @param item   Pointer to the item data to copy.
-    /// @return @c osal::ok() on success; @c error_code::overflow if the queue was full;
-    ///         @c error_code::not_initialized if the handle is null.
+    /// @param[in] handle  Handle of the target queue.
+    /// @param[in] item    Pointer to the item data to copy.
+    /// @retval osal::ok()                   On success.
+    /// @retval error_code::overflow         If the queue was full.
+    /// @retval error_code::not_initialized  If the handle is null.
     osal::result osal_queue_send_isr(osal::active_traits::queue_handle_t* handle, const void* item) noexcept
     {
         if (handle == nullptr || handle->native == nullptr)
@@ -1122,11 +1138,12 @@ extern "C"
     }
 
     /// @brief Receives (removes) an item from the front of the queue, blocking if empty.
-    /// @param handle        Handle of the source queue.
-    /// @param item          Buffer to copy the received item into.
-    /// @param timeout_ticks Maximum ticks to wait for an item to become available.
-    /// @return @c osal::ok() on success; @c error_code::timeout on expiry;
-    ///         @c error_code::not_initialized if the handle is null.
+    /// @param[in] handle         Handle of the source queue.
+    /// @param[in] item           Buffer to copy the received item into.
+    /// @param[in] timeout_ticks  Maximum ticks to wait for an item to become available.
+    /// @retval osal::ok()                   On success.
+    /// @retval error_code::timeout          On expiry.
+    /// @retval error_code::not_initialized  If the handle is null.
     osal::result osal_queue_receive(osal::active_traits::queue_handle_t* handle, void* item,
                                     osal::tick_t timeout_ticks) noexcept
     {
@@ -1141,10 +1158,11 @@ extern "C"
 
     /// @brief Receives an item from the queue from an ISR context.
     /// @details Calls @c xQueueReceiveFromISR and yields if a higher-priority task was unblocked.
-    /// @param handle Handle of the source queue.
-    /// @param item   Buffer to copy the received item into.
-    /// @return @c osal::ok() on success; @c error_code::underflow if the queue was empty;
-    ///         @c error_code::not_initialized if the handle is null.
+    /// @param[in] handle  Handle of the source queue.
+    /// @param[in] item    Buffer to copy the received item into.
+    /// @retval osal::ok()                   On success.
+    /// @retval error_code::underflow        If the queue was empty.
+    /// @retval error_code::not_initialized  If the handle is null.
     osal::result osal_queue_receive_isr(osal::active_traits::queue_handle_t* handle, void* item) noexcept
     {
         if (handle == nullptr || handle->native == nullptr)
@@ -1159,11 +1177,12 @@ extern "C"
     }
 
     /// @brief Reads the front item without removing it from the queue.
-    /// @param handle        Handle of the queue.
-    /// @param item          Buffer to copy the peeked item into.
-    /// @param timeout_ticks Maximum ticks to wait if the queue is currently empty.
-    /// @return @c osal::ok() on success; @c error_code::would_block if no item is available;
-    ///         @c error_code::not_initialized if the handle is null.
+    /// @param[in] handle         Handle of the queue.
+    /// @param[in] item           Buffer to copy the peeked item into.
+    /// @param[in] timeout_ticks  Maximum ticks to wait if the queue is currently empty.
+    /// @retval osal::ok()                   On success.
+    /// @retval error_code::would_block      If no item is available.
+    /// @retval error_code::not_initialized  If the handle is null.
     osal::result osal_queue_peek(osal::active_traits::queue_handle_t* handle, void* item,
                                  osal::tick_t timeout_ticks) noexcept
     {
@@ -1177,7 +1196,7 @@ extern "C"
     }
 
     /// @brief Returns the number of items currently waiting in the queue.
-    /// @param handle Read-only handle of the queue.
+    /// @param[in] handle  Read-only handle of the queue.
     /// @return Item count, or 0 if the handle is null.
     std::size_t osal_queue_count(const osal::active_traits::queue_handle_t* handle) noexcept
     {
@@ -1189,7 +1208,7 @@ extern "C"
     }
 
     /// @brief Returns the number of free slots remaining in the queue.
-    /// @param handle Read-only handle of the queue.
+    /// @param[in] handle  Read-only handle of the queue.
     /// @return Free-slot count, or 0 if the handle is null.
     std::size_t osal_queue_free(const osal::active_traits::queue_handle_t* handle) noexcept
     {
@@ -1208,14 +1227,15 @@ extern "C"
     /// @details A small static callback-pair pool (@c OSAL_FREERTOS_MAX_TIMERS slots) is used to
     ///          bind the OSAL (@p callback, @p arg) pair to the FreeRTOS @c TimerHandle_t.
     ///          Uses static or dynamic timer allocation depending on @c OSAL_FREERTOS_DYNAMIC_ALLOC.
-    /// @param handle        Output handle populated on success.
-    /// @param name          Optional null-terminated timer name.
-    /// @param callback      Function invoked when the timer fires; must not be @c nullptr.
-    /// @param arg           Opaque argument forwarded to @p callback.
-    /// @param period_ticks  Timer period in scheduler ticks; must be > 0.
-    /// @param auto_reload   If @c true the timer restarts automatically after firing.
-    /// @return @c osal::ok() on success; @c error_code::out_of_resources if the callback pair
-    ///         pool or static pool is exhausted, or the kernel object could not be created.
+    /// @param[out] handle       Output handle populated on success.
+    /// @param[in] name          Optional null-terminated timer name.
+    /// @param[in] callback      Function invoked when the timer fires; must not be @c nullptr.
+    /// @param[in] arg           Opaque argument forwarded to @p callback.
+    /// @param[in] period_ticks  Timer period in scheduler ticks; must be > 0.
+    /// @param[in] auto_reload   If @c true the timer restarts automatically after firing.
+    /// @retval osal::ok()                    On success.
+    /// @retval error_code::out_of_resources  The callback pair pool, static pool, or kernel
+    ///                                         timer object could not be allocated.
     osal::result osal_timer_create(osal::active_traits::timer_handle_t* handle, const char* name,
                                    osal_timer_callback_t callback, void* arg, osal::tick_t period_ticks,
                                    bool auto_reload) noexcept
@@ -1276,8 +1296,8 @@ extern "C"
     }
 
     /// @brief Stops and deletes a software timer, releasing its callback pair slot.
-    /// @param handle Handle to destroy; native field cleared on return.
-    /// @return Always @c osal::ok().
+    /// @param[in,out] handle  Handle to destroy; native field cleared on return.
+    /// @retval osal::ok()  Always.
     osal::result osal_timer_destroy(osal::active_traits::timer_handle_t* handle) noexcept
     {
         if (handle != nullptr && handle->native != nullptr)
@@ -1300,9 +1320,10 @@ extern "C"
     }
 
     /// @brief Starts (or restarts) a software timer.
-    /// @param handle Handle of the timer.
-    /// @return @c osal::ok() on success; @c error_code::unknown if the command could not be
-    ///         queued to the timer daemon; @c error_code::not_initialized if the handle is null.
+    /// @param[in] handle  Handle of the timer.
+    /// @retval osal::ok()                   On success.
+    /// @retval error_code::unknown          If the command could not be queued to the timer daemon.
+    /// @retval error_code::not_initialized  If the handle is null.
     osal::result osal_timer_start(osal::active_traits::timer_handle_t* handle) noexcept
     {
         if (handle == nullptr || handle->native == nullptr)
@@ -1314,8 +1335,9 @@ extern "C"
     }
 
     /// @brief Stops a running software timer without deleting it.
-    /// @param handle Handle of the timer.
-    /// @return @c osal::ok() on success; @c error_code::not_initialized if the handle is null.
+    /// @param[in] handle  Handle of the timer.
+    /// @retval osal::ok()                   On success.
+    /// @retval error_code::not_initialized  If the handle is null.
     osal::result osal_timer_stop(osal::active_traits::timer_handle_t* handle) noexcept
     {
         if (handle == nullptr || handle->native == nullptr)
@@ -1327,9 +1349,10 @@ extern "C"
     }
 
     /// @brief Resets the timer, restarting its period from now.
-    /// @param handle Handle of the timer.
-    /// @return @c osal::ok() on success; @c error_code::unknown if the daemon queue is full;
-    ///         @c error_code::not_initialized if the handle is null.
+    /// @param[in] handle  Handle of the timer.
+    /// @retval osal::ok()                   On success.
+    /// @retval error_code::unknown          If the daemon queue is full.
+    /// @retval error_code::not_initialized  If the handle is null.
     osal::result osal_timer_reset(osal::active_traits::timer_handle_t* handle) noexcept
     {
         if (handle == nullptr || handle->native == nullptr)
@@ -1342,10 +1365,11 @@ extern "C"
 
     /// @brief Changes the period of an existing timer.
     /// @details The change is posted to the timer daemon and takes effect at the next expiry.
-    /// @param handle          Handle of the timer.
-    /// @param new_period_ticks New period in scheduler ticks; must be > 0.
-    /// @return @c osal::ok() on success; @c error_code::unknown if the daemon queue is full;
-    ///         @c error_code::not_initialized if the handle is null.
+    /// @param[in] handle            Handle of the timer.
+    /// @param[in] new_period_ticks  New period in scheduler ticks; must be > 0.
+    /// @retval osal::ok()                   On success.
+    /// @retval error_code::unknown          If the daemon queue is full.
+    /// @retval error_code::not_initialized  If the handle is null.
     osal::result osal_timer_set_period(osal::active_traits::timer_handle_t* handle,
                                        osal::tick_t                         new_period_ticks) noexcept
     {
@@ -1359,7 +1383,7 @@ extern "C"
     }
 
     /// @brief Queries whether a timer is currently running.
-    /// @param handle Read-only handle of the timer.
+    /// @param[in] handle  Read-only handle of the timer.
     /// @return @c true if the timer is active (counting down); @c false otherwise or if null.
     bool osal_timer_is_active(const osal::active_traits::timer_handle_t* handle) noexcept
     {
@@ -1376,8 +1400,9 @@ extern "C"
 
     /// @brief Creates a FreeRTOS event group.
     /// @details Uses static or dynamic allocation depending on @c OSAL_FREERTOS_DYNAMIC_ALLOC.
-    /// @param handle Output handle populated on success.
-    /// @return @c osal::ok() on success; @c error_code::out_of_resources on failure.
+    /// @param[out] handle  Output handle populated on success.
+    /// @retval osal::ok()                    On success.
+    /// @retval error_code::out_of_resources  On failure.
     osal::result osal_event_flags_create(osal::active_traits::event_flags_handle_t* handle) noexcept
     {
         assert(handle != nullptr);
@@ -1400,8 +1425,8 @@ extern "C"
     }
 
     /// @brief Destroys an event group and releases its pool slot on the static-alloc path.
-    /// @param handle Handle to destroy; native field cleared on return.
-    /// @return Always @c osal::ok().
+    /// @param[in,out] handle  Handle to destroy; native field cleared on return.
+    /// @retval osal::ok()  Always.
     osal::result osal_event_flags_destroy(osal::active_traits::event_flags_handle_t* handle) noexcept
     {
         if (handle != nullptr && handle->native != nullptr)
@@ -1416,9 +1441,10 @@ extern "C"
     }
 
     /// @brief Atomically sets one or more bits in the event group.
-    /// @param handle Handle of the event group.
-    /// @param bits   Bitmask of bits to set.
-    /// @return @c osal::ok() on success; @c error_code::not_initialized if the handle is null.
+    /// @param[in] handle  Handle of the event group.
+    /// @param[in] bits    Bitmask of bits to set.
+    /// @retval osal::ok()                   On success.
+    /// @retval error_code::not_initialized  If the handle is null.
     osal::result osal_event_flags_set(osal::active_traits::event_flags_handle_t* handle,
                                       osal::event_bits_t                         bits) noexcept
     {
@@ -1431,9 +1457,10 @@ extern "C"
     }
 
     /// @brief Atomically clears one or more bits in the event group.
-    /// @param handle Handle of the event group.
-    /// @param bits   Bitmask of bits to clear.
-    /// @return @c osal::ok() on success; @c error_code::not_initialized if the handle is null.
+    /// @param[in] handle  Handle of the event group.
+    /// @param[in] bits    Bitmask of bits to clear.
+    /// @retval osal::ok()                   On success.
+    /// @retval error_code::not_initialized  If the handle is null.
     osal::result osal_event_flags_clear(osal::active_traits::event_flags_handle_t* handle,
                                         osal::event_bits_t                         bits) noexcept
     {
@@ -1446,7 +1473,7 @@ extern "C"
     }
 
     /// @brief Returns the current value of the event group bits without modifying them.
-    /// @param handle Read-only handle of the event group.
+    /// @param[in] handle  Read-only handle of the event group.
     /// @return Current bit pattern, or 0 if the handle is null.
     osal::event_bits_t osal_event_flags_get(const osal::active_traits::event_flags_handle_t* handle) noexcept
     {
@@ -1458,13 +1485,14 @@ extern "C"
     }
 
     /// @brief Waits until at least one of the specified bits becomes set.
-    /// @param handle        Handle of the event group.
-    /// @param wait_bits     Bitmask of bits to watch for.
-    /// @param actual_bits   Optional output: bit pattern at the time of return.
-    /// @param clear_on_exit If @c true, matched bits are atomically cleared before returning.
-    /// @param timeout_ticks Maximum ticks to wait.
-    /// @return @c osal::ok() if any watched bit was set; @c error_code::timeout on expiry;
-    ///         @c error_code::not_initialized if the handle is null.
+    /// @param[in] handle         Handle of the event group.
+    /// @param[in] wait_bits      Bitmask of bits to watch for.
+    /// @param[out] actual_bits   Optional output: bit pattern at the time of return.
+    /// @param[in] clear_on_exit  If @c true, matched bits are atomically cleared before returning.
+    /// @param[in] timeout_ticks  Maximum ticks to wait.
+    /// @retval osal::ok()                   If any watched bit was set.
+    /// @retval error_code::timeout          On expiry.
+    /// @retval error_code::not_initialized  If the handle is null.
     osal::result osal_event_flags_wait_any(osal::active_traits::event_flags_handle_t* handle,
                                            osal::event_bits_t wait_bits, osal::event_bits_t* actual_bits,
                                            bool clear_on_exit, osal::tick_t timeout_ticks) noexcept
@@ -1486,13 +1514,14 @@ extern "C"
     }
 
     /// @brief Waits until all of the specified bits are simultaneously set.
-    /// @param handle        Handle of the event group.
-    /// @param wait_bits     Bitmask — every bit must be set before the call returns.
-    /// @param actual_bits   Optional output: bit pattern at the time of return.
-    /// @param clear_on_exit If @c true, all watched bits are cleared atomically on exit.
-    /// @param timeout_ticks Maximum ticks to wait.
-    /// @return @c osal::ok() if all watched bits were set; @c error_code::timeout on expiry;
-    ///         @c error_code::not_initialized if the handle is null.
+    /// @param[in] handle         Handle of the event group.
+    /// @param[in] wait_bits      Bitmask — every bit must be set before the call returns.
+    /// @param[out] actual_bits   Optional output: bit pattern at the time of return.
+    /// @param[in] clear_on_exit  If @c true, all watched bits are cleared atomically on exit.
+    /// @param[in] timeout_ticks  Maximum ticks to wait.
+    /// @retval osal::ok()                   If all watched bits were set.
+    /// @retval error_code::timeout          On expiry.
+    /// @retval error_code::not_initialized  If the handle is null.
     osal::result osal_event_flags_wait_all(osal::active_traits::event_flags_handle_t* handle,
                                            osal::event_bits_t wait_bits, osal::event_bits_t* actual_bits,
                                            bool clear_on_exit, osal::tick_t timeout_ticks) noexcept
@@ -1517,9 +1546,10 @@ extern "C"
 
     /// @brief Sets event-group bits from an ISR context.
     /// @details Calls @c xEventGroupSetBitsFromISR and yields if a higher-priority task was unblocked.
-    /// @param handle Handle of the event group.
-    /// @param bits   Bitmask of bits to set.
-    /// @return @c osal::ok() on success; @c error_code::not_initialized if the handle is null.
+    /// @param[in] handle  Handle of the event group.
+    /// @param[in] bits    Bitmask of bits to set.
+    /// @retval osal::ok()                   On success.
+    /// @retval error_code::not_initialized  If the handle is null.
     osal::result osal_event_flags_set_isr(osal::active_traits::event_flags_handle_t* handle,
                                           osal::event_bits_t                         bits) noexcept
     {
@@ -1539,33 +1569,33 @@ extern "C"
     // ---------------------------------------------------------------------------
 
     /// @brief Wait-set creation — not supported on FreeRTOS.
-    /// @return Always @c error_code::not_supported.
+    /// @retval error_code::not_supported  Always.
     osal::result osal_wait_set_create(osal::active_traits::wait_set_handle_t* /* handle */) noexcept
     {
         return osal::error_code::not_supported;
     }
     /// @brief Wait-set destruction — not supported on FreeRTOS.
-    /// @return Always @c error_code::not_supported.
+    /// @retval error_code::not_supported  Always.
     osal::result osal_wait_set_destroy(osal::active_traits::wait_set_handle_t* /* handle */) noexcept
     {
         return osal::error_code::not_supported;
     }
     /// @brief Add a descriptor to a wait-set — not supported on FreeRTOS.
-    /// @return Always @c error_code::not_supported.
+    /// @retval error_code::not_supported  Always.
     osal::result osal_wait_set_add(osal::active_traits::wait_set_handle_t* /* h */, int /* fd */,
                                    std::uint32_t /* ev */) noexcept
     {
         return osal::error_code::not_supported;
     }
     /// @brief Remove a descriptor from a wait-set — not supported on FreeRTOS.
-    /// @return Always @c error_code::not_supported.
+    /// @retval error_code::not_supported  Always.
     osal::result osal_wait_set_remove(osal::active_traits::wait_set_handle_t* /* h */, int /* fd */) noexcept
     {
         return osal::error_code::not_supported;
     }
     /// @brief Wait for events on a wait-set — not supported on FreeRTOS.
-    /// @param n Set to 0 if non-null.
-    /// @return Always @c error_code::not_supported.
+    /// @param[out] n  Set to 0 if non-null.
+    /// @retval error_code::not_supported  Always.
     osal::result osal_wait_set_wait(osal::active_traits::wait_set_handle_t* /* h */, int* /* ids */,
                                     std::size_t /* max */, std::size_t* n, osal::tick_t /* timeout */) noexcept
     {
@@ -1608,13 +1638,14 @@ extern "C"
     /// @details On the static-alloc path the @p buffer is used for ring-storage and a pool slot
     ///          provides the @c StaticStreamBuffer_t control block.  On the dynamic path
     ///          @p buffer is ignored.
-    /// @param handle        Output handle populated on success.
-    /// @param buffer        Pointer to @p capacity bytes of raw storage (ignored with dynamic alloc).
-    /// @param capacity      Byte capacity of the stream buffer.
-    /// @param trigger_level Minimum bytes that must be available before a blocked receiver wakes
+    /// @param[out] handle        Output handle populated on success.
+    /// @param[in] buffer         Pointer to @p capacity bytes of raw storage (ignored with dynamic alloc).
+    /// @param[in] capacity       Byte capacity of the stream buffer.
+    /// @param[in] trigger_level  Minimum bytes that must be available before a blocked receiver wakes
     ///                      (clamped to 1 if 0).
-    /// @return @c osal::ok() on success; @c error_code::invalid_argument for bad parameters;
-    ///         @c error_code::out_of_resources if the pool or kernel allocation failed.
+    /// @retval osal::ok()                    On success.
+    /// @retval error_code::invalid_argument  For bad parameters.
+    /// @retval error_code::out_of_resources  If the pool or kernel allocation failed.
     osal::result osal_stream_buffer_create(osal::active_traits::stream_buffer_handle_t* handle, void* buffer,
                                            std::size_t capacity, std::size_t trigger_level) noexcept
     {
@@ -1652,8 +1683,9 @@ extern "C"
     }
 
     /// @brief Destroys a stream buffer and releases its pool slot on the static-alloc path.
-    /// @param handle Handle to destroy; native field cleared on return.
-    /// @return @c osal::ok() on success; @c error_code::not_initialized if the handle is null.
+    /// @param[in,out] handle  Handle to destroy; native field cleared on return.
+    /// @retval osal::ok()                   On success.
+    /// @retval error_code::not_initialized  If the handle is null.
     osal::result osal_stream_buffer_destroy(osal::active_traits::stream_buffer_handle_t* handle) noexcept
     {
         if (handle == nullptr || handle->native == nullptr)
@@ -1670,12 +1702,13 @@ extern "C"
     }
 
     /// @brief Writes bytes into the stream buffer, blocking if insufficient space is available.
-    /// @param handle        Handle of the stream buffer.
-    /// @param data          Pointer to the data to send.
-    /// @param len           Number of bytes to send.
-    /// @param timeout_ticks Maximum ticks to wait for space.
-    /// @return @c osal::ok() if all bytes were written; @c error_code::timeout if not all bytes
-    ///         could be sent; @c error_code::invalid_argument for bad parameters.
+    /// @param[in] handle         Handle of the stream buffer.
+    /// @param[in] data           Pointer to the data to send.
+    /// @param[in] len            Number of bytes to send.
+    /// @param[in] timeout_ticks  Maximum ticks to wait for space.
+    /// @retval osal::ok()                    If all bytes were written.
+    /// @retval error_code::timeout           If not all bytes could be sent.
+    /// @retval error_code::invalid_argument  For bad parameters.
     osal::result osal_stream_buffer_send(osal::active_traits::stream_buffer_handle_t* handle, const void* data,
                                          std::size_t len, osal::tick_t timeout_ticks) noexcept
     {
@@ -1691,11 +1724,12 @@ extern "C"
 
     /// @brief Writes bytes into the stream buffer from an ISR context.
     /// @details Calls @c xStreamBufferSendFromISR and yields if a higher-priority task was unblocked.
-    /// @param handle Handle of the stream buffer.
-    /// @param data   Pointer to the data to send.
-    /// @param len    Number of bytes to send.
-    /// @return @c osal::ok() if all @p len bytes were sent; @c error_code::timeout if fewer were
-    ///         accepted; @c error_code::invalid_argument for bad parameters.
+    /// @param[in] handle  Handle of the stream buffer.
+    /// @param[in] data    Pointer to the data to send.
+    /// @param[in] len     Number of bytes to send.
+    /// @retval osal::ok()                    If all @p len bytes were sent.
+    /// @retval error_code::timeout           If fewer were accepted.
+    /// @retval error_code::invalid_argument  For bad parameters.
     osal::result osal_stream_buffer_send_isr(osal::active_traits::stream_buffer_handle_t* handle, const void* data,
                                              std::size_t len) noexcept
     {
@@ -1711,10 +1745,10 @@ extern "C"
     }
 
     /// @brief Reads up to @p max_len bytes from the stream buffer, blocking if empty.
-    /// @param handle        Handle of the stream buffer.
-    /// @param buf           Destination buffer.
-    /// @param max_len       Maximum bytes to read.
-    /// @param timeout_ticks Maximum ticks to wait for data.
+    /// @param[in] handle         Handle of the stream buffer.
+    /// @param[out] buf           Destination buffer.
+    /// @param[in] max_len        Maximum bytes to read.
+    /// @param[in] timeout_ticks  Maximum ticks to wait for data.
     /// @return Number of bytes actually read, or 0 if the handle is null or no data arrived.
     std::size_t osal_stream_buffer_receive(osal::active_traits::stream_buffer_handle_t* handle, void* buf,
                                            std::size_t max_len, osal::tick_t timeout_ticks) noexcept
@@ -1729,9 +1763,9 @@ extern "C"
 
     /// @brief Reads bytes from the stream buffer in an ISR context.
     /// @details Calls @c xStreamBufferReceiveFromISR and yields if a higher-priority task was unblocked.
-    /// @param handle  Handle of the stream buffer.
-    /// @param buf     Destination buffer.
-    /// @param max_len Maximum bytes to read.
+    /// @param[in] handle   Handle of the stream buffer.
+    /// @param[out] buf     Destination buffer.
+    /// @param[in] max_len  Maximum bytes to read.
     /// @return Number of bytes actually read, or 0 on invalid parameters.
     std::size_t osal_stream_buffer_receive_isr(osal::active_traits::stream_buffer_handle_t* handle, void* buf,
                                                std::size_t max_len) noexcept
@@ -1748,7 +1782,7 @@ extern "C"
     }
 
     /// @brief Returns the number of bytes currently stored in the stream buffer.
-    /// @param handle Read-only handle of the stream buffer.
+    /// @param[in] handle  Read-only handle of the stream buffer.
     /// @return Bytes available, or 0 if the handle is null.
     std::size_t osal_stream_buffer_available(const osal::active_traits::stream_buffer_handle_t* handle) noexcept
     {
@@ -1760,7 +1794,7 @@ extern "C"
     }
 
     /// @brief Returns the number of bytes that can still be written to the stream buffer.
-    /// @param handle Read-only handle of the stream buffer.
+    /// @param[in] handle  Read-only handle of the stream buffer.
     /// @return Free bytes, or 0 if the handle is null.
     std::size_t osal_stream_buffer_free_space(const osal::active_traits::stream_buffer_handle_t* handle) noexcept
     {
@@ -1774,8 +1808,9 @@ extern "C"
     /// @brief Resets a stream buffer to its empty state.
     /// @details Any data remaining in the buffer is discarded.  Should only be called when no
     ///          tasks are blocked on the buffer.
-    /// @param handle Handle of the stream buffer.
-    /// @return @c osal::ok() on success; @c error_code::not_initialized if the handle is null.
+    /// @param[in] handle  Handle of the stream buffer.
+    /// @retval osal::ok()                   On success.
+    /// @retval error_code::not_initialized  If the handle is null.
     osal::result osal_stream_buffer_reset(osal::active_traits::stream_buffer_handle_t* handle) noexcept
     {
         if (handle == nullptr || handle->native == nullptr)
@@ -1794,11 +1829,12 @@ extern "C"
     /// @details Message buffers store variable-length, length-prefixed messages.  On the
     ///          static-alloc path @p buffer provides the ring storage and a pool slot provides
     ///          the control block.  On the dynamic path @p buffer is ignored.
-    /// @param handle   Output handle populated on success.
-    /// @param buffer   Pointer to @p capacity bytes of raw storage (ignored with dynamic alloc).
-    /// @param capacity Byte capacity of the message buffer (total, including length fields).
-    /// @return @c osal::ok() on success; @c error_code::invalid_argument for bad parameters;
-    ///         @c error_code::out_of_resources on allocation failure.
+    /// @param[out] handle   Output handle populated on success.
+    /// @param[in] buffer    Pointer to @p capacity bytes of raw storage (ignored with dynamic alloc).
+    /// @param[in] capacity  Byte capacity of the message buffer (total, including length fields).
+    /// @retval osal::ok()                    On success.
+    /// @retval error_code::invalid_argument  For bad parameters.
+    /// @retval error_code::out_of_resources  On allocation failure.
     osal::result osal_message_buffer_create(osal::active_traits::message_buffer_handle_t* handle, void* buffer,
                                             std::size_t capacity) noexcept
     {
@@ -1833,8 +1869,9 @@ extern "C"
     }
 
     /// @brief Destroys a message buffer and releases its pool slot on the static-alloc path.
-    /// @param handle Handle to destroy; native field cleared on return.
-    /// @return @c osal::ok() on success; @c error_code::not_initialized if the handle is null.
+    /// @param[in,out] handle  Handle to destroy; native field cleared on return.
+    /// @retval osal::ok()                   On success.
+    /// @retval error_code::not_initialized  If the handle is null.
     osal::result osal_message_buffer_destroy(osal::active_traits::message_buffer_handle_t* handle) noexcept
     {
         if (handle == nullptr || handle->native == nullptr)
@@ -1852,12 +1889,13 @@ extern "C"
 
     /// @brief Sends a discrete message into the message buffer, blocking if insufficient space.
     /// @details The entire message (up to @p len bytes) is written atomically with a length prefix.
-    /// @param handle        Handle of the message buffer.
-    /// @param msg           Pointer to the message data.
-    /// @param len           Number of bytes in the message.
-    /// @param timeout_ticks Maximum ticks to wait for space.
-    /// @return @c osal::ok() if the full message was written; @c error_code::timeout if not;
-    ///         @c error_code::invalid_argument for bad parameters.
+    /// @param[in] handle         Handle of the message buffer.
+    /// @param[in] msg            Pointer to the message data.
+    /// @param[in] len            Number of bytes in the message.
+    /// @param[in] timeout_ticks  Maximum ticks to wait for space.
+    /// @retval osal::ok()                    If the full message was written.
+    /// @retval error_code::timeout           If not.
+    /// @retval error_code::invalid_argument  For bad parameters.
     osal::result osal_message_buffer_send(osal::active_traits::message_buffer_handle_t* handle, const void* msg,
                                           std::size_t len, osal::tick_t timeout_ticks) noexcept
     {
@@ -1873,11 +1911,12 @@ extern "C"
 
     /// @brief Sends a message into the message buffer from an ISR context.
     /// @details Calls @c xMessageBufferSendFromISR and yields if a higher-priority task was unblocked.
-    /// @param handle Handle of the message buffer.
-    /// @param msg    Pointer to the message data.
-    /// @param len    Number of bytes in the message.
-    /// @return @c osal::ok() if the full message was written; @c error_code::timeout if not;
-    ///         @c error_code::invalid_argument for bad parameters.
+    /// @param[in] handle  Handle of the message buffer.
+    /// @param[in] msg     Pointer to the message data.
+    /// @param[in] len     Number of bytes in the message.
+    /// @retval osal::ok()                    If the full message was written.
+    /// @retval error_code::timeout           If not.
+    /// @retval error_code::invalid_argument  For bad parameters.
     osal::result osal_message_buffer_send_isr(osal::active_traits::message_buffer_handle_t* handle, const void* msg,
                                               std::size_t len) noexcept
     {
@@ -1893,10 +1932,10 @@ extern "C"
     }
 
     /// @brief Receives the next message from the message buffer, blocking if empty.
-    /// @param handle        Handle of the message buffer.
-    /// @param buf           Destination buffer; must be large enough for the next message.
-    /// @param max_len       Size of @p buf in bytes.
-    /// @param timeout_ticks Maximum ticks to wait for a message.
+    /// @param[in] handle         Handle of the message buffer.
+    /// @param[out] buf           Destination buffer; must be large enough for the next message.
+    /// @param[in] max_len        Size of @p buf in bytes.
+    /// @param[in] timeout_ticks  Maximum ticks to wait for a message.
     /// @return Number of bytes in the received message, or 0 if the handle is null / no message arrived.
     std::size_t osal_message_buffer_receive(osal::active_traits::message_buffer_handle_t* handle, void* buf,
                                             std::size_t max_len, osal::tick_t timeout_ticks) noexcept
@@ -1911,9 +1950,9 @@ extern "C"
 
     /// @brief Receives a message from the message buffer in an ISR context.
     /// @details Calls @c xMessageBufferReceiveFromISR and yields if a higher-priority task was unblocked.
-    /// @param handle  Handle of the message buffer.
-    /// @param buf     Destination buffer.
-    /// @param max_len Size of @p buf in bytes.
+    /// @param[in] handle   Handle of the message buffer.
+    /// @param[out] buf     Destination buffer.
+    /// @param[in] max_len  Size of @p buf in bytes.
     /// @return Number of bytes in the received message, or 0 on invalid parameters.
     std::size_t osal_message_buffer_receive_isr(osal::active_traits::message_buffer_handle_t* handle, void* buf,
                                                 std::size_t max_len) noexcept
@@ -1931,7 +1970,7 @@ extern "C"
 
     /// @brief Returns the byte count of the next queued message (0 if the buffer is empty).
     /// @details Uses @c xStreamBufferNextMessageLengthBytes internally.
-    /// @param handle Read-only handle of the message buffer.
+    /// @param[in] handle  Read-only handle of the message buffer.
     /// @return Byte count of the next message, or 0 if the buffer is empty or the handle is null.
     std::size_t osal_message_buffer_available(const osal::active_traits::message_buffer_handle_t* handle) noexcept
     {
@@ -1945,7 +1984,7 @@ extern "C"
     }
 
     /// @brief Returns the number of bytes that can still be written to the message buffer.
-    /// @param handle Read-only handle of the message buffer.
+    /// @param[in] handle  Read-only handle of the message buffer.
     /// @return Free bytes, or 0 if the handle is null.
     std::size_t osal_message_buffer_free_space(const osal::active_traits::message_buffer_handle_t* handle) noexcept
     {
@@ -1958,8 +1997,9 @@ extern "C"
 
     /// @brief Resets a message buffer to its empty state, discarding all pending messages.
     /// @details Should only be called when no tasks are blocked on the buffer.
-    /// @param handle Handle of the message buffer.
-    /// @return @c osal::ok() on success; @c error_code::not_initialized if the handle is null.
+    /// @param[in] handle  Handle of the message buffer.
+    /// @retval osal::ok()                   On success.
+    /// @retval error_code::not_initialized  If the handle is null.
     osal::result osal_message_buffer_reset(osal::active_traits::message_buffer_handle_t* handle) noexcept
     {
         if (handle == nullptr || handle->native == nullptr)
@@ -1986,9 +2026,10 @@ extern "C"
 
     /// @brief Sends a direct-to-task notification via @c xTaskNotify.
     /// @details Uses @c eSetValueWithOverwrite so the value is always accepted.
-    /// @param handle Handle of the target task.
-    /// @param value  32-bit notification value.
-    /// @return @c osal::ok() on success; @c error_code::not_initialized if null.
+    /// @param[in] handle  Handle of the target task.
+    /// @param[in] value   32-bit notification value.
+    /// @retval osal::ok()                   On success.
+    /// @retval error_code::not_initialized  If null.
     osal::result osal_task_notify(osal::active_traits::thread_handle_t* handle, std::uint32_t value) noexcept
     {
         const TaskHandle_t task = fr_task_from_handle(handle);
@@ -2002,9 +2043,10 @@ extern "C"
 
     /// @brief Sends a direct-to-task notification from ISR context via @c xTaskNotifyFromISR.
     /// @details Yields to a higher-priority task if one was unblocked.
-    /// @param handle Handle of the target task.
-    /// @param value  32-bit notification value.
-    /// @return @c osal::ok() on success; @c error_code::not_initialized if null.
+    /// @param[in] handle  Handle of the target task.
+    /// @param[in] value   32-bit notification value.
+    /// @retval osal::ok()                   On success.
+    /// @retval error_code::not_initialized  If null.
     osal::result osal_task_notify_isr(osal::active_traits::thread_handle_t* handle, std::uint32_t value) noexcept
     {
         const TaskHandle_t task = fr_task_from_handle(handle);
@@ -2019,11 +2061,12 @@ extern "C"
     }
 
     /// @brief Waits for a direct-to-task notification on the calling task via @c xTaskNotifyWait.
-    /// @param clear_on_entry  Bits to clear in the notification value before waiting.
-    /// @param clear_on_exit   Bits to clear in the notification value after a successful receive.
-    /// @param value_out       Receives the 32-bit notification value (may be @c nullptr).
-    /// @param timeout_ticks   Maximum ticks to wait; @c osal::WAIT_FOREVER to block indefinitely.
-    /// @return @c osal::ok() if notified; @c error_code::timeout if the wait expired.
+    /// @param[in] clear_on_entry  Bits to clear in the notification value before waiting.
+    /// @param[in] clear_on_exit   Bits to clear in the notification value after a successful receive.
+    /// @param[out] value_out      Receives the 32-bit notification value (may be @c nullptr).
+    /// @param[in] timeout_ticks   Maximum ticks to wait; @c osal::WAIT_FOREVER to block indefinitely.
+    /// @retval osal::ok()           If notified.
+    /// @retval error_code::timeout  If the wait expired.
     osal::result osal_task_notify_wait(std::uint32_t clear_on_entry, std::uint32_t clear_on_exit,
                                        std::uint32_t* value_out, osal::tick_t timeout_ticks) noexcept
     {

@@ -75,9 +75,10 @@ static void emu_rw_release(emulated_rwlock_obj* p) noexcept
 /// @brief Create an emulated read-write lock.
 /// @details Internally allocates a guard mutex and a condvar from their
 ///          respective OSAL pools.
-/// @param handle Output handle; populated on success.
-/// @return `osal::ok()` on success, `error_code::invalid_argument` if null,
-///         `error_code::out_of_resources` if the pool is exhausted.
+/// @param[out] handle  Output handle; populated on success.
+/// @retval osal::ok()                    On success.
+/// @retval error_code::invalid_argument  If null.
+/// @retval error_code::out_of_resources  If the pool is exhausted.
 osal::result osal_rwlock_create(osal::active_traits::rwlock_handle_t* handle) noexcept
 {
     if (!handle) [[unlikely]]
@@ -112,8 +113,8 @@ osal::result osal_rwlock_create(osal::active_traits::rwlock_handle_t* handle) no
 }
 
 /// @brief Destroy an emulated read-write lock and release its pool slot.
-/// @param handle Handle to destroy; silently ignored if null.
-/// @return Always `osal::ok()`.
+/// @param[in,out] handle  Handle to destroy; silently ignored if null.
+/// @retval osal::ok()  Always.
 osal::result osal_rwlock_destroy(osal::active_traits::rwlock_handle_t* handle) noexcept
 {
     if (!handle || !handle->native) [[unlikely]]
@@ -131,10 +132,11 @@ osal::result osal_rwlock_destroy(osal::active_traits::rwlock_handle_t* handle) n
 
 /// @brief Acquire the read lock, blocking until no writer holds the lock.
 /// @details Multiple readers may hold the lock concurrently.
-/// @param handle        RW-lock handle.
-/// @param timeout_ticks Maximum ticks to wait; use `osal::WAIT_FOREVER` for indefinite.
-/// @return `osal::ok()` on acquisition, `error_code::timeout` on expiry,
-///         `error_code::not_initialized` if @p handle is null.
+/// @param[in] handle         RW-lock handle.
+/// @param[in] timeout_ticks  Maximum ticks to wait; use `osal::WAIT_FOREVER` for indefinite.
+/// @retval osal::ok()                   On acquisition.
+/// @retval error_code::timeout          On expiry.
+/// @retval error_code::not_initialized  If @p handle is null.
 osal::result osal_rwlock_read_lock(osal::active_traits::rwlock_handle_t* handle, osal::tick_t timeout_ticks) noexcept
 {
     if (!handle || !handle->native) [[unlikely]]
@@ -189,9 +191,10 @@ osal::result osal_rwlock_read_lock(osal::active_traits::rwlock_handle_t* handle,
 
 /// @brief Release a previously acquired read lock.
 /// @details If this is the last active reader, waiting writers are broadcast.
-/// @param handle RW-lock handle.
-/// @return `osal::ok()` on success, `error_code::invalid_argument` if not read-locked,
-///         `error_code::not_initialized` if null.
+/// @param[in] handle  RW-lock handle.
+/// @retval osal::ok()                    On success.
+/// @retval error_code::invalid_argument  If not read-locked.
+/// @retval error_code::not_initialized   If null.
 osal::result osal_rwlock_read_unlock(osal::active_traits::rwlock_handle_t* handle) noexcept
 {
     if (!handle || !handle->native) [[unlikely]]
@@ -217,10 +220,11 @@ osal::result osal_rwlock_read_unlock(osal::active_traits::rwlock_handle_t* handl
 }
 
 /// @brief Acquire the write lock exclusively (no readers or other writers).
-/// @param handle        RW-lock handle.
-/// @param timeout_ticks Maximum ticks to wait; use `osal::WAIT_FOREVER` for indefinite.
-/// @return `osal::ok()` on acquisition, `error_code::timeout` on expiry,
-///         `error_code::not_initialized` if @p handle is null.
+/// @param[in] handle         RW-lock handle.
+/// @param[in] timeout_ticks  Maximum ticks to wait; use `osal::WAIT_FOREVER` for indefinite.
+/// @retval osal::ok()                   On acquisition.
+/// @retval error_code::timeout          On expiry.
+/// @retval error_code::not_initialized  If @p handle is null.
 osal::result osal_rwlock_write_lock(osal::active_traits::rwlock_handle_t* handle, osal::tick_t timeout_ticks) noexcept
 {
     if (!handle || !handle->native) [[unlikely]]
@@ -271,9 +275,10 @@ osal::result osal_rwlock_write_lock(osal::active_traits::rwlock_handle_t* handle
 }
 
 /// @brief Release the write lock and broadcast to all waiters.
-/// @param handle RW-lock handle.
-/// @return `osal::ok()` on success, `error_code::invalid_argument` if not write-locked,
-///         `error_code::not_initialized` if null.
+/// @param[in] handle  RW-lock handle.
+/// @retval osal::ok()                    On success.
+/// @retval error_code::invalid_argument  If not write-locked.
+/// @retval error_code::not_initialized   If null.
 osal::result osal_rwlock_write_unlock(osal::active_traits::rwlock_handle_t* handle) noexcept
 {
     if (!handle || !handle->native) [[unlikely]]

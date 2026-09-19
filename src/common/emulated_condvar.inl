@@ -85,9 +85,10 @@ static void emu_cv_release(emulated_condvar_obj* p) noexcept
 // --- public extern "C" functions -------------------------------------------
 
 /// @brief Create an emulated condition variable.
-/// @param handle Output handle; populated on success.
-/// @return `osal::ok()` on success, `error_code::invalid_argument` if @p handle is null,
-///         `error_code::out_of_resources` if the pool is exhausted.
+/// @param[out] handle  Output handle; populated on success.
+/// @retval osal::ok()                    On success.
+/// @retval error_code::invalid_argument  If @p handle is null.
+/// @retval error_code::out_of_resources  If the pool is exhausted.
 osal::result osal_condvar_create(osal::active_traits::condvar_handle_t* handle) noexcept
 {
     if (!handle) [[unlikely]]
@@ -138,8 +139,8 @@ osal::result osal_condvar_create(osal::active_traits::condvar_handle_t* handle) 
 }
 
 /// @brief Destroy an emulated condition variable and release its pool slot.
-/// @param handle Handle to destroy; silently ignored if null or already destroyed.
-/// @return Always `osal::ok()`.
+/// @param[in,out] handle  Handle to destroy; silently ignored if null or already destroyed.
+/// @retval osal::ok()  Always.
 osal::result osal_condvar_destroy(osal::active_traits::condvar_handle_t* handle) noexcept
 {
     if (!handle || !handle->native) [[unlikely]]
@@ -162,12 +163,13 @@ osal::result osal_condvar_destroy(osal::active_traits::condvar_handle_t* handle)
 /// @details Follows Birrell's condvar pattern: registers the caller in the waiter
 ///          array, releases @p mutex, blocks on a per-slot binary semaphore, then
 ///          re-acquires @p mutex before returning.
-/// @param handle Condvar handle.
-/// @param mutex  Mutex currently held by the caller; released during wait.
-/// @param timeout Maximum ticks to wait; use `osal::WAIT_FOREVER` for indefinite.
-/// @return `osal::ok()` on notification, `error_code::timeout` on expiry,
-///         `error_code::not_initialized` if either handle is null,
-///         `error_code::out_of_resources` if the waiter pool is full.
+/// @param[in] handle   Condvar handle.
+/// @param[in] mutex    Mutex currently held by the caller; released during wait.
+/// @param[in] timeout  Maximum ticks to wait; use `osal::WAIT_FOREVER` for indefinite.
+/// @retval osal::ok()                    On notification.
+/// @retval error_code::timeout           On expiry.
+/// @retval error_code::not_initialized   If either handle is null.
+/// @retval error_code::out_of_resources  If the waiter pool is full.
 osal::result osal_condvar_wait(osal::active_traits::condvar_handle_t* handle,
                                osal::active_traits::mutex_handle_t* mutex, osal::tick_t timeout) noexcept
 {
@@ -219,8 +221,9 @@ osal::result osal_condvar_wait(osal::active_traits::condvar_handle_t* handle,
 }
 
 /// @brief Wake the oldest thread waiting on this condvar (signal semantics).
-/// @param handle Condvar handle.
-/// @return `osal::ok()` on success, `error_code::not_initialized` if null.
+/// @param[in] handle  Condvar handle.
+/// @retval osal::ok()                   On success.
+/// @retval error_code::not_initialized  If null.
 osal::result osal_condvar_notify_one(osal::active_traits::condvar_handle_t* handle) noexcept
 {
     if (!handle || !handle->native) [[unlikely]]
@@ -248,8 +251,9 @@ osal::result osal_condvar_notify_one(osal::active_traits::condvar_handle_t* hand
 }
 
 /// @brief Wake all threads waiting on this condvar (broadcast semantics).
-/// @param handle Condvar handle.
-/// @return `osal::ok()` on success, `error_code::not_initialized` if null.
+/// @param[in] handle  Condvar handle.
+/// @retval osal::ok()                   On success.
+/// @retval error_code::not_initialized  If null.
 osal::result osal_condvar_notify_all(osal::active_traits::condvar_handle_t* handle) noexcept
 {
     if (!handle || !handle->native) [[unlikely]]

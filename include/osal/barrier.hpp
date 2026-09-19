@@ -32,9 +32,9 @@ extern "C"
     osal::result osal_barrier_destroy(osal::active_traits::barrier_handle_t* handle) noexcept;
 
     /// @brief Blocks until @a count threads have called osal_barrier_wait().
-    /// @return result::ok() for the first N-1 threads;
-    ///         error_code::barrier_serial for the last thread (the "serial" thread
-    ///         conventionally responsible for resetting shared state before others proceed).
+    /// @retval osal::ok()                       Returned to the first N-1 threads.
+    /// @retval osal::error_code::barrier_serial Returned to the final serial thread, conventionally
+    ///                                            responsible for resetting shared state before others proceed.
     osal::result osal_barrier_wait(osal::active_traits::barrier_handle_t* handle) noexcept;
 }  // extern "C"
 
@@ -57,7 +57,7 @@ public:
     // ---- construction / destruction ----------------------------------------
 
     /// @brief Constructs and initialises the barrier.
-    /// @param count  Number of threads that must call wait() before any
+    /// @param[in] count  Number of threads that must call wait() before any
     ///               are released.  Must be >= 1.
     /// @complexity O(1)
     /// @blocking   Never.
@@ -90,10 +90,9 @@ public:
     // ---- operations --------------------------------------------------------
 
     /// @brief Waits until all @a count threads have arrived at this barrier.
-    /// @return result::ok() for the first N-1 threads;
-    ///         result(error_code::barrier_serial) for the last thread (the
-    ///         "serial" thread — conventionally responsible for resetting shared
-    ///         state before others proceed);
+    /// @retval osal::ok()                       Returned to the first N-1 threads.
+    /// @retval osal::error_code::barrier_serial Returned to the final serial thread, conventionally
+    ///                                            responsible for resetting shared state before others proceed.
     /// @complexity O(1)
     /// @blocking   Until all participants arrive.
     [[nodiscard]] result wait() noexcept

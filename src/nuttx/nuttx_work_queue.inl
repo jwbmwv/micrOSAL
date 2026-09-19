@@ -102,12 +102,12 @@ static void nuttx_work_trampoline(void* arg) noexcept
 /// @brief Create a native NuttX work queue.
 /// @details Uses NuttX's shared LPWORK queue for execution. The stack
 ///          parameter is ignored as NuttX manages work queue threads internally.
-/// @param handle Output handle.
-/// @param stack Ignored (NuttX manages work queue threads).
-/// @param stack_bytes Ignored.
-/// @param depth Maximum number of pending work items.
-/// @param name Ignored (NuttX work queues don't have user-visible names).
-/// @return osal::ok() on success, error_code otherwise.
+/// @param[out] handle      Output handle.
+/// @param[in] stack        Ignored (NuttX manages work queue threads).
+/// @param[in] stack_bytes  Ignored.
+/// @param[in] depth        Maximum number of pending work items.
+/// @param[in] name         Ignored (NuttX work queues don't have user-visible names).
+/// @retval osal::ok()  On success, error_code otherwise.
 osal::result osal_work_queue_create(osal::active_traits::work_queue_handle_t* handle, void* /*stack*/,
                                     std::size_t /*stack_bytes*/, std::size_t depth, const char* /*name*/) noexcept
 {
@@ -148,8 +148,8 @@ osal::result osal_work_queue_create(osal::active_traits::work_queue_handle_t* ha
 
 /// @brief Destroy a native NuttX work queue.
 /// @details Cancels all pending work items and releases the queue.
-/// @param handle Work queue handle.
-/// @return osal::ok() on success.
+/// @param[in] handle  Work queue handle.
+/// @retval osal::ok()  On success.
 osal::result osal_work_queue_destroy(osal::active_traits::work_queue_handle_t* handle) noexcept
 {
     if (!handle || !handle->native)
@@ -186,10 +186,11 @@ osal::result osal_work_queue_destroy(osal::active_traits::work_queue_handle_t* h
 }
 
 /// @brief Submit a work item to the NuttX work queue.
-/// @param handle Work queue handle.
-/// @param func Work function to execute.
-/// @param arg Argument passed to the work function.
-/// @return osal::ok() on success, error_code::out_of_resources if queue is full.
+/// @param[in] handle  Work queue handle.
+/// @param[in] func    Work function to execute.
+/// @param[in] arg     Argument passed to the work function.
+/// @retval osal::ok()                    On success.
+/// @retval error_code::out_of_resources  If queue is full.
 osal::result osal_work_queue_submit(osal::active_traits::work_queue_handle_t* handle, osal_work_func_t func,
                                     void* arg) noexcept
 {
@@ -248,10 +249,10 @@ osal::result osal_work_queue_submit(osal::active_traits::work_queue_handle_t* ha
 
 /// @brief Submit a work item from ISR context.
 /// @details NuttX work_queue() is ISR-safe, so this is identical to regular submit.
-/// @param handle Work queue handle.
-/// @param func Work function to execute.
-/// @param arg Argument passed to the work function.
-/// @return osal::ok() on success.
+/// @param[in] handle  Work queue handle.
+/// @param[in] func    Work function to execute.
+/// @param[in] arg     Argument passed to the work function.
+/// @retval osal::ok()  On success.
 osal::result osal_work_queue_submit_from_isr(osal::active_traits::work_queue_handle_t* handle, osal_work_func_t func,
                                              void* arg) noexcept
 {
@@ -260,9 +261,10 @@ osal::result osal_work_queue_submit_from_isr(osal::active_traits::work_queue_han
 }
 
 /// @brief Flush the work queue, waiting for all pending items to complete.
-/// @param handle Work queue handle.
-/// @param timeout_ticks Maximum time to wait (currently ignored, waits indefinitely).
-/// @return osal::ok() on success, error_code::timeout if items remain pending.
+/// @param[in] handle         Work queue handle.
+/// @param[in] timeout_ticks  Maximum time to wait (currently ignored, waits indefinitely).
+/// @retval osal::ok()           On success.
+/// @retval error_code::timeout  If items remain pending.
 osal::result osal_work_queue_flush(osal::active_traits::work_queue_handle_t* handle,
                                    osal::tick_t /*timeout_ticks*/) noexcept
 {
@@ -308,8 +310,8 @@ osal::result osal_work_queue_flush(osal::active_traits::work_queue_handle_t* han
 }
 
 /// @brief Cancel all pending work items.
-/// @param handle Work queue handle.
-/// @return osal::ok() on success.
+/// @param[in] handle  Work queue handle.
+/// @retval osal::ok()  On success.
 osal::result osal_work_queue_cancel_all(osal::active_traits::work_queue_handle_t* handle) noexcept
 {
     if (!handle || !handle->native)
@@ -340,7 +342,7 @@ osal::result osal_work_queue_cancel_all(osal::active_traits::work_queue_handle_t
 }
 
 /// @brief Query the number of pending work items.
-/// @param handle Work queue handle.
+/// @param[in] handle  Work queue handle.
 /// @return Number of pending items, or 0 on error.
 std::size_t osal_work_queue_pending(const osal::active_traits::work_queue_handle_t* handle) noexcept
 {

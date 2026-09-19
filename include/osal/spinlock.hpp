@@ -99,8 +99,8 @@ public:
     // ---- operations --------------------------------------------------------
 
     /// @brief Acquires the spinlock, busy-waiting until it is free.
-    /// @return result::ok() on success; error_code::not_supported if the backend
-    ///         does not provide a native spinlock.
+    /// @retval osal::ok()                    The spinlock was acquired.
+    /// @retval error_code::not_supported     The backend does not provide a native spinlock.
     /// @warning Do NOT call from interrupt context on all backends.
     /// @complexity O(1) amortised (busy-waits until acquired).
     /// @blocking   Spins until acquired.

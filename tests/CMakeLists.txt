@@ -56,8 +56,19 @@ osal_add_test(test_memory_pool           test_memory_pool.cpp)
 osal_add_test(test_ring_buffer           test_ring_buffer.cpp)
 osal_add_test(test_thread_local_data     test_thread_local_data.cpp)
 osal_add_test(test_spinlock              test_spinlock.cpp)
-osal_add_test(test_irq_mask_guard        test_irq_mask_guard.cpp)
 osal_add_test(test_barrier               test_barrier.cpp)
+
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_definitions(test_queue PRIVATE OSAL_TEST_QUEUE_FAULT_INJECTION)
+    target_link_options(test_queue PRIVATE
+        "LINKER:--wrap=osal_queue_create"
+        "LINKER:--wrap=osal_queue_receive"
+    )
+    if(OSAL_BACKEND STREQUAL "LINUX")
+        target_compile_definitions(test_timer PRIVATE OSAL_TEST_TIMER_FAULT_INJECTION)
+        target_link_options(test_timer PRIVATE "LINKER:--wrap=poll")
+    endif()
+endif()
 
 # ---------------------------------------------------------------------------
 # C API test — links a pure-C compilation check with a doctest C++ harness

@@ -30,18 +30,25 @@ package "osal (core)" #F5F5F5 {
     }
 
     class result <<value>> {
-        +error_code code
+                -code_ : error_code
+                +code() : error_code {constexpr}
         +ok() : bool {constexpr}
-        +operator bool() {constexpr}
+                +explicit operator bool() {constexpr}
+                +and_then(callback) : result {constexpr}
+                +transform(callback) : result {constexpr}
+                +or_else(callback) : result {constexpr}
+                +to_expected() : expected<void, error_code> {C++23 library}
     }
 
     class clock_utils <<static>> {
-        +{static} ms_to_ticks(ms) : tick_t
+                +{static} ms_to_ticks(ms : milliseconds) : tick_t
     }
 
     note right of result
-      Returned by every
-      fallible OSAL operation.
+            Status callbacks must return result.
+            transform is a status-only synonym for and_then.
+            Value chaining uses to_expected().
+            Optional adapters follow library feature macros.
       sizeof(result) == sizeof(int32_t)
     end note
 }
@@ -233,13 +240,19 @@ package "osal (primitives)" #E3F2FD {
         --
         +queue()
         +~queue()
-        +send(item&, ms) : result
-        +send_isr(item&) : result
-        +receive(item&, ms) : result
-        +receive_isr(item&) : result
-        +peek(item&) : result
+        +send(item&) : result
+        +try_send(item&) : bool
+        +send_for(item&, ms) : bool
+        +send_isr(item&) : bool
+        +receive(item&) : result
+        +try_receive(item&) : bool
+        +receive_for(item&, ms) : bool
+        +receive_isr(item&) : bool
+        +receive_expected() : expected<T, error_code> {C++23 library}
+        +try_receive_expected() : expected<T, error_code> {C++23 library}
+        +peek(item&) : bool
         +count() : size_t
-        +free() : size_t
+        +free_slots() : size_t
         +valid() : bool
     }
 

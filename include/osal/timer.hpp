@@ -9,6 +9,11 @@
 ///          - Callbacks are invoked in the backend's timer task / ISR context.
 ///          - Callbacks must be short and non-blocking (embedded rule).
 ///          - Timer resolution is backend-specific (typically RTOS tick period).
+///          - Periodic cadence and callback serialization are backend-specific.
+///            The generic POSIX backend (POSIX, RTEMS, and INTEGRITY) serializes
+///            callbacks with fixed-delay scheduling: the next full period begins
+///            after the preceding callback returns. It neither overlaps callbacks
+///            nor replays missed expirations.
 ///          - All operations are O(1) and noexcept.
 /// @copyright Copyright (c) 2026 James Baldwin. AI-assisted — see NOTICE.
 /// @author James Baldwin
@@ -22,7 +27,7 @@
 #include <cstdint>
 
 /// @brief Timer callback function pointer type.
-/// @param arg User-defined argument passed at timer creation.
+/// @param[in] arg  User-defined argument passed at timer creation.
 using osal_timer_callback_t = void (*)(void* arg);
 
 extern "C"
@@ -103,11 +108,11 @@ public:
     // ---- construction / destruction ----------------------------------------
 
     /// @brief Constructs the timer (does not start it).
-    /// @param callback  Function to call on expiry.
-    /// @param arg       Opaque argument forwarded to callback.
-    /// @param period    Timer period.
-    /// @param mode      one_shot or periodic.
-    /// @param name      Debug name (may be nullptr).
+    /// @param[in] callback  Function to call on expiry.
+    /// @param[in] arg       Opaque argument forwarded to callback.
+    /// @param[in] period    Timer period.
+    /// @param[in] mode      one_shot or periodic.
+    /// @param[in] name      Debug name (may be nullptr).
     /// @complexity O(1)
     timer(osal_timer_callback_t callback, void* arg, milliseconds period, timer_mode mode = timer_mode::one_shot,
           const char* name = nullptr) noexcept
@@ -121,7 +126,7 @@ public:
     }
 
     /// @brief Constructs from an immutable config (config may reside in FLASH).
-    /// @param cfg  Configuration — typically declared @c const / @c constexpr.
+    /// @param[in] cfg  Configuration — typically declared @c const / @c constexpr.
     /// @complexity O(1)
     explicit timer(const timer_config& cfg) noexcept : valid_(false)
     {
@@ -153,8 +158,8 @@ public:
     // ---- control -----------------------------------------------------------
 
     /// @brief Starts the timer.
-    /// @return result::ok() on success; error_code::not_supported if timers
-    ///         are unavailable on this backend.
+    /// @retval osal::ok()                The timer was started successfully.
+    /// @retval error_code::not_supported Timers are unavailable on the active backend.
     [[nodiscard]] result start() noexcept
     {
         if constexpr (timer_backend<active_backend>)
@@ -185,7 +190,7 @@ public:
     }
 
     /// @brief Changes the timer period without restarting it.
-    /// @param period New period.
+    /// @param[in] period  New period.
     [[nodiscard]] result set_period(milliseconds period) noexcept
     {
         if constexpr (timer_backend<active_backend>)

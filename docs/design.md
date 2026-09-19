@@ -200,7 +200,7 @@ in the header inlines straight into the call:
 
 ```cpp
 inline osal::result mutex::lock() noexcept {
-    return osal_mutex_lock(&handle_, clock_utils::ms_to_ticks(/* infinite */osal::WAIT_FOREVER));
+    return osal_mutex_lock(&handle_, osal::WAIT_FOREVER);
 }
 ```
 
@@ -213,7 +213,8 @@ while the C++ API is header-only.
 
 ### `osal::tick_t`
 
-A `uint32_t` count of OS ticks.  Special values:
+An unsigned OS tick count, configured as 16, 32, or 64 bits through
+`OSAL_TICK_WIDTH` (32 bits by default). Special values:
 
 | Value | Meaning |
 | --- | --- |
@@ -224,19 +225,31 @@ A `uint32_t` count of OS ticks.  Special values:
 
 ```cpp
 struct result {
-    error_code code;
-    constexpr bool ok() const noexcept { return code == error_code::ok; }
-    constexpr operator bool() const noexcept { return ok(); }
+    constexpr result() noexcept = default;
+    constexpr result(error_code code) noexcept : code_(code) {}
+    constexpr bool ok() const noexcept { return code_ == error_code::ok; }
+    constexpr error_code code() const noexcept { return code_; }
+    constexpr explicit operator bool() const noexcept { return ok(); }
+
+private:
+    error_code code_{error_code::ok};
 };
-constexpr result ok() noexcept { return { error_code::ok }; }
+constexpr result ok() noexcept { return {}; }
 ```
+
+This abbreviated view omits comparison and chaining methods. The C++20
+`and_then`, `transform`, and `or_else` helpers are status-only and require
+`result`-returning callbacks. `transform` is a status-chaining synonym, not a
+value-mapping operation. Standard value/error chaining is available through
+`to_expected()` with a supporting standard library; see the
+[optional C++ feature contracts](RELEASE_CONTRACT.md#optional-c-features).
 
 ### `clock_utils`
 
 Defined in `include/osal/clock.hpp`.  The key function:
 
 ```cpp
-static constexpr tick_t ms_to_ticks(std::uint32_t ms) noexcept;
+static tick_t ms_to_ticks(milliseconds ms) noexcept;
 ```
 
 It calls `osal_clock_tick_period_us()` which is provided by each backend and
