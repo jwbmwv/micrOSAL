@@ -67,6 +67,11 @@ target_compile_definitions(microsal PUBLIC
 
 if(OSAL_FREERTOS_TEST_DYNAMIC_ALLOC)
     target_compile_definitions(microsal PUBLIC OSAL_FREERTOS_DYNAMIC_ALLOC)
+else()
+    target_compile_definitions(microsal PRIVATE
+        OSAL_FREERTOS_MAX_MUTEXES=32
+        OSAL_FREERTOS_MAX_SEMAPHORES=32
+    )
 endif()
 
 target_link_libraries(microsal PUBLIC freertos_kernel)
