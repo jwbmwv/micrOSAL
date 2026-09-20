@@ -568,7 +568,7 @@ osal::result osal_event_flags_wait_all(osal::active_traits::event_flags_handle_t
 /// @param[in] handle  Event-flags handle.
 /// @param[in] bits    Bit mask to OR into the current flags.
 /// @retval osal::ok()                   On success.
-/// @retval error_code::not_supported    When ISR event flags are unavailable,.
+/// @retval error_code::not_supported    When ISR event flags are unavailable.
 /// @retval error_code::not_initialized  If null.
 osal::result osal_event_flags_set_isr(osal::active_traits::event_flags_handle_t* handle,
                                       osal::event_bits_t                         bits) noexcept

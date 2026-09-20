@@ -721,7 +721,7 @@ extern "C"
     /// @brief Increment the semaphore count atomically without exceeding its maximum.
     /// @param[in] handle  Semaphore handle.
     /// @retval osal::ok()                   On success.
-    /// @retval error_code::overflow         At the maximum count,.
+    /// @retval error_code::overflow         At the maximum count.
     /// @retval error_code::not_initialized  If the handle is invalid.
     osal::result osal_semaphore_give(osal::active_traits::semaphore_handle_t* handle) noexcept
     {

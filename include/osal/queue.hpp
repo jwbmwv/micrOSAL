@@ -210,7 +210,7 @@ public:
         const result status = receive(item);
         if (status.ok())
         {
-            return item;
+            return std::move(item);
         }
         return std::unexpected(status.code());
     }
@@ -228,7 +228,7 @@ public:
         const result status = osal_queue_receive(&handle_, &item, NO_WAIT);
         if (status.ok())
         {
-            return item;
+            return std::move(item);
         }
         return std::unexpected(status.code());
     }
