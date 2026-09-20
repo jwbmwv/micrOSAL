@@ -228,7 +228,7 @@ struct clock_utils
     ///   - @p ms ≤ 0  →  @c NO_WAIT  (non-blocking / poll)
     ///   - Conversion result ≥ @c WAIT_FOREVER  →  saturated to
     ///     @c WAIT_FOREVER - 1, preserving the "infinite wait" sentinel.
-    /// @param ms  Duration. Negative values are treated as zero-wait.
+    /// @param[in] ms  Duration. Negative values are treated as zero-wait.
     /// @return RTOS tick count in [@c NO_WAIT, @c WAIT_FOREVER - 1].
     static tick_t ms_to_ticks(milliseconds ms) noexcept
     {
@@ -245,13 +245,23 @@ struct clock_utils
             return static_cast<tick_t>((raw < static_cast<std::uint64_t>(kMax)) ? raw : kMax);
         }
         // Round up: ceil(ms * 1000 / period_us), then saturate.
-        const std::uint64_t us    = static_cast<std::uint64_t>(ms.count()) * 1000U;
-        const std::uint64_t ticks = (us + period_us - 1U) / period_us;
+        constexpr std::uint64_t kMicrosecondsPerMillisecond = 1'000U;
+        const auto              raw_milliseconds            = static_cast<std::uint64_t>(ms.count());
+        const std::uint64_t     milliseconds_quotient       = raw_milliseconds / period_us;
+        const std::uint64_t     milliseconds_remainder      = raw_milliseconds % period_us;
+        const std::uint64_t     remainder_ticks =
+            ((milliseconds_remainder * kMicrosecondsPerMillisecond) + period_us - 1U) / period_us;
+        const auto max_ticks = static_cast<std::uint64_t>(kMax);
+        if (milliseconds_quotient > ((max_ticks - remainder_ticks) / kMicrosecondsPerMillisecond))
+        {
+            return kMax;
+        }
+        const std::uint64_t ticks = (milliseconds_quotient * kMicrosecondsPerMillisecond) + remainder_ticks;
         return static_cast<tick_t>((ticks < static_cast<std::uint64_t>(kMax)) ? ticks : kMax);
     }
 
     /// @brief Converts RTOS ticks to milliseconds.
-    /// @param ticks Tick count.
+    /// @param[in] ticks  Tick count.
     /// @return Equivalent duration in milliseconds.
     static milliseconds ticks_to_ms(tick_t ticks) noexcept
     {

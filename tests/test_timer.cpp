@@ -6,6 +6,40 @@
 #include <osal/osal.hpp>
 #include <atomic>
 
+#if defined(OSAL_TEST_TIMER_FAULT_INJECTION)
+#include <poll.h>
+
+namespace
+{
+struct timer_poll_race_state
+{
+    osal::timer*      timer{nullptr};
+    osal::semaphore   stopped{osal::semaphore_type::binary, 0U};
+    std::atomic<bool> stop_succeeded{false};
+};
+
+std::atomic<timer_poll_race_state*> timer_poll_race{nullptr};
+}  // namespace
+
+extern "C" int osal_test_real_poll(pollfd* fds, nfds_t count, int timeout) asm("__real_poll");
+extern "C" int osal_test_wrap_poll(pollfd* fds, nfds_t count, int timeout) asm("__wrap_poll");
+
+extern "C" int osal_test_wrap_poll(pollfd* fds, nfds_t count, int timeout)
+{
+    const int ready = osal_test_real_poll(fds, count, timeout);
+    if (ready > 0 && count == 2U && (fds[0].revents & POLLIN) != 0)
+    {
+        auto* const state = timer_poll_race.exchange(nullptr);
+        if (state != nullptr)
+        {
+            state->stop_succeeded.store(state->timer->stop().ok());
+            state->stopped.give();
+        }
+    }
+    return ready;
+}
+#endif
+
 static_assert(osal::timer::is_supported == osal::active_capabilities::has_timer);
 
 static std::atomic<std::uint32_t> g_timer_count{0U};
@@ -14,6 +48,22 @@ static void timer_callback(void* /*arg*/)
 {
     g_timer_count.fetch_add(1U);
 }
+
+#if defined(OSAL_BACKEND_LINUX) || defined(OSAL_BACKEND_POSIX) || defined(OSAL_BACKEND_RTEMS) || \
+    defined(OSAL_BACKEND_INTEGRITY)
+struct timer_self_destroy_state
+{
+    std::atomic<osal::timer*>  timer{nullptr};
+    std::atomic<std::uint32_t> callback_count{0U};
+};
+
+static void destroy_timer_from_callback(void* arg)
+{
+    auto* const state = static_cast<timer_self_destroy_state*>(arg);
+    state->callback_count.fetch_add(1U);
+    delete state->timer.exchange(nullptr);
+}
+#endif
 
 TEST_CASE("timer: construction succeeds")
 {
@@ -85,6 +135,32 @@ TEST_CASE("timer: is_active reflects state")
     CHECK_FALSE(t.is_active());
 }
 
+#if defined(OSAL_TEST_TIMER_FAULT_INJECTION)
+TEST_CASE("timer: stop after poll readiness does not block destruction")
+{
+    timer_poll_race_state state{};
+    REQUIRE(state.stopped.valid());
+    g_timer_count.store(0U);
+
+    {
+        osal::timer timer{timer_callback, nullptr, osal::milliseconds{1}};
+        REQUIRE(timer.valid());
+
+        state.timer = &timer;
+        timer_poll_race.store(&state);
+        const auto started = timer.start();
+        const bool stopped = started.ok() && state.stopped.take_for(osal::milliseconds{2000});
+        timer_poll_race.store(nullptr);
+
+        REQUIRE(started.ok());
+        REQUIRE(stopped);
+        REQUIRE(state.stop_succeeded.load());
+    }
+
+    CHECK(g_timer_count.load() == 0U);
+}
+#endif
+
 TEST_CASE("timer: set_period changes interval")
 {
     if constexpr (!osal::active_capabilities::has_timer)
@@ -126,6 +202,23 @@ TEST_CASE("timer: callback receives arg")
 
     CHECK(value.load() == 0xCAFEU);
 }
+
+#if defined(OSAL_BACKEND_LINUX) || defined(OSAL_BACKEND_POSIX) || defined(OSAL_BACKEND_RTEMS) || \
+    defined(OSAL_BACKEND_INTEGRITY)
+TEST_CASE("timer: callback can destroy its own timer")
+{
+    timer_self_destroy_state state{};
+    auto* const              timer = new osal::timer{destroy_timer_from_callback, &state, osal::milliseconds{20}};
+    REQUIRE(timer->valid());
+
+    state.timer.store(timer);
+    REQUIRE(timer->start().ok());
+    osal::thread::sleep_for(osal::milliseconds{200});
+
+    delete state.timer.exchange(nullptr);
+    CHECK(state.callback_count.load() == 1U);
+}
+#endif
 
 // ---------------------------------------------------------------------------
 // Config-based construction (FLASH placement)

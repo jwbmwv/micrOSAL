@@ -360,12 +360,13 @@ extern "C"
     }  // namespace
 
     /// @brief Register a cooperative task (thread) in the bare-metal scheduler.
-    /// @param handle      Output handle; `handle->native` points to the `bm_task` slot.
-    /// @param entry       Task entry function.
-    /// @param arg         Argument passed to @p entry at first call.
-    /// @param stack       Caller-supplied stack buffer (stored but not mapped).
-    /// @param stack_bytes Stack buffer size in bytes.
-    /// @return `osal::ok()` on success, `out_of_resources` if `OSAL_BM_MAX_TASKS` is full.
+    /// @param[out] handle      Output handle; `handle->native` points to the `bm_task` slot.
+    /// @param[in] entry        Task entry function.
+    /// @param[in] arg          Argument passed to @p entry at first call.
+    /// @param[in] stack        Caller-supplied stack buffer (stored but not mapped).
+    /// @param[in] stack_bytes  Stack buffer size in bytes.
+    /// @retval osal::ok()                    On success.
+    /// @retval error_code::out_of_resources  If `OSAL_BM_MAX_TASKS` is full.
     osal::result osal_thread_create(osal::active_traits::thread_handle_t* handle, void (*entry)(void*), void* arg,
                                     osal::priority_t /*priority*/, osal::affinity_t /*affinity*/, void*       stack,
                                     osal::stack_size_t stack_bytes, const char* /*name*/) noexcept
@@ -399,9 +400,10 @@ extern "C"
     }
 
     /// @brief Yield until the target task finishes, with optional tick deadline.
-    /// @param handle  Thread handle.
-    /// @param timeout Max ticks to wait; `OSAL_WAIT_FOREVER` to block indefinitely.
-    /// @return `osal::ok()` when the task finishes, `timeout` on expiry.
+    /// @param[in] handle   Thread handle.
+    /// @param[in] timeout  Max ticks to wait; `OSAL_WAIT_FOREVER` to block indefinitely.
+    /// @retval osal::ok()           When the task finishes.
+    /// @retval error_code::timeout  On expiry.
     osal::result osal_thread_join(osal::active_traits::thread_handle_t* handle, osal::tick_t timeout) noexcept
     {
         if (handle == nullptr || handle->native == nullptr)
@@ -424,8 +426,9 @@ extern "C"
     }
 
     /// @brief Detach a task (clears `handle->native`; task continues running).
-    /// @param handle Thread handle.
-    /// @return `osal::ok()` on success, `not_initialized` if the handle is null.
+    /// @param[in] handle  Thread handle.
+    /// @retval osal::ok()                   On success.
+    /// @retval error_code::not_initialized  If the handle is null.
     osal::result osal_thread_detach(osal::active_traits::thread_handle_t* handle) noexcept
     {
         if (handle == nullptr || handle->native == nullptr)
@@ -529,7 +532,7 @@ extern "C"
     }  // namespace
 
     /// @brief Spin-yield until at least @p ms ticks have elapsed since entry.
-    /// @param ms Milliseconds to sleep (1 tick = 1 ms by default).
+    /// @param[in] ms  Milliseconds to sleep (1 tick = 1 ms by default).
     void osal_thread_sleep_ms(std::uint32_t ms) noexcept
     {
         const std::uint64_t wake = bm_ticks_now() + static_cast<std::uint64_t>(ms);
@@ -558,8 +561,9 @@ extern "C"
     }  // namespace
 
     /// @brief Allocate a spin-lock mutex from the static pool.
-    /// @param handle Output handle.
-    /// @return `osal::ok()` on success, `out_of_resources` if `OSAL_BM_MAX_MUTEXES` is full.
+    /// @param[out] handle  Output handle.
+    /// @retval osal::ok()                    On success.
+    /// @retval error_code::out_of_resources  If `OSAL_BM_MAX_MUTEXES` is full.
     osal::result osal_mutex_create(osal::active_traits::mutex_handle_t* handle, bool /*recursive*/) noexcept
     {
         for (int i = 0; i < OSAL_BM_MAX_MUTEXES; ++i)
@@ -576,8 +580,8 @@ extern "C"
     }
 
     /// @brief Return a spin-lock mutex to the pool.
-    /// @param handle Mutex handle.
-    /// @return `osal::ok()` always.
+    /// @param[in] handle  Mutex handle.
+    /// @retval osal::ok()  Always.
     osal::result osal_mutex_destroy(osal::active_traits::mutex_handle_t* handle) noexcept
     {
         if (handle == nullptr || handle->native == nullptr)
@@ -597,9 +601,10 @@ extern "C"
     }
 
     /// @brief Acquire the spin-lock mutex, yielding cooperatively until timeout.
-    /// @param handle  Mutex handle.
-    /// @param timeout OSAL tick deadline; `WAIT_FOREVER` to block indefinitely.
-    /// @return `osal::ok()` on success, `timeout` on expiry.
+    /// @param[in] handle   Mutex handle.
+    /// @param[in] timeout  OSAL tick deadline; `WAIT_FOREVER` to block indefinitely.
+    /// @retval osal::ok()           On success.
+    /// @retval error_code::timeout  On expiry.
     osal::result osal_mutex_lock(osal::active_traits::mutex_handle_t* handle, osal::tick_t timeout) noexcept
     {
         if (handle == nullptr || handle->native == nullptr)
@@ -621,8 +626,9 @@ extern "C"
     }
 
     /// @brief Try to acquire the mutex atomically without blocking.
-    /// @param handle Mutex handle.
-    /// @return `osal::ok()` if acquired, `would_block` otherwise.
+    /// @param[in] handle  Mutex handle.
+    /// @retval osal::ok()               If acquired.
+    /// @retval error_code::would_block  Otherwise.
     osal::result osal_mutex_try_lock(osal::active_traits::mutex_handle_t* handle) noexcept
     {
         if (handle == nullptr || handle->native == nullptr)
@@ -634,8 +640,9 @@ extern "C"
     }
 
     /// @brief Release the spin-lock mutex.
-    /// @param handle Mutex handle.
-    /// @return `osal::ok()` on success, `not_initialized` if the handle is invalid.
+    /// @param[in] handle  Mutex handle.
+    /// @retval osal::ok()                   On success.
+    /// @retval error_code::not_initialized  If the handle is invalid.
     osal::result osal_mutex_unlock(osal::active_traits::mutex_handle_t* handle) noexcept
     {
         if (handle == nullptr || handle->native == nullptr)
@@ -665,9 +672,10 @@ extern "C"
     }  // namespace
 
     /// @brief Allocate a counting semaphore from the static pool.
-    /// @param handle Output handle.
-    /// @param init   Initial count.
-    /// @return `osal::ok()` on success, `out_of_resources` if `OSAL_BM_MAX_SEMS` is full.
+    /// @param[out] handle  Output handle.
+    /// @param[in] init     Initial count.
+    /// @retval osal::ok()                    On success.
+    /// @retval error_code::out_of_resources  If `OSAL_BM_MAX_SEMS` is full.
     osal::result osal_semaphore_create(osal::active_traits::semaphore_handle_t* handle, unsigned init,
                                        unsigned max) noexcept
     {
@@ -690,8 +698,8 @@ extern "C"
     }
 
     /// @brief Return a semaphore to the pool.
-    /// @param handle Semaphore handle.
-    /// @return `osal::ok()` always.
+    /// @param[in] handle  Semaphore handle.
+    /// @retval osal::ok()  Always.
     osal::result osal_semaphore_destroy(osal::active_traits::semaphore_handle_t* handle) noexcept
     {
         if (handle == nullptr || handle->native == nullptr)
@@ -711,9 +719,10 @@ extern "C"
     }
 
     /// @brief Increment the semaphore count atomically without exceeding its maximum.
-    /// @param handle Semaphore handle.
-    /// @return `osal::ok()` on success, `overflow` at the maximum count, or
-    ///         `not_initialized` if the handle is invalid.
+    /// @param[in] handle  Semaphore handle.
+    /// @retval osal::ok()                   On success.
+    /// @retval error_code::overflow         At the maximum count.
+    /// @retval error_code::not_initialized  If the handle is invalid.
     osal::result osal_semaphore_give(osal::active_traits::semaphore_handle_t* handle) noexcept
     {
         if (handle == nullptr || handle->native == nullptr)
@@ -734,17 +743,18 @@ extern "C"
     }
 
     /// @brief Increment the semaphore from ISR context (delegates to `give`).
-    /// @param handle Semaphore handle.
-    /// @return `osal::ok()` on success.
+    /// @param[in] handle  Semaphore handle.
+    /// @retval osal::ok()  On success.
     osal::result osal_semaphore_give_isr(osal::active_traits::semaphore_handle_t* handle) noexcept
     {
         return osal_semaphore_give(handle);
     }
 
     /// @brief Decrement the semaphore count, yielding cooperatively until available.
-    /// @param handle  Semaphore handle.
-    /// @param timeout OSAL tick deadline.
-    /// @return `osal::ok()` on success, `timeout` on expiry.
+    /// @param[in] handle   Semaphore handle.
+    /// @param[in] timeout  OSAL tick deadline.
+    /// @retval osal::ok()           On success.
+    /// @retval error_code::timeout  On expiry.
     osal::result osal_semaphore_take(osal::active_traits::semaphore_handle_t* handle, osal::tick_t timeout) noexcept
     {
         if (handle == nullptr || handle->native == nullptr)
@@ -776,8 +786,9 @@ extern "C"
     }
 
     /// @brief Try to decrement the semaphore without blocking.
-    /// @param handle Semaphore handle.
-    /// @return `osal::ok()` if decremented, `timeout` otherwise.
+    /// @param[in] handle  Semaphore handle.
+    /// @retval osal::ok()           If decremented.
+    /// @retval error_code::timeout  Otherwise.
     osal::result osal_semaphore_try_take(osal::active_traits::semaphore_handle_t* handle) noexcept
     {
         return osal_semaphore_take(handle, osal::NO_WAIT);
@@ -802,11 +813,12 @@ extern "C"
     }  // namespace
 
     /// @brief Allocate a circular queue from the static pool, backed by @p buf.
-    /// @param handle    Output handle.
-    /// @param buf       Caller-supplied ring buffer (must be `item_size * capacity` bytes).
-    /// @param item_size Size of each item in bytes.
-    /// @param capacity  Maximum number of items.
-    /// @return `osal::ok()` on success, `out_of_resources` if `OSAL_BM_MAX_QUEUES` is full.
+    /// @param[out] handle    Output handle.
+    /// @param[in] buf        Caller-supplied ring buffer (must be `item_size * capacity` bytes).
+    /// @param[in] item_size  Size of each item in bytes.
+    /// @param[in] capacity   Maximum number of items.
+    /// @retval osal::ok()                    On success.
+    /// @retval error_code::out_of_resources  If `OSAL_BM_MAX_QUEUES` is full.
     osal::result osal_queue_create(osal::active_traits::queue_handle_t* handle, void* buf, std::size_t item_size,
                                    std::size_t capacity) noexcept
     {
@@ -824,8 +836,8 @@ extern "C"
     }
 
     /// @brief Return a queue to the pool.
-    /// @param handle Queue handle.
-    /// @return `osal::ok()` always.
+    /// @param[in] handle  Queue handle.
+    /// @retval osal::ok()  Always.
     osal::result osal_queue_destroy(osal::active_traits::queue_handle_t* handle) noexcept
     {
         if (handle == nullptr || handle->native == nullptr)
@@ -845,10 +857,11 @@ extern "C"
     }
 
     /// @brief Copy @p item into the circular buffer, yielding until space or timeout.
-    /// @param handle  Queue handle.
-    /// @param item    Source item to enqueue.
-    /// @param timeout OSAL tick deadline; `NO_WAIT` to fail immediately if full.
-    /// @return `osal::ok()` on success, `would_block` if the queue is full.
+    /// @param[in] handle   Queue handle.
+    /// @param[in] item     Source item to enqueue.
+    /// @param[in] timeout  OSAL tick deadline; `NO_WAIT` to fail immediately if full.
+    /// @retval osal::ok()               On success.
+    /// @retval error_code::would_block  If the queue is full.
     osal::result osal_queue_send(osal::active_traits::queue_handle_t* handle, const void* item,
                                  osal::tick_t timeout) noexcept
     {
@@ -880,19 +893,21 @@ extern "C"
     }
 
     /// @brief Enqueue an item from ISR context (no-wait).
-    /// @param handle Queue handle.
-    /// @param item   Source item.
-    /// @return `osal::ok()` on success, `would_block` if the queue is full.
+    /// @param[in] handle  Queue handle.
+    /// @param[in] item    Source item.
+    /// @retval osal::ok()               On success.
+    /// @retval error_code::would_block  If the queue is full.
     osal::result osal_queue_send_isr(osal::active_traits::queue_handle_t* handle, const void* item) noexcept
     {
         return osal_queue_send(handle, item, osal::NO_WAIT);
     }
 
     /// @brief Dequeue an item, yielding until one is available or timeout.
-    /// @param handle  Queue handle.
-    /// @param item    Destination buffer.
-    /// @param timeout OSAL tick deadline.
-    /// @return `osal::ok()` on success, `timeout` if the queue is empty.
+    /// @param[in] handle   Queue handle.
+    /// @param[out] item    Destination buffer.
+    /// @param[in] timeout  OSAL tick deadline.
+    /// @retval osal::ok()           On success.
+    /// @retval error_code::timeout  If the queue is empty.
     osal::result osal_queue_receive(osal::active_traits::queue_handle_t* handle, void* item,
                                     osal::tick_t timeout) noexcept
     {
@@ -924,18 +939,20 @@ extern "C"
     }
 
     /// @brief Dequeue from ISR context (no-wait).
-    /// @param handle Queue handle.
-    /// @param item   Destination buffer.
-    /// @return `osal::ok()` on success, `timeout` if the queue is empty.
+    /// @param[in] handle  Queue handle.
+    /// @param[out] item   Destination buffer.
+    /// @retval osal::ok()           On success.
+    /// @retval error_code::timeout  If the queue is empty.
     osal::result osal_queue_receive_isr(osal::active_traits::queue_handle_t* handle, void* item) noexcept
     {
         return osal_queue_receive(handle, item, osal::NO_WAIT);
     }
 
     /// @brief Copy the head item without removing it.
-    /// @param handle Queue handle.
-    /// @param item   Destination buffer.
-    /// @return `osal::ok()` on success, `would_block` if the queue is empty.
+    /// @param[in] handle  Queue handle.
+    /// @param[out] item   Destination buffer.
+    /// @retval osal::ok()               On success.
+    /// @retval error_code::would_block  If the queue is empty.
     osal::result osal_queue_peek(osal::active_traits::queue_handle_t* handle, void* item, osal::tick_t) noexcept
     {
         if (handle == nullptr || handle->native == nullptr)
@@ -955,7 +972,7 @@ extern "C"
     }
 
     /// @brief Return the number of items currently in the queue.
-    /// @param handle Queue handle (const).
+    /// @param[in] handle  Queue handle (const).
     /// @return Item count, or 0 if the handle is invalid.
     std::size_t osal_queue_count(const osal::active_traits::queue_handle_t* handle) noexcept
     {
@@ -967,7 +984,7 @@ extern "C"
     }
 
     /// @brief Return the number of free slots remaining in the queue.
-    /// @param handle Queue handle (const).
+    /// @param[in] handle  Queue handle (const).
     /// @return Free slot count, or 0 if the handle is invalid.
     std::size_t osal_queue_free(const osal::active_traits::queue_handle_t* handle) noexcept
     {
@@ -1048,12 +1065,13 @@ extern "C"
     }
 
     /// @brief Allocate a software timer from the static pool.
-    /// @param handle      Output handle.
-    /// @param cb          Callback invoked when the timer fires.
-    /// @param arg         Argument passed to @p cb.
-    /// @param period      Period in OSAL ticks.
-    /// @param auto_reload `true` for periodic; `false` for one-shot.
-    /// @return `osal::ok()` on success, `out_of_resources` if `OSAL_BM_MAX_TIMERS` is full.
+    /// @param[out] handle      Output handle.
+    /// @param[in] cb           Callback invoked when the timer fires.
+    /// @param[in] arg          Argument passed to @p cb.
+    /// @param[in] period       Period in OSAL ticks.
+    /// @param[in] auto_reload  `true` for periodic; `false` for one-shot.
+    /// @retval osal::ok()                    On success.
+    /// @retval error_code::out_of_resources  If `OSAL_BM_MAX_TIMERS` is full.
     osal::result osal_timer_create(osal::active_traits::timer_handle_t* handle, const char* /*name*/,
                                    osal_timer_callback_t cb, void* arg, osal::tick_t period, bool auto_reload) noexcept
     {
@@ -1071,8 +1089,8 @@ extern "C"
     }
 
     /// @brief Mark a timer slot as invalid (destroys the timer).
-    /// @param handle Timer handle.
-    /// @return `osal::ok()` always.
+    /// @param[in] handle  Timer handle.
+    /// @retval osal::ok()  Always.
     osal::result osal_timer_destroy(osal::active_traits::timer_handle_t* handle) noexcept
     {
         if (handle == nullptr || handle->native == nullptr)
@@ -1085,8 +1103,9 @@ extern "C"
     }
 
     /// @brief Arm a software timer; sets the deadline to `now + period`.
-    /// @param handle Timer handle.
-    /// @return `osal::ok()` on success, `not_initialized` if the handle is invalid.
+    /// @param[in] handle  Timer handle.
+    /// @retval osal::ok()                   On success.
+    /// @retval error_code::not_initialized  If the handle is invalid.
     osal::result osal_timer_start(osal::active_traits::timer_handle_t* handle) noexcept
     {
         if (handle == nullptr || handle->native == nullptr)
@@ -1100,8 +1119,9 @@ extern "C"
     }
 
     /// @brief Disarm a software timer (marks it inactive).
-    /// @param handle Timer handle.
-    /// @return `osal::ok()` on success, `not_initialized` if the handle is invalid.
+    /// @param[in] handle  Timer handle.
+    /// @retval osal::ok()                   On success.
+    /// @retval error_code::not_initialized  If the handle is invalid.
     osal::result osal_timer_stop(osal::active_traits::timer_handle_t* handle) noexcept
     {
         if (handle == nullptr || handle->native == nullptr)
@@ -1113,8 +1133,8 @@ extern "C"
     }
 
     /// @brief Stop and re-arm, reloading the period from the stored value.
-    /// @param handle Timer handle.
-    /// @return `osal::ok()` on success.
+    /// @param[in] handle  Timer handle.
+    /// @retval osal::ok()  On success.
     osal::result osal_timer_reset(osal::active_traits::timer_handle_t* handle) noexcept
     {
         osal_timer_stop(handle);
@@ -1122,9 +1142,10 @@ extern "C"
     }
 
     /// @brief Update the timer period and reschedule the next deadline.
-    /// @param handle  Timer handle.
-    /// @param p       New period in OSAL ticks.
-    /// @return `osal::ok()` on success, `not_initialized` if the handle is invalid.
+    /// @param[in] handle  Timer handle.
+    /// @param[in] p       New period in OSAL ticks.
+    /// @retval osal::ok()                   On success.
+    /// @retval error_code::not_initialized  If the handle is invalid.
     osal::result osal_timer_set_period(osal::active_traits::timer_handle_t* handle, osal::tick_t p) noexcept
     {
         if (handle == nullptr || handle->native == nullptr)
@@ -1138,7 +1159,7 @@ extern "C"
     }
 
     /// @brief Query whether a software timer is currently armed.
-    /// @param handle Timer handle (const).
+    /// @param[in] handle  Timer handle (const).
     /// @return `true` if the timer is armed, `false` otherwise.
     bool osal_timer_is_active(const osal::active_traits::timer_handle_t* handle) noexcept
     {
@@ -1183,7 +1204,7 @@ extern "C"
         return osal::error_code::not_supported;
     }
     /// @brief Wait-set wait not supported.
-    /// @param n Set to 0 if non-null.
+    /// @param[out] n  Set to 0 if non-null.
     /// @return `not_supported` always.
     osal::result osal_wait_set_wait(osal::active_traits::wait_set_handle_t*, int*, std::size_t, std::size_t* n,
                                     osal::tick_t) noexcept

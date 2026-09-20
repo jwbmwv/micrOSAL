@@ -18,7 +18,8 @@
 #include <thread>
 
 // Declared in c_api_c_check.c (linked as a C object).
-extern "C" int osal_c_smoke_test(void);
+extern "C" int           osal_c_smoke_test(void);
+extern "C" osal_result_t osal_c_test_invalid_notification_action(osal_notification_handle* handle);
 
 alignas(16) static std::uint8_t c_api_delayable_wq_stack[65536];
 
@@ -38,6 +39,21 @@ TEST_CASE("c_api: smoke test from pure C code returns 0")
     INFO("osal_c_smoke_test returned error code ", rc);
     CHECK(rc == 0);
 }
+
+#if defined(OSAL_BACKEND_LINUX)
+TEST_CASE("c_api: Linux null handles preserve backend error and empty-query semantics")
+{
+    CHECK(osal_c_mutex_lock(nullptr, OSAL_NO_WAIT) == OSAL_NOT_INITIALIZED);
+    CHECK(osal_c_mutex_try_lock(nullptr) == OSAL_NOT_INITIALIZED);
+    CHECK(osal_c_mutex_destroy(nullptr) == OSAL_OK);
+
+    std::uint32_t item = 0U;
+    CHECK(osal_c_queue_receive(nullptr, &item, OSAL_NO_WAIT) == OSAL_NOT_INITIALIZED);
+    CHECK(osal_c_queue_count(nullptr) == 0U);
+    CHECK(osal_c_queue_free(nullptr) == 0U);
+    CHECK(osal_c_queue_destroy(nullptr) == OSAL_OK);
+}
+#endif
 
 // =========================================================================
 // Clock
@@ -328,6 +344,28 @@ TEST_CASE("c_api: notification create / notify / wait / destroy")
     CHECK(out == 0x1234U);
     CHECK(osal_c_notification_pending(&note, 1U) == 0);
     CHECK(osal_c_notification_destroy(&note) == OSAL_OK);
+}
+
+TEST_CASE("c_api: invalid notification action from C preserves state and unlocks")
+{
+    std::uint32_t            values[1]{};
+    std::uint8_t             pending[1]{};
+    osal_notification_handle notification{};
+    REQUIRE(osal_c_notification_create(&notification, values, pending, 1U) == OSAL_OK);
+
+    CHECK(osal_c_test_invalid_notification_action(&notification) == OSAL_INVALID_ARGUMENT);
+    CHECK(values[0] == 0U);
+    CHECK(pending[0] == 0U);
+    REQUIRE(osal_c_mutex_try_lock(&notification.mutex) == OSAL_OK);
+    REQUIRE(osal_c_mutex_unlock(&notification.mutex) == OSAL_OK);
+
+    REQUIRE(osal_c_notification_notify(&notification, 0xAAU, OSAL_NOTIFICATION_OVERWRITE, 0U) == OSAL_OK);
+    CHECK(osal_c_test_invalid_notification_action(&notification) == OSAL_INVALID_ARGUMENT);
+    CHECK(values[0] == 0xAAU);
+    CHECK(pending[0] == 1U);
+    REQUIRE(osal_c_mutex_try_lock(&notification.mutex) == OSAL_OK);
+    REQUIRE(osal_c_mutex_unlock(&notification.mutex) == OSAL_OK);
+    REQUIRE(osal_c_notification_destroy(&notification) == OSAL_OK);
 }
 
 // =========================================================================

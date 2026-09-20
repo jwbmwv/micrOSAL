@@ -4,6 +4,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <doctest/doctest.h>
 #include <osal/osal.hpp>
+#include <limits>
 
 namespace
 {
@@ -62,6 +63,23 @@ TEST_CASE("clock_utils::ms_to_ticks round-trip")
     // Should be approximately 100 ms (exact depends on tick period).
     CHECK(ms.count() >= 90);
     CHECK(ms.count() <= 110);
+}
+
+TEST_CASE("clock_utils::ms_to_ticks saturates before microsecond conversion overflows")
+{
+    constexpr auto overflow_threshold =
+        osal::milliseconds{static_cast<std::int64_t>((std::numeric_limits<std::uint64_t>::max() / 1'000U) + 1U)};
+
+    const auto converted_threshold = osal::clock_utils::ms_to_ticks(overflow_threshold);
+    const auto converted_maximum   = osal::clock_utils::ms_to_ticks(osal::milliseconds::max());
+
+    CHECK(converted_threshold > 1'000'000U);
+    CHECK(converted_maximum > 1'000'000U);
+    if constexpr (sizeof(osal::tick_t) < sizeof(std::uint64_t))
+    {
+        CHECK(converted_threshold == (osal::WAIT_FOREVER - 1U));
+        CHECK(converted_maximum == (osal::WAIT_FOREVER - 1U));
+    }
 }
 
 TEST_CASE("clock tick period is non-zero")

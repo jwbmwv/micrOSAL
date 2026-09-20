@@ -40,6 +40,7 @@
 #include "concepts.hpp"
 
 #include "detail/atomic_compat.hpp"
+#include "detail/cpp_compat.hpp"
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -75,7 +76,7 @@ public:
     // ---- producer API (single thread only) ---------------------------------
 
     /// @brief Push an item into the buffer.
-    /// @param item  The item to enqueue.
+    /// @param[in] item  The item to enqueue.
     /// @return true if enqueued; false if the buffer is full.
     bool try_push(const T& item) noexcept
     {
@@ -91,8 +92,8 @@ public:
     }
 
     /// @brief Push up to @p count items into the buffer.
-    /// @param items  Source array of items to enqueue.
-    /// @param count  Number of items to attempt to enqueue.
+    /// @param[in] items  Source array of items to enqueue.
+    /// @param[in] count  Number of items to attempt to enqueue.
     /// @return Number of items actually enqueued (may be less than @p count).
     std::size_t try_push_n(const T* items, std::size_t count) noexcept
     {
@@ -116,7 +117,7 @@ public:
     }
 
     /// @brief Push up to @p items.size() items into the buffer.
-    /// @param items  Span of items to enqueue.
+    /// @param[in] items  Span of items to enqueue.
     /// @return Number of items actually enqueued.
     std::size_t try_push_n(std::span<const T> items) noexcept { return try_push_n(items.data(), items.size()); }
 
@@ -139,7 +140,7 @@ public:
 
     /// @brief Pop up to @p count items from the buffer.
     /// @param[out] items  Destination array for dequeued items.
-    /// @param      count  Maximum number of items to dequeue.
+    /// @param[in] count   Maximum number of items to dequeue.
     /// @return Number of items actually dequeued (may be less than @p count).
     std::size_t try_pop_n(T* items, std::size_t count) noexcept
     {
@@ -223,7 +224,11 @@ private:
     static constexpr std::size_t kCapacity = N + 1;  // one sentinel slot
 
     /// @brief Advance an index, wrapping around.
-    static constexpr std::size_t increment(std::size_t idx) noexcept { return (idx + 1 == kCapacity) ? 0 : idx + 1; }
+    static constexpr std::size_t increment(std::size_t idx) noexcept
+    {
+        OSAL_ASSUME(idx < kCapacity);
+        return (idx + 1 == kCapacity) ? 0 : idx + 1;
+    }
 
     /// @brief Branchless min without pulling in <algorithm>.
     static constexpr std::size_t min_of(std::size_t a, std::size_t b) noexcept { return (a < b) ? a : b; }

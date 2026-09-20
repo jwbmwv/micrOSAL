@@ -92,9 +92,9 @@ public:
     // ---- construction / destruction ----------------------------------------
 
     /// @brief Constructs and initialises the semaphore.
-    /// @param type           binary or counting.
-    /// @param initial_count  Initial permit count.
-    /// @param max_count      Maximum permit count (ignored for binary — forced to 1).
+    /// @param[in] type           binary or counting.
+    /// @param[in] initial_count  Initial permit count.
+    /// @param[in] max_count      Maximum permit count (ignored for binary — forced to 1).
     /// @complexity O(1)
     /// @blocking   Never.
     semaphore(semaphore_type type, unsigned initial_count, unsigned max_count = 1U) noexcept : valid_(false)
@@ -104,7 +104,7 @@ public:
     }
 
     /// @brief Constructs from an immutable config (config may reside in FLASH).
-    /// @param cfg  Configuration — typically declared @c const / @c constexpr.
+    /// @param[in] cfg  Configuration — typically declared @c const / @c constexpr.
     /// @complexity O(1)
     /// @blocking   Never.
     explicit semaphore(const semaphore_config& cfg) noexcept : valid_(false)
@@ -175,7 +175,7 @@ public:
     bool try_take() noexcept { return osal_semaphore_try_take(&handle_).ok(); }
 
     /// @brief Takes, blocking for at most @p timeout milliseconds.
-    /// @param timeout Maximum wait time.
+    /// @param[in] timeout  Maximum wait time.
     /// @return true if acquired within the timeout.
     /// @complexity O(1)
     /// @blocking   Up to timeout.
@@ -193,7 +193,7 @@ public:
     }
 
     /// @brief Takes, blocking until an absolute deadline.
-    /// @param deadline Absolute monotonic time point.
+    /// @param[in] deadline  Absolute monotonic time point.
     /// @return true if acquired before the deadline.
     /// @complexity O(1)
     /// @blocking   Until deadline.

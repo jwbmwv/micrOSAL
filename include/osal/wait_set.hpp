@@ -46,11 +46,11 @@ extern "C"
     osal::result osal_wait_set_remove(osal::active_traits::wait_set_handle_t* handle, int fd_or_id) noexcept;
 
     /// @brief Waits until at least one monitored object is ready.
-    /// @param  handle         Wait-set handle.
-    /// @param[out] ready_ids  Caller-allocated array receiving ready IDs.
-    /// @param  max_ready      Size of ready_ids array.
-    /// @param[out] n_ready    Number of IDs written.
-    /// @param  timeout_ticks  Timeout.
+    /// @param[in]  handle     Wait-set handle.
+    /// @param[out] fds_ready  Caller-allocated array receiving ready file descriptors.
+    /// @param[in]  max_ready  Size of @p fds_ready.
+    /// @param[out] n_ready    Number of file descriptors written to @p fds_ready.
+    /// @param[in]  timeout    Maximum wait in OSAL ticks.
     osal::result osal_wait_set_wait(osal::active_traits::wait_set_handle_t* handle, int* fds_ready,
                                     std::size_t max_ready, std::size_t* n_ready, osal::tick_t timeout) noexcept;
 
@@ -127,9 +127,10 @@ public:
     // ---- membership --------------------------------------------------------
 
     /// @brief Adds an object to the wait-set.
-    /// @param fd_or_id  File descriptor (POSIX/Linux) or object ID.
-    /// @param events    Bitmask from osal::wait_events.
-    /// @return result::ok() on success; error_code::overflow if the set is full.
+    /// @param[in] fd_or_id  File descriptor (POSIX/Linux) or object ID.
+    /// @param[in] events    Bitmask from osal::wait_events.
+    /// @retval osal::ok()           The object was added successfully.
+    /// @retval error_code::overflow The wait-set is full.
     result add(int fd_or_id, std::uint32_t events = wait_events::readable) noexcept
     {
         if constexpr (wait_set_backend<active_backend>)
@@ -142,7 +143,7 @@ public:
     }
 
     /// @brief Removes an object from the wait-set.
-    /// @param fd_or_id  Object to remove.
+    /// @param[in] fd_or_id  Object to remove.
     result remove(int fd_or_id) noexcept
     {
         if constexpr (wait_set_backend<active_backend>)
@@ -157,12 +158,12 @@ public:
 
     /// @brief Blocks until at least one monitored object is ready.
     /// @param[out] ready_ids  Caller-supplied buffer for ready IDs.
-    /// @param      max_ready  Capacity of ready_ids.
+    /// @param[in] max_ready   Capacity of ready_ids.
     /// @param[out] n_ready    Number of ready IDs written on success.
-    /// @param      timeout    Maximum wait time (negative = forever).
-    /// @return result::ok() if at least one object is ready;
-    ///         error_code::timeout on expiry;
-    ///         error_code::not_supported on unsupported backends.
+    /// @param[in] timeout     Maximum wait time (negative = forever).
+    /// @retval osal::ok()                    At least one object is ready.
+    /// @retval error_code::timeout           The wait expired.
+    /// @retval error_code::not_supported     The active backend has no native wait-set support.
     /// @complexity O(n) where n is number of monitored objects.
     /// @blocking   Potentially blocking.
     result wait(int* ready_ids, std::size_t max_ready, std::size_t& n_ready,  // NOLINT(readability-non-const-parameter)

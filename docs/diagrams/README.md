@@ -14,7 +14,7 @@ or the [online server](https://www.plantuml.com/plantuml/uml)).
 | [capability_matrix.puml](capability_matrix.puml) | Map | Per-backend feature support matrix (25 capability flags × 17 backends) |
 | [emulation_strategy.puml](emulation_strategy.puml) | Component | Native vs emulated breakdown for condvar, work_queue, memory_pool, and rwlock, showing which backends use shared .inl emulations |
 | [build_flow.puml](build_flow.puml) | Activity | CMake build pipeline — backend selection → compile → link → test |
-| [bus_architecture.puml](bus_architecture.puml) | Component | Bus/signal layer architecture — API, generic runtime, delegated tags, test backend, current Zephyr fallback, and planned native path |
+| [bus_architecture.puml](bus_architecture.puml) | Component | Bus/signal layer architecture: generic and delegated runtimes, native Zephyr `k_msgq` queues and observers, and the hosted-only Zephyr fallback |
 | [bus_class_diagram.puml](bus_class_diagram.puml) | Class | `osal_bus`, `osal_signal`, `osal_signal_premium`, and capability-trait relationships |
 | [bus_sequence_publish.puml](bus_sequence_publish.puml) | Sequence | Generic LCD publish fan-out and subscriber receive flow |
 | [sequence_mutex.puml](sequence_mutex.puml) | Sequence | Mutex full lifecycle: construct → lock → unlock → destroy, showing all four layers |
@@ -29,6 +29,12 @@ or the [online server](https://www.plantuml.com/plantuml/uml)).
 `emulation_strategy.puml`, `capability_matrix.puml`, `class_diagram.puml`, and `architecture.puml` are tuned for presentation readability using landscape orientation and width scaling.
 `newpage` page breaks were intentionally avoided because the current PlantUML CLI renderer in this environment fails during PNG/SVG generation on these large diagrams when multi-page splits are enabled.
 
+The core class diagram marks expected-returning APIs as optional. Their exact
+standard-library gates, checked bounded-storage behavior, and compatibility
+limits are defined in the [release contract](../RELEASE_CONTRACT.md#optional-c-features).
+Native Zephyr and hosted fallback classes in the bus diagrams are alternative
+compile-time definitions, not simultaneously selected runtimes.
+
 ## Quick render (CLI)
 
 ```bash
@@ -38,3 +44,7 @@ or the [online server](https://www.plantuml.com/plantuml/uml)).
 # Render print-oriented PNG, SVG, and PDF into docs/diagrams/print
 ./scripts/generate_diagrams_print.sh
 ```
+
+Both scripts default `PLANTUML_LIMIT_SIZE` to 16384 pixels so the large core
+class diagram is not clipped by PlantUML's 4096-pixel default. The environment
+variable can be set explicitly when a different renderer limit is needed.

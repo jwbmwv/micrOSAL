@@ -86,7 +86,7 @@ public:
     }
 
     /// @brief Removes a subscriber by ID.
-    /// @param id  Subscriber ID obtained from subscribe().
+    /// @param[in] id  Subscriber ID obtained from subscribe().
     /// @return true if the ID was valid and active; false otherwise.
     [[nodiscard]] bool unsubscribe(subscriber_id id) noexcept
     {
@@ -105,7 +105,7 @@ public:
     // ---- publish -----------------------------------------------------------
 
     /// @brief Fans the message out to all active subscriber queues.
-    /// @param msg  Message to broadcast (copied into each subscriber queue).
+    /// @param[in] msg  Message to broadcast (copied into each subscriber queue).
     /// @return true if at least one subscriber received the message.
     /// @blocking Never (uses try_send; drops to full subscriber queues).
     /// @complexity O(MaxSubscribers).
@@ -126,7 +126,7 @@ public:
     // ---- receive -----------------------------------------------------------
 
     /// @brief Non-blocking receive for a specific subscriber.
-    /// @param id   Subscriber ID.
+    /// @param[in] id    Subscriber ID.
     /// @param[out] out  Receives the dequeued message on success.
     /// @return true if a message was available.
     [[nodiscard]] bool try_receive(subscriber_id id, T& out) noexcept
@@ -140,9 +140,9 @@ public:
     }
 
     /// @brief Blocking receive with optional timeout.
-    /// @param id       Subscriber ID.
-    /// @param[out] out Receives the dequeued message on success.
-    /// @param timeout  Maximum wait in ticks; use WAIT_FOREVER to block indefinitely.
+    /// @param[in] id       Subscriber ID.
+    /// @param[out] out     Receives the dequeued message on success.
+    /// @param[in] timeout  Maximum wait in ticks; use WAIT_FOREVER to block indefinitely.
     /// @return true if a message was received within the timeout.
     [[nodiscard]] bool receive(subscriber_id id, T& out, tick_t timeout = WAIT_FOREVER) noexcept
     {

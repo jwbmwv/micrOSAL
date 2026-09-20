@@ -82,11 +82,11 @@ namespace
 {
 
 /// @brief Convert an `osal::result` to the C ABI result code.
-/// @param r C++ result value.
+/// @param[in] r  C++ result value.
 /// @return Matching `osal_result_t` enum value.
 inline osal_result_t to_c(osal::result r) noexcept
 {
-    return static_cast<osal_result_t>(r.code());
+    return static_cast<osal_result_t>(osal::detail::to_underlying(r.code()));
 }
 
 enum class c_delayable_state : std::uint8_t
@@ -98,7 +98,7 @@ enum class c_delayable_state : std::uint8_t
 };
 
 /// @brief Check whether a composite notification handle is initialized.
-/// @param handle Notification handle to validate.
+/// @param[in] handle  Notification handle to validate.
 /// @return `true` when the handle exists and is marked valid.
 [[nodiscard]] bool notification_valid(const osal_notification_handle* handle) noexcept
 {
@@ -106,8 +106,8 @@ enum class c_delayable_state : std::uint8_t
 }
 
 /// @brief Check whether a notification slot index is valid for one handle.
-/// @param handle Notification handle to validate.
-/// @param index Slot index supplied by the caller.
+/// @param[in] handle  Notification handle to validate.
+/// @param[in] index   Slot index supplied by the caller.
 /// @return `true` when the handle is valid and @p index is in range.
 [[nodiscard]] bool notification_index_valid(const osal_notification_handle* handle, std::size_t index) noexcept
 {
@@ -115,7 +115,7 @@ enum class c_delayable_state : std::uint8_t
 }
 
 /// @brief Check whether a composite delayable-work handle is initialized.
-/// @param handle Delayable-work handle to validate.
+/// @param[in] handle  Delayable-work handle to validate.
 /// @return `true` when the handle exists and its valid flag is set.
 [[nodiscard]] bool delayable_valid(const osal_delayable_work_handle* handle) noexcept
 {
@@ -123,17 +123,17 @@ enum class c_delayable_state : std::uint8_t
 }
 
 /// @brief Forward declaration for the work-queue callback trampoline.
-/// @param arg Delayable-work handle pointer supplied by the work queue.
+/// @param[in] arg  Delayable-work handle pointer supplied by the work queue.
 void c_delayable_work_work_cb(void* arg) noexcept;
 
 /// @brief Compare the current delayable-work state with one expected state.
-/// @param handle Delayable-work handle.
-/// @param state State to compare against.
+/// @param[in] handle  Delayable-work handle.
+/// @param[in] state   State to compare against.
 /// @return `true` when the current state matches @p state.
 [[nodiscard]] bool delayable_state_is(const osal_delayable_work_handle* handle, c_delayable_state state) noexcept
 {
     return delayable_valid(handle) &&
-           (__atomic_load_n(&handle->state, __ATOMIC_ACQUIRE) == static_cast<std::uint8_t>(state));
+           (__atomic_load_n(&handle->state, __ATOMIC_ACQUIRE) == osal::detail::to_underlying(state));
 }
 
 /// @brief Report whether the active backend supports the C delayable helper.
@@ -148,7 +148,7 @@ void c_delayable_work_work_cb(void* arg) noexcept;
 }
 
 /// @brief Load the composite delayable-work state atomically.
-/// @param handle Delayable-work handle.
+/// @param[in] handle  Delayable-work handle.
 /// @return Current helper state.
 [[nodiscard]] c_delayable_state delayable_state_load(const osal_delayable_work_handle* handle) noexcept
 {
@@ -156,31 +156,31 @@ void c_delayable_work_work_cb(void* arg) noexcept;
 }
 
 /// @brief Store a new composite delayable-work state atomically.
-/// @param handle Delayable-work handle.
-/// @param state State to publish.
+/// @param[in] handle  Delayable-work handle.
+/// @param[in] state   State to publish.
 void delayable_state_store(osal_delayable_work_handle* handle, c_delayable_state state) noexcept
 {
-    __atomic_store_n(&handle->state, static_cast<std::uint8_t>(state), __ATOMIC_RELEASE);
+    __atomic_store_n(&handle->state, osal::detail::to_underlying(state), __ATOMIC_RELEASE);
 }
 
 /// @brief Compare-and-swap the composite delayable-work state.
-/// @param handle Delayable-work handle.
-/// @param expected Expected current state; updated with the observed state on
+/// @param[in] handle    Delayable-work handle.
+/// @param[in] expected  Expected current state; updated with the observed state on
 ///                 failure.
-/// @param desired State written on success.
+/// @param[in] desired  State written on success.
 /// @return `true` when the exchange succeeds.
 bool delayable_state_compare_exchange(osal_delayable_work_handle* handle, c_delayable_state* expected,
                                       c_delayable_state desired) noexcept
 {
-    auto       expected_raw = static_cast<std::uint8_t>(*expected);
+    auto       expected_raw = osal::detail::to_underlying(*expected);
     const bool exchanged    = __atomic_compare_exchange_n(
-        &handle->state, &expected_raw, static_cast<std::uint8_t>(desired), false, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE);
+        &handle->state, &expected_raw, osal::detail::to_underlying(desired), false, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE);
     *expected = static_cast<c_delayable_state>(expected_raw);
     return exchanged;
 }
 
 /// @brief Clear any deferred queue-submission error state.
-/// @param handle Delayable-work handle.
+/// @param[in] handle  Delayable-work handle.
 void delayable_clear_dispatch_error(osal_delayable_work_handle* handle) noexcept
 {
     __atomic_store_n(&handle->dispatch_error, OSAL_OK, __ATOMIC_RELEASE);
@@ -188,8 +188,8 @@ void delayable_clear_dispatch_error(osal_delayable_work_handle* handle) noexcept
 }
 
 /// @brief Remember a deferred queue-submission failure for flush().
-/// @param handle Delayable-work handle.
-/// @param rc Result code captured from timer-to-queue handoff.
+/// @param[in] handle  Delayable-work handle.
+/// @param[in] rc      Result code captured from timer-to-queue handoff.
 void delayable_set_dispatch_error(osal_delayable_work_handle* handle, osal_result_t rc) noexcept
 {
     __atomic_store_n(&handle->dispatch_error, rc, __ATOMIC_RELEASE);
@@ -197,7 +197,7 @@ void delayable_set_dispatch_error(osal_delayable_work_handle* handle, osal_resul
 }
 
 /// @brief Consume any deferred queue-submission failure once the helper is idle.
-/// @param handle Delayable-work handle.
+/// @param[in] handle  Delayable-work handle.
 /// @return Stored deferred error, or `OSAL_OK` when none was recorded.
 [[nodiscard]] osal_result_t delayable_consume_dispatch_error(osal_delayable_work_handle* handle) noexcept
 {
@@ -218,7 +218,7 @@ void delayable_set_dispatch_error(osal_delayable_work_handle* handle, osal_resul
 }
 
 /// @brief Submit the delayable callback to the work queue immediately.
-/// @param handle Delayable-work handle, with the mutex already held.
+/// @param[in] handle  Delayable-work handle, with the mutex already held.
 /// @return Result of the work-queue submission.
 osal_result_t delayable_enqueue_locked(osal_delayable_work_handle* handle) noexcept
 {
@@ -233,8 +233,8 @@ osal_result_t delayable_enqueue_locked(osal_delayable_work_handle* handle) noexc
 }
 
 /// @brief Arm the backing timer for a delayed submission.
-/// @param handle Delayable-work handle, with the mutex already held.
-/// @param delay_ticks Delay to program into the timer.
+/// @param[in] handle       Delayable-work handle, with the mutex already held.
+/// @param[in] delay_ticks  Delay to program into the timer.
 /// @return Result of the timer period/start operations.
 osal_result_t delayable_arm_locked(osal_delayable_work_handle* handle, osal_tick_t delay_ticks) noexcept
 {
@@ -254,7 +254,7 @@ osal_result_t delayable_arm_locked(osal_delayable_work_handle* handle, osal_tick
 }
 
 /// @brief Convert C ABI ticks to an `osal::milliseconds` duration.
-/// @param ticks Timeout in C ABI form.
+/// @param[in] ticks  Timeout in C ABI form.
 /// @return Matching duration, with `OSAL_WAIT_FOREVER` mapped to `-1 ms`.
 [[nodiscard]] osal::milliseconds ticks_to_duration(osal_tick_t ticks) noexcept
 {
@@ -266,7 +266,7 @@ osal_result_t delayable_arm_locked(osal_delayable_work_handle* handle, osal_tick
 }
 
 /// @brief Compute the remaining ticks until one monotonic deadline.
-/// @param deadline Absolute monotonic deadline.
+/// @param[in] deadline  Absolute monotonic deadline.
 /// @return Remaining ticks, or `OSAL_NO_WAIT` once expired.
 [[nodiscard]] osal_tick_t remaining_ticks_until(osal::monotonic_clock::time_point deadline) noexcept
 {
@@ -280,21 +280,21 @@ osal_result_t delayable_arm_locked(osal_delayable_work_handle* handle, osal_tick
 }
 
 /// @brief Unlock a composite notification handle's mutex.
-/// @param handle Notification handle.
+/// @param[in] handle  Notification handle.
 void notification_unlock(const osal_notification_handle* handle) noexcept
 {
     (void)osal_mutex_unlock(OSAL_C_CAST(mtx_h, &handle->mutex));
 }
 
 /// @brief Unlock a composite delayable-work handle's mutex.
-/// @param handle Delayable-work handle.
+/// @param[in] handle  Delayable-work handle.
 void delayable_unlock(osal_delayable_work_handle* handle) noexcept
 {
     (void)osal_mutex_unlock(OSAL_C_CAST(mtx_h, &handle->mutex));
 }
 
 /// @brief Timer callback trampoline for composite delayable work.
-/// @param arg Delayable-work handle supplied by the timer backend.
+/// @param[in] arg  Delayable-work handle supplied by the timer backend.
 /// @details This callback may execute in ISR context on some backends, so it
 ///          only performs atomic state changes and ISR-safe work submission.
 void c_delayable_work_timer_cb(void* arg) noexcept
@@ -323,7 +323,7 @@ void c_delayable_work_timer_cb(void* arg) noexcept
 }
 
 /// @brief Work-queue callback trampoline for composite delayable work.
-/// @param arg Delayable-work handle supplied by the work queue.
+/// @param[in] arg  Delayable-work handle supplied by the work queue.
 void c_delayable_work_work_cb(void* arg) noexcept
 {
     auto* handle = static_cast<osal_delayable_work_handle*>(arg);
@@ -404,18 +404,18 @@ extern "C" int osal_c_clock_high_resolution_supported(void)
 // ============================================================================
 
 /// @brief Create a mutex; see `osal_mutex_create()` for parameter semantics.
-/// @param handle    Output handle.
-/// @param recursive Non-zero to create a recursive mutex.
-/// @return `OSAL_OK` on success.
+/// @param[out] handle    Output handle.
+/// @param[in] recursive  Non-zero to create a recursive mutex.
+/// @retval OSAL_OK  On success.
 extern "C" osal_result_t osal_c_mutex_create(osal_mutex_handle* handle, int recursive)
 {
     return to_c(osal_mutex_create(OSAL_C_CAST(mtx_h, handle), recursive != 0));
 }
 
 /// @brief Create a mutex from a config struct; see `osal_mutex_create()`.
-/// @param handle Output handle.
-/// @param cfg    Pointer to `osal_mutex_config` describing the mutex.
-/// @return `OSAL_OK` on success.
+/// @param[out] handle  Output handle.
+/// @param[in] cfg      Pointer to `osal_mutex_config` describing the mutex.
+/// @retval OSAL_OK  On success.
 extern "C" osal_result_t osal_c_mutex_create_with_cfg(osal_mutex_handle* handle, const osal_mutex_config* cfg)
 {
     if (cfg == nullptr) [[unlikely]]
@@ -426,33 +426,35 @@ extern "C" osal_result_t osal_c_mutex_create_with_cfg(osal_mutex_handle* handle,
 }
 
 /// @brief Destroy a mutex; see `osal_mutex_destroy()`.
-/// @param handle Handle to destroy.
-/// @return `OSAL_OK` on success.
+/// @param[in,out] handle  Handle to destroy.
+/// @retval OSAL_OK  On success.
 extern "C" osal_result_t osal_c_mutex_destroy(osal_mutex_handle* handle)
 {
     return to_c(osal_mutex_destroy(OSAL_C_CAST(mtx_h, handle)));
 }
 
 /// @brief Lock a mutex, blocking up to @p timeout ticks; see `osal_mutex_lock()`.
-/// @param handle  Mutex handle.
-/// @param timeout Ticks to wait; `OSAL_WAIT_FOREVER` to block indefinitely.
-/// @return `OSAL_OK` on success, `OSAL_TIMEOUT` on expiry.
+/// @param[in] handle   Mutex handle.
+/// @param[in] timeout  Ticks to wait; `OSAL_WAIT_FOREVER` to block indefinitely.
+/// @retval OSAL_OK       On success.
+/// @retval OSAL_TIMEOUT  On expiry.
 extern "C" osal_result_t osal_c_mutex_lock(osal_mutex_handle* handle, osal_tick_t timeout)
 {
     return to_c(osal_mutex_lock(OSAL_C_CAST(mtx_h, handle), timeout));
 }
 
 /// @brief Attempt to lock a mutex without blocking; see `osal_mutex_try_lock()`.
-/// @param handle Mutex handle.
-/// @return `OSAL_OK` if locked, `OSAL_WOULD_BLOCK` if already held.
+/// @param[in] handle  Mutex handle.
+/// @retval OSAL_OK           If locked.
+/// @retval OSAL_WOULD_BLOCK  If already held.
 extern "C" osal_result_t osal_c_mutex_try_lock(osal_mutex_handle* handle)
 {
     return to_c(osal_mutex_try_lock(OSAL_C_CAST(mtx_h, handle)));
 }
 
 /// @brief Unlock a mutex; see `osal_mutex_unlock()`.
-/// @param handle Mutex handle.
-/// @return `OSAL_OK` on success.
+/// @param[in] handle  Mutex handle.
+/// @retval OSAL_OK  On success.
 extern "C" osal_result_t osal_c_mutex_unlock(osal_mutex_handle* handle)
 {
     return to_c(osal_mutex_unlock(OSAL_C_CAST(mtx_h, handle)));
@@ -463,10 +465,10 @@ extern "C" osal_result_t osal_c_mutex_unlock(osal_mutex_handle* handle)
 // ============================================================================
 
 /// @brief Create a counting semaphore; see `osal_semaphore_create()`.
-/// @param handle        Output handle.
-/// @param initial_count Initial count.
-/// @param max_count     Maximum count.
-/// @return `OSAL_OK` on success.
+/// @param[out] handle        Output handle.
+/// @param[in] initial_count  Initial count.
+/// @param[in] max_count      Maximum count.
+/// @retval OSAL_OK  On success.
 extern "C" osal_result_t osal_c_semaphore_create(osal_semaphore_handle* handle, unsigned int initial_count,
                                                  unsigned int max_count)
 {
@@ -474,9 +476,9 @@ extern "C" osal_result_t osal_c_semaphore_create(osal_semaphore_handle* handle, 
 }
 
 /// @brief Create a semaphore from a config struct; see `osal_semaphore_create()`.
-/// @param handle Output handle.
-/// @param cfg    Pointer to `osal_semaphore_config`.
-/// @return `OSAL_OK` on success.
+/// @param[out] handle  Output handle.
+/// @param[in] cfg      Pointer to `osal_semaphore_config`.
+/// @retval OSAL_OK  On success.
 extern "C" osal_result_t osal_c_semaphore_create_with_cfg(osal_semaphore_handle*       handle,
                                                           const osal_semaphore_config* cfg)
 {
@@ -488,41 +490,43 @@ extern "C" osal_result_t osal_c_semaphore_create_with_cfg(osal_semaphore_handle*
 }
 
 /// @brief Destroy a semaphore; see `osal_semaphore_destroy()`.
-/// @param handle Handle to destroy.
-/// @return `OSAL_OK` on success.
+/// @param[in,out] handle  Handle to destroy.
+/// @retval OSAL_OK  On success.
 extern "C" osal_result_t osal_c_semaphore_destroy(osal_semaphore_handle* handle)
 {
     return to_c(osal_semaphore_destroy(OSAL_C_CAST(sem_h, handle)));
 }
 
 /// @brief Give (signal) a semaphore from task context; see `osal_semaphore_give()`.
-/// @param handle Semaphore handle.
-/// @return `OSAL_OK` on success.
+/// @param[in] handle  Semaphore handle.
+/// @retval OSAL_OK  On success.
 extern "C" osal_result_t osal_c_semaphore_give(osal_semaphore_handle* handle)
 {
     return to_c(osal_semaphore_give(OSAL_C_CAST(sem_h, handle)));
 }
 
 /// @brief Give a semaphore from ISR context; see `osal_semaphore_give_isr()`.
-/// @param handle Semaphore handle.
-/// @return `OSAL_OK` on success.
+/// @param[in] handle  Semaphore handle.
+/// @retval OSAL_OK  On success.
 extern "C" osal_result_t osal_c_semaphore_give_isr(osal_semaphore_handle* handle)
 {
     return to_c(osal_semaphore_give_isr(OSAL_C_CAST(sem_h, handle)));
 }
 
 /// @brief Take (wait on) a semaphore, blocking up to @p timeout ticks; see `osal_semaphore_take()`.
-/// @param handle  Semaphore handle.
-/// @param timeout Ticks to wait; `OSAL_WAIT_FOREVER` to block indefinitely.
-/// @return `OSAL_OK` on success, `OSAL_TIMEOUT` on expiry.
+/// @param[in] handle   Semaphore handle.
+/// @param[in] timeout  Ticks to wait; `OSAL_WAIT_FOREVER` to block indefinitely.
+/// @retval OSAL_OK       On success.
+/// @retval OSAL_TIMEOUT  On expiry.
 extern "C" osal_result_t osal_c_semaphore_take(osal_semaphore_handle* handle, osal_tick_t timeout)
 {
     return to_c(osal_semaphore_take(OSAL_C_CAST(sem_h, handle), timeout));
 }
 
 /// @brief Attempt to take a semaphore without blocking; see `osal_semaphore_try_take()`.
-/// @param handle Semaphore handle.
-/// @return `OSAL_OK` if taken, `OSAL_WOULD_BLOCK` if count is zero.
+/// @param[in] handle  Semaphore handle.
+/// @retval OSAL_OK           If taken.
+/// @retval OSAL_WOULD_BLOCK  If count is zero.
 extern "C" osal_result_t osal_c_semaphore_try_take(osal_semaphore_handle* handle)
 {
     return to_c(osal_semaphore_try_take(OSAL_C_CAST(sem_h, handle)));
@@ -533,20 +537,20 @@ extern "C" osal_result_t osal_c_semaphore_try_take(osal_semaphore_handle* handle
 // ============================================================================
 
 /// @brief Create a message queue; see `osal_queue_create()`.
-/// @param handle    Output handle.
-/// @param buffer    Caller-supplied backing storage.
-/// @param item_size Size of each message in bytes.
-/// @param capacity  Maximum number of messages.
-/// @return `OSAL_OK` on success.
+/// @param[out] handle    Output handle.
+/// @param[in] buffer     Caller-supplied backing storage.
+/// @param[in] item_size  Size of each message in bytes.
+/// @param[in] capacity   Maximum number of messages.
+/// @retval OSAL_OK  On success.
 extern "C" osal_result_t osal_c_queue_create(osal_queue_handle* handle, void* buffer, size_t item_size, size_t capacity)
 {
     return to_c(osal_queue_create(OSAL_C_CAST(que_h, handle), buffer, item_size, capacity));
 }
 
 /// @brief Create a queue from a config struct; see `osal_queue_create()`.
-/// @param handle Output handle.
-/// @param cfg    Pointer to `osal_queue_config`.
-/// @return `OSAL_OK` on success.
+/// @param[out] handle  Output handle.
+/// @param[in] cfg      Pointer to `osal_queue_config`.
+/// @retval OSAL_OK  On success.
 extern "C" osal_result_t osal_c_queue_create_with_cfg(osal_queue_handle* handle, const osal_queue_config* cfg)
 {
     if (cfg == nullptr) [[unlikely]]
@@ -557,63 +561,68 @@ extern "C" osal_result_t osal_c_queue_create_with_cfg(osal_queue_handle* handle,
 }
 
 /// @brief Destroy a queue; see `osal_queue_destroy()`.
-/// @param handle Handle to destroy.
-/// @return `OSAL_OK` on success.
+/// @param[in,out] handle  Handle to destroy.
+/// @retval OSAL_OK  On success.
 extern "C" osal_result_t osal_c_queue_destroy(osal_queue_handle* handle)
 {
     return to_c(osal_queue_destroy(OSAL_C_CAST(que_h, handle)));
 }
 
 /// @brief Send a message, blocking up to @p timeout ticks; see `osal_queue_send()`.
-/// @param handle  Queue handle.
-/// @param item    Pointer to the message data.
-/// @param timeout Ticks to wait; `OSAL_WAIT_FOREVER` for indefinite.
-/// @return `OSAL_OK` on success, `OSAL_TIMEOUT` if full.
+/// @param[in] handle   Queue handle.
+/// @param[in] item     Pointer to the message data.
+/// @param[in] timeout  Ticks to wait; `OSAL_WAIT_FOREVER` for indefinite.
+/// @retval OSAL_OK       On success.
+/// @retval OSAL_TIMEOUT  If full.
 extern "C" osal_result_t osal_c_queue_send(osal_queue_handle* handle, const void* item, osal_tick_t timeout)
 {
     return to_c(osal_queue_send(OSAL_C_CAST(que_h, handle), item, timeout));
 }
 
 /// @brief Send a message from ISR context (non-blocking); see `osal_queue_send_isr()`.
-/// @param handle Queue handle.
-/// @param item   Pointer to the message data.
-/// @return `OSAL_OK` on success, `OSAL_TIMEOUT` if full.
+/// @param[in] handle  Queue handle.
+/// @param[in] item    Pointer to the message data.
+/// @retval OSAL_OK       On success.
+/// @retval OSAL_TIMEOUT  If full.
 extern "C" osal_result_t osal_c_queue_send_isr(osal_queue_handle* handle, const void* item)
 {
     return to_c(osal_queue_send_isr(OSAL_C_CAST(que_h, handle), item));
 }
 
 /// @brief Receive a message, blocking up to @p timeout ticks; see `osal_queue_receive()`.
-/// @param handle  Queue handle.
-/// @param item    Output buffer for the received message.
-/// @param timeout Ticks to wait; `OSAL_WAIT_FOREVER` for indefinite.
-/// @return `OSAL_OK` on success, `OSAL_TIMEOUT` if empty.
+/// @param[in] handle   Queue handle.
+/// @param[out] item    Output buffer for the received message.
+/// @param[in] timeout  Ticks to wait; `OSAL_WAIT_FOREVER` for indefinite.
+/// @retval OSAL_OK       On success.
+/// @retval OSAL_TIMEOUT  If empty.
 extern "C" osal_result_t osal_c_queue_receive(osal_queue_handle* handle, void* item, osal_tick_t timeout)
 {
     return to_c(osal_queue_receive(OSAL_C_CAST(que_h, handle), item, timeout));
 }
 
 /// @brief Receive a message from ISR context (non-blocking); see `osal_queue_receive_isr()`.
-/// @param handle Queue handle.
-/// @param item   Output buffer for the received message.
-/// @return `OSAL_OK` on success, `OSAL_TIMEOUT` if empty.
+/// @param[in] handle  Queue handle.
+/// @param[out] item   Output buffer for the received message.
+/// @retval OSAL_OK       On success.
+/// @retval OSAL_TIMEOUT  If empty.
 extern "C" osal_result_t osal_c_queue_receive_isr(osal_queue_handle* handle, void* item)
 {
     return to_c(osal_queue_receive_isr(OSAL_C_CAST(que_h, handle), item));
 }
 
 /// @brief Peek at the front message without removing it; see `osal_queue_peek()`.
-/// @param handle  Queue handle.
-/// @param item    Output buffer for the peeked item.
-/// @param timeout Ticks to wait.
-/// @return `OSAL_OK` on success, `OSAL_TIMEOUT` if empty.
+/// @param[in] handle   Queue handle.
+/// @param[out] item    Output buffer for the peeked item.
+/// @param[in] timeout  Ticks to wait.
+/// @retval OSAL_OK       On success.
+/// @retval OSAL_TIMEOUT  If empty.
 extern "C" osal_result_t osal_c_queue_peek(osal_queue_handle* handle, void* item, osal_tick_t timeout)
 {
     return to_c(osal_queue_peek(OSAL_C_CAST(que_h, handle), item, timeout));
 }
 
 /// @brief Return the number of messages currently in the queue.
-/// @param handle Queue handle (const).
+/// @param[in] handle  Queue handle (const).
 /// @return Message count.
 extern "C" size_t osal_c_queue_count(const osal_queue_handle* handle)
 {
@@ -621,7 +630,7 @@ extern "C" size_t osal_c_queue_count(const osal_queue_handle* handle)
 }
 
 /// @brief Return the number of free slots in the queue.
-/// @param handle Queue handle (const).
+/// @param[in] handle  Queue handle (const).
 /// @return Free slot count.
 extern "C" size_t osal_c_queue_free(const osal_queue_handle* handle)
 {
@@ -633,15 +642,15 @@ extern "C" size_t osal_c_queue_free(const osal_queue_handle* handle)
 // ============================================================================
 
 /// @brief Create and start a thread; see `osal_thread_create()`.
-/// @param handle     Output handle.
-/// @param entry      Thread entry function.
-/// @param arg        Argument passed to @p entry.
-/// @param priority   OSAL priority [0=lowest, 255=highest].
-/// @param affinity   CPU affinity mask or `OSAL_AFFINITY_ANY`.
-/// @param stack      Caller-supplied stack buffer.
-/// @param stack_bytes Size of @p stack in bytes.
-/// @param name       Optional thread name.
-/// @return `OSAL_OK` on success.
+/// @param[out] handle      Output handle.
+/// @param[in] entry        Thread entry function.
+/// @param[in] arg          Argument passed to @p entry.
+/// @param[in] priority     OSAL priority [0=lowest, 255=highest].
+/// @param[in] affinity     CPU affinity mask or `OSAL_AFFINITY_ANY`.
+/// @param[in] stack        Caller-supplied stack buffer.
+/// @param[in] stack_bytes  Size of @p stack in bytes.
+/// @param[in] name         Optional thread name.
+/// @retval OSAL_OK  On success.
 extern "C" osal_result_t osal_c_thread_create(osal_thread_handle* handle, osal_c_thread_entry_t entry, void* arg,
                                               osal_priority_t priority, osal_affinity_t affinity, void* stack,
                                               size_t stack_bytes, const char* name)
@@ -651,9 +660,9 @@ extern "C" osal_result_t osal_c_thread_create(osal_thread_handle* handle, osal_c
 }
 
 /// @brief Create a thread from a config struct; see `osal_thread_create()`.
-/// @param handle Output handle.
-/// @param cfg    Pointer to `osal_thread_config`.
-/// @return `OSAL_OK` on success.
+/// @param[out] handle  Output handle.
+/// @param[in] cfg      Pointer to `osal_thread_config`.
+/// @retval OSAL_OK  On success.
 extern "C" osal_result_t osal_c_thread_create_with_cfg(osal_thread_handle* handle, const osal_thread_config* cfg)
 {
     if (cfg == nullptr) [[unlikely]]
@@ -665,51 +674,55 @@ extern "C" osal_result_t osal_c_thread_create_with_cfg(osal_thread_handle* handl
 }
 
 /// @brief Wait for a thread to finish, blocking up to @p timeout ticks; see `osal_thread_join()`.
-/// @param handle  Thread handle.
-/// @param timeout Ticks to wait; `OSAL_WAIT_FOREVER` for indefinite.
-/// @return `OSAL_OK` on join, `OSAL_TIMEOUT` on expiry.
+/// @param[in] handle   Thread handle.
+/// @param[in] timeout  Ticks to wait; `OSAL_WAIT_FOREVER` for indefinite.
+/// @retval OSAL_OK       On join.
+/// @retval OSAL_TIMEOUT  On expiry.
 extern "C" osal_result_t osal_c_thread_join(osal_thread_handle* handle, osal_tick_t timeout)
 {
     return to_c(osal_thread_join(OSAL_C_CAST(thr_h, handle), timeout));
 }
 
 /// @brief Detach a thread (fire-and-forget); see `osal_thread_detach()`.
-/// @param handle Thread handle.
-/// @return `OSAL_OK` on success.
+/// @param[in] handle  Thread handle.
+/// @retval OSAL_OK  On success.
 extern "C" osal_result_t osal_c_thread_detach(osal_thread_handle* handle)
 {
     return to_c(osal_thread_detach(OSAL_C_CAST(thr_h, handle)));
 }
 
 /// @brief Change the priority of a running thread; see `osal_thread_set_priority()`.
-/// @param handle   Thread handle.
-/// @param priority New OSAL priority [0=lowest, 255=highest].
-/// @return `OSAL_OK` on success.
+/// @param[in] handle    Thread handle.
+/// @param[in] priority  New OSAL priority [0=lowest, 255=highest].
+/// @retval OSAL_OK  On success.
 extern "C" osal_result_t osal_c_thread_set_priority(osal_thread_handle* handle, osal_priority_t priority)
 {
     return to_c(osal_thread_set_priority(OSAL_C_CAST(thr_h, handle), priority));
 }
 
 /// @brief Change the CPU affinity of a running thread; see `osal_thread_set_affinity()`.
-/// @param handle   Thread handle.
-/// @param affinity New affinity mask.
-/// @return `OSAL_OK` on success, `OSAL_NOT_SUPPORTED` on backends without affinity.
+/// @param[in] handle    Thread handle.
+/// @param[in] affinity  New affinity mask.
+/// @retval OSAL_OK             On success.
+/// @retval OSAL_NOT_SUPPORTED  On backends without affinity.
 extern "C" osal_result_t osal_c_thread_set_affinity(osal_thread_handle* handle, osal_affinity_t affinity)
 {
     return to_c(osal_thread_set_affinity(OSAL_C_CAST(thr_h, handle), affinity));
 }
 
 /// @brief Suspend a thread; see `osal_thread_suspend()`.
-/// @param handle Thread handle.
-/// @return `OSAL_OK` on success, `OSAL_NOT_SUPPORTED` if the backend lacks suspend.
+/// @param[in] handle  Thread handle.
+/// @retval OSAL_OK             On success.
+/// @retval OSAL_NOT_SUPPORTED  If the backend lacks suspend.
 extern "C" osal_result_t osal_c_thread_suspend(osal_thread_handle* handle)
 {
     return to_c(osal_thread_suspend(OSAL_C_CAST(thr_h, handle)));
 }
 
 /// @brief Resume a suspended thread; see `osal_thread_resume()`.
-/// @param handle Thread handle.
-/// @return `OSAL_OK` on success, `OSAL_NOT_SUPPORTED` if the backend lacks resume.
+/// @param[in] handle  Thread handle.
+/// @retval OSAL_OK             On success.
+/// @retval OSAL_NOT_SUPPORTED  If the backend lacks resume.
 extern "C" osal_result_t osal_c_thread_resume(osal_thread_handle* handle)
 {
     return to_c(osal_thread_resume(OSAL_C_CAST(thr_h, handle)));
@@ -722,7 +735,7 @@ extern "C" void osal_c_thread_yield(void)
 }
 
 /// @brief Sleep the current thread for @p ms milliseconds.
-/// @param ms Milliseconds to sleep.
+/// @param[in] ms  Milliseconds to sleep.
 extern "C" void osal_c_thread_sleep_ms(uint32_t ms)
 {
     osal_thread_sleep_ms(ms);
@@ -733,8 +746,9 @@ extern "C" void osal_c_thread_sleep_ms(uint32_t ms)
 // ============================================================================
 
 /// @brief Allocate a thread-local storage key.
-/// @param handle Output handle; `handle->key` is set on success.
-/// @return `OSAL_OK` on success, `OSAL_OUT_OF_RESOURCES` if the key table is full.
+/// @param[out] handle  Output handle; `handle->key` is set on success.
+/// @retval OSAL_OK                On success.
+/// @retval OSAL_OUT_OF_RESOURCES  If the key table is full.
 extern "C" osal_result_t osal_c_tls_key_create(osal_tls_key_handle* handle)
 {
     if (handle == nullptr)
@@ -754,8 +768,9 @@ extern "C" osal_result_t osal_c_tls_key_create(osal_tls_key_handle* handle)
 }
 
 /// @brief Release a thread-local storage key.
-/// @param handle Key handle to destroy.
-/// @return `OSAL_OK` on success, `OSAL_NOT_INITIALIZED` if already destroyed.
+/// @param[in,out] handle  Key handle to destroy.
+/// @retval OSAL_OK               On success.
+/// @retval OSAL_NOT_INITIALIZED  If already destroyed.
 extern "C" osal_result_t osal_c_tls_key_destroy(osal_tls_key_handle* handle)
 {
     if (handle == nullptr)
@@ -774,9 +789,9 @@ extern "C" osal_result_t osal_c_tls_key_destroy(osal_tls_key_handle* handle)
 }
 
 /// @brief Store @p value in thread-local storage for the calling thread.
-/// @param handle Key handle.
-/// @param value  Value to store (opaque pointer).
-/// @return `OSAL_OK` on success.
+/// @param[in] handle  Key handle.
+/// @param[in] value   Value to store (opaque pointer).
+/// @retval OSAL_OK  On success.
 extern "C" osal_result_t osal_c_tls_set(osal_tls_key_handle* handle, void* value)
 {
     if (handle == nullptr)
@@ -793,7 +808,7 @@ extern "C" osal_result_t osal_c_tls_set(osal_tls_key_handle* handle, void* value
 }
 
 /// @brief Retrieve the value stored by the calling thread for @p key.
-/// @param handle Key handle (const).
+/// @param[in] handle  Key handle (const).
 /// @return Previously set value, or `nullptr` if none or @p handle is invalid.
 extern "C" void* osal_c_tls_get(const osal_tls_key_handle* handle)
 {
@@ -809,13 +824,13 @@ extern "C" void* osal_c_tls_get(const osal_tls_key_handle* handle)
 // ============================================================================
 
 /// @brief Create a software timer; see `osal_timer_create()`.
-/// @param handle       Output handle.
-/// @param name         Optional timer name.
-/// @param callback     Function called when the timer fires.
-/// @param arg          Argument passed to @p callback.
-/// @param period_ticks Period in ticks.
-/// @param auto_reload  Non-zero for a periodic timer; zero for one-shot.
-/// @return `OSAL_OK` on success.
+/// @param[out] handle       Output handle.
+/// @param[in] name          Optional timer name.
+/// @param[in] callback      Function called when the timer fires.
+/// @param[in] arg           Argument passed to @p callback.
+/// @param[in] period_ticks  Period in ticks.
+/// @param[in] auto_reload   Non-zero for a periodic timer; zero for one-shot.
+/// @retval OSAL_OK  On success.
 extern "C" osal_result_t osal_c_timer_create(osal_timer_handle* handle, const char* name,
                                              osal_c_timer_callback_t callback, void* arg, osal_tick_t period_ticks,
                                              int auto_reload)
@@ -824,9 +839,9 @@ extern "C" osal_result_t osal_c_timer_create(osal_timer_handle* handle, const ch
 }
 
 /// @brief Create a timer from a config struct; see `osal_timer_create()`.
-/// @param handle Output handle.
-/// @param cfg    Pointer to `osal_timer_config`.
-/// @return `OSAL_OK` on success.
+/// @param[out] handle  Output handle.
+/// @param[in] cfg      Pointer to `osal_timer_config`.
+/// @retval OSAL_OK  On success.
 extern "C" osal_result_t osal_c_timer_create_with_cfg(osal_timer_handle* handle, const osal_timer_config* cfg)
 {
     if (cfg == nullptr) [[unlikely]]
@@ -838,48 +853,48 @@ extern "C" osal_result_t osal_c_timer_create_with_cfg(osal_timer_handle* handle,
 }
 
 /// @brief Destroy a timer; see `osal_timer_destroy()`.
-/// @param handle Handle to destroy.
-/// @return `OSAL_OK` on success.
+/// @param[in,out] handle  Handle to destroy.
+/// @retval OSAL_OK  On success.
 extern "C" osal_result_t osal_c_timer_destroy(osal_timer_handle* handle)
 {
     return to_c(osal_timer_destroy(OSAL_C_CAST(tmr_h, handle)));
 }
 
 /// @brief Start (arm) a timer; see `osal_timer_start()`.
-/// @param handle Timer handle.
-/// @return `OSAL_OK` on success.
+/// @param[in] handle  Timer handle.
+/// @retval OSAL_OK  On success.
 extern "C" osal_result_t osal_c_timer_start(osal_timer_handle* handle)
 {
     return to_c(osal_timer_start(OSAL_C_CAST(tmr_h, handle)));
 }
 
 /// @brief Stop (disarm) a timer; see `osal_timer_stop()`.
-/// @param handle Timer handle.
-/// @return `OSAL_OK` on success.
+/// @param[in] handle  Timer handle.
+/// @retval OSAL_OK  On success.
 extern "C" osal_result_t osal_c_timer_stop(osal_timer_handle* handle)
 {
     return to_c(osal_timer_stop(OSAL_C_CAST(tmr_h, handle)));
 }
 
 /// @brief Restart a timer from zero; see `osal_timer_reset()`.
-/// @param handle Timer handle.
-/// @return `OSAL_OK` on success.
+/// @param[in] handle  Timer handle.
+/// @retval OSAL_OK  On success.
 extern "C" osal_result_t osal_c_timer_reset(osal_timer_handle* handle)
 {
     return to_c(osal_timer_reset(OSAL_C_CAST(tmr_h, handle)));
 }
 
 /// @brief Change a timer's period; see `osal_timer_set_period()`.
-/// @param handle           Timer handle.
-/// @param new_period_ticks New period in ticks.
-/// @return `OSAL_OK` on success.
+/// @param[in] handle            Timer handle.
+/// @param[in] new_period_ticks  New period in ticks.
+/// @retval OSAL_OK  On success.
 extern "C" osal_result_t osal_c_timer_set_period(osal_timer_handle* handle, osal_tick_t new_period_ticks)
 {
     return to_c(osal_timer_set_period(OSAL_C_CAST(tmr_h, handle), new_period_ticks));
 }
 
 /// @brief Query whether a timer is currently running.
-/// @param handle Timer handle (const).
+/// @param[in] handle  Timer handle (const).
 /// @return 1 if the timer is active, 0 otherwise.
 extern "C" int osal_c_timer_is_active(const osal_timer_handle* handle)
 {
@@ -891,41 +906,41 @@ extern "C" int osal_c_timer_is_active(const osal_timer_handle* handle)
 // ============================================================================
 
 /// @brief Create an event-flags group; see `osal_event_flags_create()`.
-/// @param handle Output handle.
-/// @return `OSAL_OK` on success.
+/// @param[out] handle  Output handle.
+/// @retval OSAL_OK  On success.
 extern "C" osal_result_t osal_c_event_flags_create(osal_event_flags_handle* handle)
 {
     return to_c(osal_event_flags_create(OSAL_C_CAST(ef_h, handle)));
 }
 
 /// @brief Destroy an event-flags group; see `osal_event_flags_destroy()`.
-/// @param handle Handle to destroy.
-/// @return `OSAL_OK` on success.
+/// @param[in,out] handle  Handle to destroy.
+/// @retval OSAL_OK  On success.
 extern "C" osal_result_t osal_c_event_flags_destroy(osal_event_flags_handle* handle)
 {
     return to_c(osal_event_flags_destroy(OSAL_C_CAST(ef_h, handle)));
 }
 
 /// @brief Set (OR) event bits in a group; see `osal_event_flags_set()`.
-/// @param handle Event-flags handle.
-/// @param bits   Bit mask to OR in.
-/// @return `OSAL_OK` on success.
+/// @param[in] handle  Event-flags handle.
+/// @param[in] bits    Bit mask to OR in.
+/// @retval OSAL_OK  On success.
 extern "C" osal_result_t osal_c_event_flags_set(osal_event_flags_handle* handle, osal_event_bits_t bits)
 {
     return to_c(osal_event_flags_set(OSAL_C_CAST(ef_h, handle), bits));
 }
 
 /// @brief Clear (AND-invert) event bits; see `osal_event_flags_clear()`.
-/// @param handle Event-flags handle.
-/// @param bits   Bit mask to clear.
-/// @return `OSAL_OK` on success.
+/// @param[in] handle  Event-flags handle.
+/// @param[in] bits    Bit mask to clear.
+/// @retval OSAL_OK  On success.
 extern "C" osal_result_t osal_c_event_flags_clear(osal_event_flags_handle* handle, osal_event_bits_t bits)
 {
     return to_c(osal_event_flags_clear(OSAL_C_CAST(ef_h, handle), bits));
 }
 
 /// @brief Read the current event bits without blocking; see `osal_event_flags_get()`.
-/// @param handle Event-flags handle (const).
+/// @param[in] handle  Event-flags handle (const).
 /// @return Current bit pattern.
 extern "C" osal_event_bits_t osal_c_event_flags_get(const osal_event_flags_handle* handle)
 {
@@ -933,12 +948,13 @@ extern "C" osal_event_bits_t osal_c_event_flags_get(const osal_event_flags_handl
 }
 
 /// @brief Wait until any of @p wait_bits are set; see `osal_event_flags_wait_any()`.
-/// @param handle        Event-flags handle.
-/// @param wait_bits     Bit mask to wait for (any bit sufficient).
-/// @param actual_bits   If non-null, receives the bit value at wakeup.
-/// @param clear_on_exit Non-zero to clear matched bits before returning.
-/// @param timeout       Ticks to wait; `OSAL_WAIT_FOREVER` for indefinite.
-/// @return `OSAL_OK` when matched, `OSAL_TIMEOUT` on expiry.
+/// @param[in] handle         Event-flags handle.
+/// @param[in] wait_bits      Bit mask to wait for (any bit sufficient).
+/// @param[out] actual_bits   If non-null, receives the bit value at wakeup.
+/// @param[in] clear_on_exit  Non-zero to clear matched bits before returning.
+/// @param[in] timeout        Ticks to wait; `OSAL_WAIT_FOREVER` for indefinite.
+/// @retval OSAL_OK       When matched.
+/// @retval OSAL_TIMEOUT  On expiry.
 extern "C" osal_result_t osal_c_event_flags_wait_any(osal_event_flags_handle* handle, osal_event_bits_t wait_bits,
                                                      osal_event_bits_t* actual_bits, int clear_on_exit,
                                                      osal_tick_t timeout)
@@ -948,12 +964,13 @@ extern "C" osal_result_t osal_c_event_flags_wait_any(osal_event_flags_handle* ha
 }
 
 /// @brief Wait until all of @p wait_bits are set; see `osal_event_flags_wait_all()`.
-/// @param handle        Event-flags handle.
-/// @param wait_bits     Bit mask to wait for (all bits must be set).
-/// @param actual_bits   If non-null, receives the bit value at wakeup.
-/// @param clear_on_exit Non-zero to clear matched bits before returning.
-/// @param timeout       Ticks to wait; `OSAL_WAIT_FOREVER` for indefinite.
-/// @return `OSAL_OK` when all matched, `OSAL_TIMEOUT` on expiry.
+/// @param[in] handle         Event-flags handle.
+/// @param[in] wait_bits      Bit mask to wait for (all bits must be set).
+/// @param[out] actual_bits   If non-null, receives the bit value at wakeup.
+/// @param[in] clear_on_exit  Non-zero to clear matched bits before returning.
+/// @param[in] timeout        Ticks to wait; `OSAL_WAIT_FOREVER` for indefinite.
+/// @retval OSAL_OK       When all matched.
+/// @retval OSAL_TIMEOUT  On expiry.
 extern "C" osal_result_t osal_c_event_flags_wait_all(osal_event_flags_handle* handle, osal_event_bits_t wait_bits,
                                                      osal_event_bits_t* actual_bits, int clear_on_exit,
                                                      osal_tick_t timeout)
@@ -963,9 +980,9 @@ extern "C" osal_result_t osal_c_event_flags_wait_all(osal_event_flags_handle* ha
 }
 
 /// @brief Set event bits from ISR context; see `osal_event_flags_set_isr()`.
-/// @param handle Event-flags handle.
-/// @param bits   Bit mask to OR in.
-/// @return `OSAL_OK` on success.
+/// @param[in] handle  Event-flags handle.
+/// @param[in] bits    Bit mask to OR in.
+/// @retval OSAL_OK  On success.
 extern "C" osal_result_t osal_c_event_flags_set_isr(osal_event_flags_handle* handle, osal_event_bits_t bits)
 {
     return to_c(osal_event_flags_set_isr(OSAL_C_CAST(ef_h, handle), bits));
@@ -976,16 +993,16 @@ extern "C" osal_result_t osal_c_event_flags_set_isr(osal_event_flags_handle* han
 // ============================================================================
 
 /// @brief Create a condition variable; see `osal_condvar_create()`.
-/// @param handle Output handle.
-/// @return `OSAL_OK` on success.
+/// @param[out] handle  Output handle.
+/// @retval OSAL_OK  On success.
 extern "C" osal_result_t osal_c_condvar_create(osal_condvar_handle* handle)
 {
     return to_c(osal_condvar_create(OSAL_C_CAST(cv_h, handle)));
 }
 
 /// @brief Destroy a condition variable; see `osal_condvar_destroy()`.
-/// @param handle Handle to destroy.
-/// @return `OSAL_OK` on success.
+/// @param[in,out] handle  Handle to destroy.
+/// @retval OSAL_OK  On success.
 extern "C" osal_result_t osal_c_condvar_destroy(osal_condvar_handle* handle)
 {
     return to_c(osal_condvar_destroy(OSAL_C_CAST(cv_h, handle)));
@@ -997,16 +1014,16 @@ extern "C" osal_result_t osal_c_condvar_wait(osal_condvar_handle* handle, osal_m
 }
 
 /// @brief Wake one thread waiting on the condition variable.
-/// @param handle Condvar handle.
-/// @return `OSAL_OK` on success.
+/// @param[in] handle  Condvar handle.
+/// @retval OSAL_OK  On success.
 extern "C" osal_result_t osal_c_condvar_notify_one(osal_condvar_handle* handle)
 {
     return to_c(osal_condvar_notify_one(OSAL_C_CAST(cv_h, handle)));
 }
 
 /// @brief Wake all threads waiting on the condition variable.
-/// @param handle Condvar handle.
-/// @return `OSAL_OK` on success.
+/// @param[in] handle  Condvar handle.
+/// @retval OSAL_OK  On success.
 extern "C" osal_result_t osal_c_condvar_notify_all(osal_condvar_handle* handle)
 {
     return to_c(osal_condvar_notify_all(OSAL_C_CAST(cv_h, handle)));
@@ -1281,12 +1298,12 @@ extern "C" std::uint32_t osal_c_notification_peek(const osal_notification_handle
 // ============================================================================
 
 /// @brief Create a work queue; see `osal_work_queue_create()`.
-/// @param handle      Output handle.
-/// @param stack       Stack buffer for the worker thread.
-/// @param stack_bytes Stack size in bytes.
-/// @param depth       Maximum number of pending work items.
-/// @param name        Optional queue name.
-/// @return `OSAL_OK` on success.
+/// @param[out] handle      Output handle.
+/// @param[in] stack        Stack buffer for the worker thread.
+/// @param[in] stack_bytes  Stack size in bytes.
+/// @param[in] depth        Maximum number of pending work items.
+/// @param[in] name         Optional queue name.
+/// @retval OSAL_OK  On success.
 extern "C" osal_result_t osal_c_work_queue_create(osal_work_queue_handle* handle, void* stack, size_t stack_bytes,
                                                   size_t depth, const char* name)
 {
@@ -1294,9 +1311,9 @@ extern "C" osal_result_t osal_c_work_queue_create(osal_work_queue_handle* handle
 }
 
 /// @brief Create a work queue from a config struct; see `osal_work_queue_create()`.
-/// @param handle Output handle.
-/// @param cfg    Pointer to `osal_work_queue_config`.
-/// @return `OSAL_OK` on success.
+/// @param[out] handle  Output handle.
+/// @param[in] cfg      Pointer to `osal_work_queue_config`.
+/// @retval OSAL_OK  On success.
 extern "C" osal_result_t osal_c_work_queue_create_with_cfg(osal_work_queue_handle*       handle,
                                                            const osal_work_queue_config* cfg)
 {
@@ -1308,28 +1325,30 @@ extern "C" osal_result_t osal_c_work_queue_create_with_cfg(osal_work_queue_handl
 }
 
 /// @brief Destroy a work queue; see `osal_work_queue_destroy()`.
-/// @param handle Handle to destroy.
-/// @return `OSAL_OK` on success.
+/// @param[in,out] handle  Handle to destroy.
+/// @retval OSAL_OK  On success.
 extern "C" osal_result_t osal_c_work_queue_destroy(osal_work_queue_handle* handle)
 {
     return to_c(osal_work_queue_destroy(OSAL_C_CAST(wq_h, handle)));
 }
 
 /// @brief Submit a work item from task context; see `osal_work_queue_submit()`.
-/// @param handle Work-queue handle.
-/// @param func   Function to execute on the queue.
-/// @param arg    Argument passed to @p func.
-/// @return `OSAL_OK` if submitted, `OSAL_QUEUE_FULL` if queue full.
+/// @param[in] handle  Work-queue handle.
+/// @param[in] func    Function to execute on the queue.
+/// @param[in] arg     Argument passed to @p func.
+/// @retval OSAL_OK          If submitted.
+/// @retval OSAL_QUEUE_FULL  If queue full.
 extern "C" osal_result_t osal_c_work_queue_submit(osal_work_queue_handle* handle, osal_c_work_func_t func, void* arg)
 {
     return to_c(osal_work_queue_submit(OSAL_C_CAST(wq_h, handle), func, arg));
 }
 
 /// @brief Submit a work item from ISR context; see `osal_work_queue_submit_from_isr()`.
-/// @param handle Work-queue handle.
-/// @param func   Function to execute.
-/// @param arg    Argument passed to @p func.
-/// @return `OSAL_OK` if submitted, `OSAL_QUEUE_FULL` if queue full.
+/// @param[in] handle  Work-queue handle.
+/// @param[in] func    Function to execute.
+/// @param[in] arg     Argument passed to @p func.
+/// @retval OSAL_OK          If submitted.
+/// @retval OSAL_QUEUE_FULL  If queue full.
 extern "C" osal_result_t osal_c_work_queue_submit_from_isr(osal_work_queue_handle* handle, osal_c_work_func_t func,
                                                            void* arg)
 {
@@ -1337,24 +1356,25 @@ extern "C" osal_result_t osal_c_work_queue_submit_from_isr(osal_work_queue_handl
 }
 
 /// @brief Block until all currently queued items have been processed.
-/// @param handle  Work-queue handle.
-/// @param timeout Ticks to wait.
-/// @return `OSAL_OK` when drained, `OSAL_TIMEOUT` on expiry.
+/// @param[in] handle   Work-queue handle.
+/// @param[in] timeout  Ticks to wait.
+/// @retval OSAL_OK       When drained.
+/// @retval OSAL_TIMEOUT  On expiry.
 extern "C" osal_result_t osal_c_work_queue_flush(osal_work_queue_handle* handle, osal_tick_t timeout)
 {
     return to_c(osal_work_queue_flush(OSAL_C_CAST(wq_h, handle), timeout));
 }
 
 /// @brief Discard all pending work items without executing them.
-/// @param handle Work-queue handle.
-/// @return `OSAL_OK` on success.
+/// @param[in] handle  Work-queue handle.
+/// @retval OSAL_OK  On success.
 extern "C" osal_result_t osal_c_work_queue_cancel_all(osal_work_queue_handle* handle)
 {
     return to_c(osal_work_queue_cancel_all(OSAL_C_CAST(wq_h, handle)));
 }
 
 /// @brief Query how many items are pending in the work queue.
-/// @param handle Work-queue handle (const).
+/// @param[in] handle  Work-queue handle (const).
 /// @return Number of pending items.
 extern "C" size_t osal_c_work_queue_pending(const osal_work_queue_handle* handle)
 {
@@ -1641,13 +1661,13 @@ extern "C" int osal_c_delayable_work_running(const osal_delayable_work_handle* h
 // ============================================================================
 
 /// @brief Create a fixed-block memory pool; see `osal_memory_pool_create()`.
-/// @param handle      Output handle.
-/// @param buffer      Caller-supplied backing memory.
-/// @param buf_bytes   Total size of @p buffer in bytes.
-/// @param block_size  Size in bytes of each block.
-/// @param block_count Number of blocks in the pool.
-/// @param name        Optional pool name.
-/// @return `OSAL_OK` on success.
+/// @param[out] handle      Output handle.
+/// @param[in] buffer       Caller-supplied backing memory.
+/// @param[in] buf_bytes    Total size of @p buffer in bytes.
+/// @param[in] block_size   Size in bytes of each block.
+/// @param[in] block_count  Number of blocks in the pool.
+/// @param[in] name         Optional pool name.
+/// @retval OSAL_OK  On success.
 extern "C" osal_result_t osal_c_memory_pool_create(osal_memory_pool_handle* handle, void* buffer, size_t buf_bytes,
                                                    size_t block_size, size_t block_count, const char* name)
 {
@@ -1655,9 +1675,9 @@ extern "C" osal_result_t osal_c_memory_pool_create(osal_memory_pool_handle* hand
 }
 
 /// @brief Create a memory pool from a config struct; see `osal_memory_pool_create()`.
-/// @param handle Output handle.
-/// @param cfg    Pointer to `osal_memory_pool_config`.
-/// @return `OSAL_OK` on success.
+/// @param[out] handle  Output handle.
+/// @param[in] cfg      Pointer to `osal_memory_pool_config`.
+/// @retval OSAL_OK  On success.
 extern "C" osal_result_t osal_c_memory_pool_create_with_cfg(osal_memory_pool_handle*       handle,
                                                             const osal_memory_pool_config* cfg)
 {
@@ -1670,15 +1690,15 @@ extern "C" osal_result_t osal_c_memory_pool_create_with_cfg(osal_memory_pool_han
 }
 
 /// @brief Destroy a memory pool; see `osal_memory_pool_destroy()`.
-/// @param handle Handle to destroy.
-/// @return `OSAL_OK` on success.
+/// @param[in,out] handle  Handle to destroy.
+/// @retval OSAL_OK  On success.
 extern "C" osal_result_t osal_c_memory_pool_destroy(osal_memory_pool_handle* handle)
 {
     return to_c(osal_memory_pool_destroy(OSAL_C_CAST(mp_h, handle)));
 }
 
 /// @brief Allocate one block; blocks indefinitely until a block is free.
-/// @param handle Pool handle.
+/// @param[in] handle  Pool handle.
 /// @return Pointer to the allocated block, or `nullptr` on error.
 extern "C" void* osal_c_memory_pool_allocate(osal_memory_pool_handle* handle)
 {
@@ -1686,8 +1706,8 @@ extern "C" void* osal_c_memory_pool_allocate(osal_memory_pool_handle* handle)
 }
 
 /// @brief Allocate one block with a timeout; see `osal_memory_pool_allocate_timed()`.
-/// @param handle  Pool handle.
-/// @param timeout Ticks to wait if the pool is empty.
+/// @param[in] handle   Pool handle.
+/// @param[in] timeout  Ticks to wait if the pool is empty.
 /// @return Pointer to the block, or `nullptr` on timeout/error.
 extern "C" void* osal_c_memory_pool_allocate_timed(osal_memory_pool_handle* handle, osal_tick_t timeout)
 {
@@ -1695,16 +1715,16 @@ extern "C" void* osal_c_memory_pool_allocate_timed(osal_memory_pool_handle* hand
 }
 
 /// @brief Return a previously allocated block to the pool.
-/// @param handle Pool handle.
-/// @param block  Block pointer obtained from `osal_c_memory_pool_allocate`.
-/// @return `OSAL_OK` on success.
+/// @param[in] handle  Pool handle.
+/// @param[in] block   Block pointer obtained from `osal_c_memory_pool_allocate`.
+/// @retval OSAL_OK  On success.
 extern "C" osal_result_t osal_c_memory_pool_deallocate(osal_memory_pool_handle* handle, void* block)
 {
     return to_c(osal_memory_pool_deallocate(OSAL_C_CAST(mp_h, handle), block));
 }
 
 /// @brief Query the number of free blocks remaining in the pool.
-/// @param handle Pool handle (const).
+/// @param[in] handle  Pool handle (const).
 /// @return Number of available blocks.
 extern "C" size_t osal_c_memory_pool_available(const osal_memory_pool_handle* handle)
 {
@@ -1716,50 +1736,52 @@ extern "C" size_t osal_c_memory_pool_available(const osal_memory_pool_handle* ha
 // ============================================================================
 
 /// @brief Create a reader-writer lock; see `osal_rwlock_create()`.
-/// @param handle Output handle.
-/// @return `OSAL_OK` on success.
+/// @param[out] handle  Output handle.
+/// @retval OSAL_OK  On success.
 extern "C" osal_result_t osal_c_rwlock_create(osal_rwlock_handle* handle)
 {
     return to_c(osal_rwlock_create(OSAL_C_CAST(rw_h, handle)));
 }
 
 /// @brief Destroy a reader-writer lock; see `osal_rwlock_destroy()`.
-/// @param handle Handle to destroy.
-/// @return `OSAL_OK` on success.
+/// @param[in,out] handle  Handle to destroy.
+/// @retval OSAL_OK  On success.
 extern "C" osal_result_t osal_c_rwlock_destroy(osal_rwlock_handle* handle)
 {
     return to_c(osal_rwlock_destroy(OSAL_C_CAST(rw_h, handle)));
 }
 
 /// @brief Acquire the lock for shared (read) access.
-/// @param handle  RWLock handle.
-/// @param timeout Ticks to wait.
-/// @return `OSAL_OK` on success, `OSAL_TIMEOUT` on expiry.
+/// @param[in] handle   RWLock handle.
+/// @param[in] timeout  Ticks to wait.
+/// @retval OSAL_OK       On success.
+/// @retval OSAL_TIMEOUT  On expiry.
 extern "C" osal_result_t osal_c_rwlock_read_lock(osal_rwlock_handle* handle, osal_tick_t timeout)
 {
     return to_c(osal_rwlock_read_lock(OSAL_C_CAST(rw_h, handle), timeout));
 }
 
 /// @brief Release shared (read) access.
-/// @param handle RWLock handle.
-/// @return `OSAL_OK` on success.
+/// @param[in] handle  RWLock handle.
+/// @retval OSAL_OK  On success.
 extern "C" osal_result_t osal_c_rwlock_read_unlock(osal_rwlock_handle* handle)
 {
     return to_c(osal_rwlock_read_unlock(OSAL_C_CAST(rw_h, handle)));
 }
 
 /// @brief Acquire the lock for exclusive (write) access.
-/// @param handle  RWLock handle.
-/// @param timeout Ticks to wait.
-/// @return `OSAL_OK` on success, `OSAL_TIMEOUT` on expiry.
+/// @param[in] handle   RWLock handle.
+/// @param[in] timeout  Ticks to wait.
+/// @retval OSAL_OK       On success.
+/// @retval OSAL_TIMEOUT  On expiry.
 extern "C" osal_result_t osal_c_rwlock_write_lock(osal_rwlock_handle* handle, osal_tick_t timeout)
 {
     return to_c(osal_rwlock_write_lock(OSAL_C_CAST(rw_h, handle), timeout));
 }
 
 /// @brief Release exclusive (write) access.
-/// @param handle RWLock handle.
-/// @return `OSAL_OK` on success.
+/// @param[in] handle  RWLock handle.
+/// @retval OSAL_OK  On success.
 extern "C" osal_result_t osal_c_rwlock_write_unlock(osal_rwlock_handle* handle)
 {
     return to_c(osal_rwlock_write_unlock(OSAL_C_CAST(rw_h, handle)));
@@ -1770,11 +1792,11 @@ extern "C" osal_result_t osal_c_rwlock_write_unlock(osal_rwlock_handle* handle)
 // ============================================================================
 
 /// @brief Create a byte-stream buffer; see `osal_stream_buffer_create()`.
-/// @param handle        Output handle.
-/// @param buffer        Caller-supplied backing memory.
-/// @param capacity      Total buffer capacity in bytes.
-/// @param trigger_level Minimum bytes before a blocked receiver wakes.
-/// @return `OSAL_OK` on success.
+/// @param[out] handle        Output handle.
+/// @param[in] buffer         Caller-supplied backing memory.
+/// @param[in] capacity       Total buffer capacity in bytes.
+/// @param[in] trigger_level  Minimum bytes before a blocked receiver wakes.
+/// @retval OSAL_OK  On success.
 extern "C" osal_result_t osal_c_stream_buffer_create(osal_stream_buffer_handle* handle, void* buffer, size_t capacity,
                                                      size_t trigger_level)
 {
@@ -1782,9 +1804,9 @@ extern "C" osal_result_t osal_c_stream_buffer_create(osal_stream_buffer_handle* 
 }
 
 /// @brief Create a stream buffer from a config struct.
-/// @param handle Output handle.
-/// @param cfg    Pointer to `osal_stream_buffer_config`.
-/// @return `OSAL_OK` on success.
+/// @param[out] handle  Output handle.
+/// @param[in] cfg      Pointer to `osal_stream_buffer_config`.
+/// @retval OSAL_OK  On success.
 extern "C" osal_result_t osal_c_stream_buffer_create_with_cfg(osal_stream_buffer_handle*       handle,
                                                               const osal_stream_buffer_config* cfg)
 {
@@ -1796,19 +1818,19 @@ extern "C" osal_result_t osal_c_stream_buffer_create_with_cfg(osal_stream_buffer
 }
 
 /// @brief Destroy a stream buffer; see `osal_stream_buffer_destroy()`.
-/// @param handle Handle to destroy.
-/// @return `OSAL_OK` on success.
+/// @param[in,out] handle  Handle to destroy.
+/// @retval OSAL_OK  On success.
 extern "C" osal_result_t osal_c_stream_buffer_destroy(osal_stream_buffer_handle* handle)
 {
     return to_c(osal_stream_buffer_destroy(OSAL_C_CAST(sb_h, handle)));
 }
 
 /// @brief Write bytes into the stream buffer from task context.
-/// @param handle  Stream-buffer handle.
-/// @param data    Data to write.
-/// @param len     Number of bytes to write.
-/// @param timeout Ticks to wait if there is insufficient free space.
-/// @return `OSAL_OK` on success.
+/// @param[in] handle   Stream-buffer handle.
+/// @param[in] data     Data to write.
+/// @param[in] len      Number of bytes to write.
+/// @param[in] timeout  Ticks to wait if there is insufficient free space.
+/// @retval OSAL_OK  On success.
 extern "C" osal_result_t osal_c_stream_buffer_send(osal_stream_buffer_handle* handle, const void* data, size_t len,
                                                    osal_tick_t timeout)
 {
@@ -1816,19 +1838,19 @@ extern "C" osal_result_t osal_c_stream_buffer_send(osal_stream_buffer_handle* ha
 }
 
 /// @brief Write bytes into the stream buffer from ISR context.
-/// @param handle Stream-buffer handle.
-/// @param data   Data to write.
-/// @param len    Number of bytes to write.
-/// @return `OSAL_OK` on success.
+/// @param[in] handle  Stream-buffer handle.
+/// @param[in] data    Data to write.
+/// @param[in] len     Number of bytes to write.
+/// @retval OSAL_OK  On success.
 extern "C" osal_result_t osal_c_stream_buffer_send_isr(osal_stream_buffer_handle* handle, const void* data, size_t len)
 {
     return to_c(osal_stream_buffer_send_isr(OSAL_C_CAST(sb_h, handle), data, len));
 }
 /// @brief Read bytes from the stream buffer from task context.
-/// @param handle  Stream-buffer handle.
-/// @param data    Destination buffer.
-/// @param size    Maximum bytes to read.
-/// @param timeout Ticks to wait if the buffer is empty.
+/// @param[in] handle   Stream-buffer handle.
+/// @param[out] data    Destination buffer.
+/// @param[in] size     Maximum bytes to read.
+/// @param[in] timeout  Ticks to wait if the buffer is empty.
 /// @return Number of bytes actually read.
 extern "C" size_t osal_c_stream_buffer_receive(osal_stream_buffer_handle* handle, void* buf, size_t max_len,
                                                osal_tick_t timeout)
@@ -1837,9 +1859,9 @@ extern "C" size_t osal_c_stream_buffer_receive(osal_stream_buffer_handle* handle
 }
 
 /// @brief Read bytes from the stream buffer from ISR context.
-/// @param handle Stream-buffer handle.
-/// @param buf    Destination buffer.
-/// @param max_len Maximum bytes to read.
+/// @param[in] handle   Stream-buffer handle.
+/// @param[out] buf     Destination buffer.
+/// @param[in] max_len  Maximum bytes to read.
 /// @return Number of bytes actually read.
 extern "C" size_t osal_c_stream_buffer_receive_isr(osal_stream_buffer_handle* handle, void* buf, size_t max_len)
 {
@@ -1847,7 +1869,7 @@ extern "C" size_t osal_c_stream_buffer_receive_isr(osal_stream_buffer_handle* ha
 }
 
 /// @brief Query bytes available to read in the stream buffer.
-/// @param handle Stream-buffer handle (const).
+/// @param[in] handle  Stream-buffer handle (const).
 /// @return Number of readable bytes.
 extern "C" size_t osal_c_stream_buffer_available(const osal_stream_buffer_handle* handle)
 {
@@ -1855,7 +1877,7 @@ extern "C" size_t osal_c_stream_buffer_available(const osal_stream_buffer_handle
 }
 
 /// @brief Query free space remaining in the stream buffer.
-/// @param handle Stream-buffer handle (const).
+/// @param[in] handle  Stream-buffer handle (const).
 /// @return Number of bytes that can still be written without blocking.
 extern "C" size_t osal_c_stream_buffer_free_space(const osal_stream_buffer_handle* handle)
 {
@@ -1863,8 +1885,8 @@ extern "C" size_t osal_c_stream_buffer_free_space(const osal_stream_buffer_handl
 }
 
 /// @brief Reset the stream buffer to empty, discarding all contents.
-/// @param handle Stream-buffer handle.
-/// @return `OSAL_OK` on success.
+/// @param[in] handle  Stream-buffer handle.
+/// @retval OSAL_OK  On success.
 extern "C" osal_result_t osal_c_stream_buffer_reset(osal_stream_buffer_handle* handle)
 {
     return to_c(osal_stream_buffer_reset(OSAL_C_CAST(sb_h, handle)));
@@ -1875,19 +1897,19 @@ extern "C" osal_result_t osal_c_stream_buffer_reset(osal_stream_buffer_handle* h
 // ============================================================================
 
 /// @brief Create a framed message buffer; see `osal_message_buffer_create()`.
-/// @param handle   Output handle.
-/// @param buffer   Caller-supplied backing memory.
-/// @param capacity Total buffer capacity in bytes (framing overhead included).
-/// @return `OSAL_OK` on success.
+/// @param[out] handle   Output handle.
+/// @param[in] buffer    Caller-supplied backing memory.
+/// @param[in] capacity  Total buffer capacity in bytes (framing overhead included).
+/// @retval OSAL_OK  On success.
 extern "C" osal_result_t osal_c_message_buffer_create(osal_message_buffer_handle* handle, void* buffer, size_t capacity)
 {
     return to_c(osal_message_buffer_create(OSAL_C_CAST(mb_h, handle), buffer, capacity));
 }
 
 /// @brief Create a message buffer from a config struct.
-/// @param handle Output handle.
-/// @param cfg    Pointer to `osal_message_buffer_config`.
-/// @return `OSAL_OK` on success.
+/// @param[out] handle  Output handle.
+/// @param[in] cfg      Pointer to `osal_message_buffer_config`.
+/// @retval OSAL_OK  On success.
 extern "C" osal_result_t osal_c_message_buffer_create_with_cfg(osal_message_buffer_handle*       handle,
                                                                const osal_message_buffer_config* cfg)
 {
@@ -1899,19 +1921,19 @@ extern "C" osal_result_t osal_c_message_buffer_create_with_cfg(osal_message_buff
 }
 
 /// @brief Destroy a message buffer; see `osal_message_buffer_destroy()`.
-/// @param handle Handle to destroy.
-/// @return `OSAL_OK` on success.
+/// @param[in,out] handle  Handle to destroy.
+/// @retval OSAL_OK  On success.
 extern "C" osal_result_t osal_c_message_buffer_destroy(osal_message_buffer_handle* handle)
 {
     return to_c(osal_message_buffer_destroy(OSAL_C_CAST(mb_h, handle)));
 }
 
 /// @brief Write one complete message from task context.
-/// @param handle  Message-buffer handle.
-/// @param msg     Message payload.
-/// @param len     Payload size in bytes.
-/// @param timeout Ticks to wait if there is insufficient space.
-/// @return `OSAL_OK` on success.
+/// @param[in] handle   Message-buffer handle.
+/// @param[in] msg      Message payload.
+/// @param[in] len      Payload size in bytes.
+/// @param[in] timeout  Ticks to wait if there is insufficient space.
+/// @retval OSAL_OK  On success.
 extern "C" osal_result_t osal_c_message_buffer_send(osal_message_buffer_handle* handle, const void* msg, size_t len,
                                                     osal_tick_t timeout)
 {
@@ -1919,19 +1941,19 @@ extern "C" osal_result_t osal_c_message_buffer_send(osal_message_buffer_handle* 
 }
 
 /// @brief Write one complete message from ISR context.
-/// @param handle Message-buffer handle.
-/// @param msg    Message payload.
-/// @param len    Payload size in bytes.
-/// @return `OSAL_OK` on success.
+/// @param[in] handle  Message-buffer handle.
+/// @param[in] msg     Message payload.
+/// @param[in] len     Payload size in bytes.
+/// @retval OSAL_OK  On success.
 extern "C" osal_result_t osal_c_message_buffer_send_isr(osal_message_buffer_handle* handle, const void* msg, size_t len)
 {
     return to_c(osal_message_buffer_send_isr(OSAL_C_CAST(mb_h, handle), msg, len));
 }
 /// @brief Read one complete message from task context.
-/// @param handle  Message-buffer handle.
-/// @param data    Destination buffer.
-/// @param size    Maximum bytes to read (should be ≥ largest message).
-/// @param timeout Ticks to wait if the buffer is empty.
+/// @param[in] handle   Message-buffer handle.
+/// @param[out] data    Destination buffer.
+/// @param[in] size     Maximum bytes to read (should be ≥ largest message).
+/// @param[in] timeout  Ticks to wait if the buffer is empty.
 /// @return Number of bytes in the received message (0 on timeout/error).
 extern "C" size_t osal_c_message_buffer_receive(osal_message_buffer_handle* handle, void* buf, size_t max_len,
                                                 osal_tick_t timeout)
@@ -1940,9 +1962,9 @@ extern "C" size_t osal_c_message_buffer_receive(osal_message_buffer_handle* hand
 }
 
 /// @brief Read one complete message from ISR context.
-/// @param handle  Message-buffer handle.
-/// @param buf     Destination buffer.
-/// @param max_len Maximum bytes to read.
+/// @param[in] handle   Message-buffer handle.
+/// @param[out] buf     Destination buffer.
+/// @param[in] max_len  Maximum bytes to read.
 /// @return Number of bytes in the received message (0 if no complete message).
 extern "C" size_t osal_c_message_buffer_receive_isr(osal_message_buffer_handle* handle, void* buf, size_t max_len)
 {
@@ -1950,7 +1972,7 @@ extern "C" size_t osal_c_message_buffer_receive_isr(osal_message_buffer_handle* 
 }
 
 /// @brief Query bytes available to read in the message buffer.
-/// @param handle Message-buffer handle (const).
+/// @param[in] handle  Message-buffer handle (const).
 /// @return Number of readable bytes (includes framing).
 extern "C" size_t osal_c_message_buffer_available(const osal_message_buffer_handle* handle)
 {
@@ -1958,7 +1980,7 @@ extern "C" size_t osal_c_message_buffer_available(const osal_message_buffer_hand
 }
 
 /// @brief Query free space remaining in the message buffer.
-/// @param handle Message-buffer handle (const).
+/// @param[in] handle  Message-buffer handle (const).
 /// @return Number of bytes that can still be written without blocking.
 extern "C" size_t osal_c_message_buffer_free_space(const osal_message_buffer_handle* handle)
 {
@@ -1966,8 +1988,8 @@ extern "C" size_t osal_c_message_buffer_free_space(const osal_message_buffer_han
 }
 
 /// @brief Reset the message buffer to empty, discarding all messages.
-/// @param handle Message-buffer handle.
-/// @return `OSAL_OK` on success.
+/// @param[in] handle  Message-buffer handle.
+/// @retval OSAL_OK  On success.
 extern "C" osal_result_t osal_c_message_buffer_reset(osal_message_buffer_handle* handle)
 {
     return to_c(osal_message_buffer_reset(OSAL_C_CAST(mb_h, handle)));

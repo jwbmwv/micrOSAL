@@ -23,7 +23,7 @@ Not implemented yet:
 - native Zephyr routing or zero-copy premium paths
 - native zero-copy publish behavior
 - topic registry / cross-topic routing
-- backend-specific optimized bus runtimes beyond delegated generic behavior
+- dedicated optimized runtimes for the currently delegated non-Zephyr backends
 
 ## Implementation Complete
 
@@ -73,8 +73,8 @@ are exercised in hosted tests.
 
 Potential areas for future enhancement (not required for current functionality):
 
-1. Native Zephyr-specific observer or routing integration (if Zbus integration
-   is desired without weakening current FIFO snapshot semantics)
+1. Optional Zephyr Zbus integration beyond the implemented `k_msgq` and observer
+   runtime, without weakening current FIFO snapshot semantics
 2. Additional `native_*` traits exposure when corresponding Zephyr behavior
    meets the supported contract
 3. Native routing support if a topic registry or RTOS-native mechanism is added

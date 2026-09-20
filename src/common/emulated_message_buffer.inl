@@ -195,12 +195,13 @@ extern "C"
     /// @details Uses the same lock-free SPSC ring as the stream buffer, but frames
     ///          each message as a 16-bit length prefix followed by the payload.
     ///          The caller must supply @p capacity + 1 bytes of storage.
-    /// @param handle   Output handle; populated on success.
-    /// @param buffer   Caller-supplied storage; must be at least @p capacity + 1 bytes.
-    /// @param capacity Total ring capacity in bytes (includes framing overhead);
+    /// @param[out] handle   Output handle; populated on success.
+    /// @param[in] buffer    Caller-supplied storage; must be at least @p capacity + 1 bytes.
+    /// @param[in] capacity  Total ring capacity in bytes (includes framing overhead);
     ///                 must be > `kMsgHeaderBytes` (2 bytes).
-    /// @return `osal::ok()` on success, `error_code::invalid_argument` for bad parameters,
-    ///         `error_code::out_of_resources` if the pool or semaphores are exhausted.
+    /// @retval osal::ok()                    On success.
+    /// @retval error_code::invalid_argument  For bad parameters.
+    /// @retval error_code::out_of_resources  If the pool or semaphores are exhausted.
     osal::result osal_message_buffer_create(osal::active_traits::message_buffer_handle_t* handle, void* buffer,
                                             std::size_t capacity) noexcept
     {
@@ -238,8 +239,9 @@ extern "C"
     }
 
     /// @brief Destroy an emulated message buffer and release its pool slot.
-    /// @param handle Handle to destroy; silently ignored if null or uninitialized.
-    /// @return `osal::ok()` on success, `error_code::not_initialized` if null.
+    /// @param[in,out] handle  Handle to destroy; silently ignored if null or uninitialized.
+    /// @retval osal::ok()                   On success.
+    /// @retval error_code::not_initialized  If null.
     osal::result osal_message_buffer_destroy(osal::active_traits::message_buffer_handle_t* handle) noexcept
     {
         if (!handle || !handle->native) [[unlikely]]
@@ -261,13 +263,14 @@ extern "C"
     /// @brief Send a message into the buffer, blocking until space is available.
     /// @details Writes a 16-bit length header followed by @p len payload bytes as a
     ///          single atomic frame.  The consumer will never see a partial message.
-    /// @param handle        Message buffer handle.
-    /// @param msg           Message data to write.
-    /// @param len           Length of @p msg in bytes; must fit in `osal_mb_length_t`.
-    /// @param timeout_ticks Maximum ticks to wait for space; use `osal::WAIT_FOREVER` for indefinite.
-    /// @return `osal::ok()` on success, `error_code::timeout` on expiry,
-    ///         `error_code::invalid_argument` for oversized messages or null parameters,
-    ///         `error_code::not_initialized` if @p handle is null.
+    /// @param[in] handle         Message buffer handle.
+    /// @param[in] msg            Message data to write.
+    /// @param[in] len            Length of @p msg in bytes; must fit in `osal_mb_length_t`.
+    /// @param[in] timeout_ticks  Maximum ticks to wait for space; use `osal::WAIT_FOREVER` for indefinite.
+    /// @retval osal::ok()                    On success.
+    /// @retval error_code::timeout           On expiry.
+    /// @retval error_code::invalid_argument  For oversized messages or null parameters.
+    /// @retval error_code::not_initialized   If @p handle is null.
     osal::result osal_message_buffer_send(osal::active_traits::message_buffer_handle_t* handle, const void* msg,
                                           std::size_t len, osal::tick_t timeout_ticks) noexcept
     {
@@ -356,10 +359,10 @@ extern "C"
     /// @brief Receive one message from the buffer, blocking until a complete message arrives.
     /// @details Reads the 16-bit length header, then copies at most @p max_len bytes of
     ///          payload into @p buf (excess payload is discarded).
-    /// @param handle        Message buffer handle.
-    /// @param buf           Output buffer for the message payload.
-    /// @param max_len       Capacity of @p buf in bytes.
-    /// @param timeout_ticks Maximum ticks to wait; use `osal::WAIT_FOREVER` for indefinite.
+    /// @param[in] handle         Message buffer handle.
+    /// @param[out] buf           Output buffer for the message payload.
+    /// @param[in] max_len        Capacity of @p buf in bytes.
+    /// @param[in] timeout_ticks  Maximum ticks to wait; use `osal::WAIT_FOREVER` for indefinite.
     /// @return Number of payload bytes copied (capped at @p max_len), or 0 on timeout
     ///         or bad parameters.
     std::size_t osal_message_buffer_receive(osal::active_traits::message_buffer_handle_t* handle, void* buf,
@@ -474,7 +477,7 @@ extern "C"
     // ---------------------------------------------------------------------------
 
     /// @brief Return the payload size of the next complete message, or 0 if none.
-    /// @param handle Message buffer handle (const).
+    /// @param[in] handle  Message buffer handle (const).
     /// @return Payload byte count of the oldest complete message, or 0.
     std::size_t osal_message_buffer_available(const osal::active_traits::message_buffer_handle_t* handle) noexcept
     {
@@ -497,7 +500,7 @@ extern "C"
 
     /// @brief Return the maximum payload size that can currently be sent without blocking.
     /// @details Computed as `max(0, ring_free - kMsgHeaderBytes)` where `kMsgHeaderBytes` is 2.
-    /// @param handle Message buffer handle (const).
+    /// @param[in] handle  Message buffer handle (const).
     /// @return Maximum payload bytes, or 0 if the ring cannot accommodate even the header.
     std::size_t osal_message_buffer_free_space(const osal::active_traits::message_buffer_handle_t* handle) noexcept
     {
@@ -513,8 +516,9 @@ extern "C"
     }
 
     /// @brief Discard all buffered messages by advancing the consumer tail to the producer head.
-    /// @param handle Message buffer handle.
-    /// @return `osal::ok()` on success, `error_code::not_initialized` if null.
+    /// @param[in] handle  Message buffer handle.
+    /// @retval osal::ok()                   On success.
+    /// @retval error_code::not_initialized  If null.
     osal::result osal_message_buffer_reset(osal::active_traits::message_buffer_handle_t* handle) noexcept
     {
         if (!handle || !handle->native) [[unlikely]]

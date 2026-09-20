@@ -102,14 +102,14 @@ public:
     // ---- wait --------------------------------------------------------------
 
     /// @brief Atomically unlock @p m and block until notified, then re-lock.
-    /// @param m  The mutex that the caller holds.  Must be locked.
+    /// @param[in] m  The mutex that the caller holds.  Must be locked.
     void wait(mutex& m) noexcept { (void)osal_condvar_wait(&handle_, m.native_handle(), WAIT_FOREVER); }
 
     /// @brief Waits until @p pred returns true, re-checking after each wakeup.
     /// @details Provides built-in protection against spurious wakeups.
     ///          Equivalent to: @code while (!pred()) cv.wait(m); @endcode
-    /// @param m     The mutex the caller holds.
-    /// @param pred  Callable with signature @c bool().  Evaluated under @p m.
+    /// @param[in] m     The mutex the caller holds.
+    /// @param[in] pred  Callable with signature @c bool().  Evaluated under @p m.
     template<wait_predicate Predicate>
     void wait(mutex& m, Predicate pred) noexcept(noexcept(pred()))
     {
@@ -120,8 +120,8 @@ public:
     }
 
     /// @brief Timed wait — block until notified or @p timeout expires.
-    /// @param m        The mutex that the caller holds.
-    /// @param timeout  Maximum time to wait.
+    /// @param[in] m        The mutex that the caller holds.
+    /// @param[in] timeout  Maximum time to wait.
     /// @return true if notified; false on timeout.
     bool wait_for(mutex& m, milliseconds timeout) noexcept
     {
@@ -132,9 +132,9 @@ public:
     /// @brief Timed wait with predicate — returns true if @p pred is satisfied.
     /// @details Loops until @p pred is true or the total deadline is reached.
     ///          Protects against spurious wakeups.
-    /// @param m        The mutex the caller holds.
-    /// @param timeout  Maximum total wait time.
-    /// @param pred     Callable with signature @c bool().  Evaluated under @p m.
+    /// @param[in] m        The mutex the caller holds.
+    /// @param[in] timeout  Maximum total wait time.
+    /// @param[in] pred     Callable with signature @c bool().  Evaluated under @p m.
     /// @return true if @p pred was satisfied; false if the timeout expired first.
     template<wait_predicate Predicate>
     bool wait_for(mutex& m, milliseconds timeout, Predicate pred) noexcept(noexcept(pred()))
@@ -155,8 +155,8 @@ public:
     }
 
     /// @brief Waits until an absolute deadline.
-    /// @param m         The mutex the caller holds.
-    /// @param deadline  Absolute monotonic time point.
+    /// @param[in] m         The mutex the caller holds.
+    /// @param[in] deadline  Absolute monotonic time point.
     /// @return true if notified before the deadline; false on timeout.
     /// @details Loops internally so that tick-count saturation (for unreasonably
     ///          large deadlines) does not cause premature false-timeout returns.
@@ -180,9 +180,9 @@ public:
     }
 
     /// @brief Waits until an absolute deadline with predicate.
-    /// @param m         The mutex the caller holds.
-    /// @param deadline  Absolute monotonic time point.
-    /// @param pred      Callable with signature @c bool().  Evaluated under @p m.
+    /// @param[in] m         The mutex the caller holds.
+    /// @param[in] deadline  Absolute monotonic time point.
+    /// @param[in] pred      Callable with signature @c bool().  Evaluated under @p m.
     /// @return true if @p pred was satisfied before the deadline; false otherwise.
     template<wait_predicate Predicate>
     bool wait_until(mutex& m, monotonic_clock::time_point deadline, Predicate pred) noexcept(noexcept(pred()))

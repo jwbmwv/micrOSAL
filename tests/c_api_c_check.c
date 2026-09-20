@@ -35,6 +35,11 @@ static int c_branch_hint_smoke(int value)
     return 0;
 }
 
+osal_result_t osal_c_test_invalid_notification_action(osal_notification_handle* handle)
+{
+    return osal_c_notification_notify(handle, 0x55U, (osal_notification_action)255, 0U);
+}
+
 /* Verify a few sizeof / constant assumptions at compile time. */
 typedef char static_assert_handle_size[sizeof(osal_mutex_handle) == sizeof(void*) ? 1 : -1];
 #if defined(OSAL_CFG_TICK_TYPE_U64)

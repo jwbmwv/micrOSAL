@@ -18,6 +18,7 @@
 #include <osal/bus/detail/osal_signal_backend_generic.hpp>
 
 #if defined(OSAL_BACKEND_ZEPHYR)
+#include <osal/detail/cpp_compat.hpp>
 #include <osal/mutex.hpp>
 #include <osal/types.hpp>
 
@@ -167,24 +168,23 @@ public:
 
     [[nodiscard]] bool native_publish_observers(const T& msg) noexcept
     {
-        std::array<observer_fn, MaxSubscribers> snapshot{};
-        std::size_t                             snapshot_count{0U};
+        detail::bounded_vector<observer_fn, MaxSubscribers> snapshot;
 
         {
-            scoped_lock lk{mutex_};
-            snapshot_count = observer_count_;
-            for (std::size_t i = 0U; i < snapshot_count; ++i)
+            scoped_lock       lk{mutex_};
+            const std::size_t count = observer_count_;
+            for (std::size_t i = 0U; i < count; ++i)
             {
-                snapshot[i] = observers_[i];
+                (void)snapshot.push_back(observers_[i]);
             }
         }
 
-        const bool any = snapshot_count > 0U;
-        for (std::size_t i = 0U; i < snapshot_count; ++i)
+        const bool any = !snapshot.empty();
+        for (const auto& fn : snapshot)
         {
-            if (snapshot[i] != nullptr)
+            if (fn != nullptr)
             {
-                snapshot[i](msg);
+                fn(msg);
             }
         }
         return any;

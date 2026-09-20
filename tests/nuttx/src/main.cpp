@@ -28,10 +28,14 @@
 /// @copyright Copyright (c) 2026 James Baldwin. AI-assisted — see NOTICE.
 /// @author James Baldwin
 
+#include <stdlib.h>
+#define _STDLIB_H 1
+#include <string.h>
+#define _STRING_H 1
+
 #include <osal/osal.hpp>
 
 #include <stdint.h>
-#include <string.h>
 #include <osal/detail/atomic_compat.hpp>
 #include <stdio.h> /* printf — NuttX provides this without locale deps */
 

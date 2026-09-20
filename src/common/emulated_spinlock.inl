@@ -19,7 +19,7 @@
 // ---------------------------------------------------------------------------
 
 /// @brief Create a spinlock — not supported on this backend.
-/// @return @c error_code::not_supported always.
+/// @retval error_code::not_supported  Always.
 osal::result osal_spinlock_create(osal::active_traits::spinlock_handle_t* handle) noexcept
 {
     if (handle)
@@ -30,7 +30,7 @@ osal::result osal_spinlock_create(osal::active_traits::spinlock_handle_t* handle
 }
 
 /// @brief Destroy a spinlock stub — always succeeds (no-op).
-/// @return @c osal::ok() always.
+/// @retval osal::ok()  Always.
 osal::result osal_spinlock_destroy(osal::active_traits::spinlock_handle_t* handle) noexcept
 {
     (void)handle;
@@ -38,7 +38,7 @@ osal::result osal_spinlock_destroy(osal::active_traits::spinlock_handle_t* handl
 }
 
 /// @brief Acquire the spinlock — not supported on this backend.
-/// @return @c error_code::not_supported always.
+/// @retval error_code::not_supported  Always.
 osal::result osal_spinlock_lock(osal::active_traits::spinlock_handle_t* handle) noexcept
 {
     (void)handle;

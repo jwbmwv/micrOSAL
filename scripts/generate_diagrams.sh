@@ -21,6 +21,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 INPUT_DIR="$ROOT_DIR/docs/diagrams"
 SVG_TO_PDF="$ROOT_DIR/scripts/svg_to_pdf.py"
+export PLANTUML_LIMIT_SIZE="${PLANTUML_LIMIT_SIZE:-16384}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in

@@ -199,13 +199,14 @@ extern "C"
     /// @details Uses a lock-free SPSC byte ring with binary semaphores for blocking
     ///          I/O and ISR-safe signalling.  The caller must supply @p capacity + 1
     ///          bytes of storage to accommodate the ring sentinel slot.
-    /// @param handle        Output handle; populated on success.
-    /// @param buffer        Caller-supplied storage; must be at least @p capacity + 1 bytes.
-    /// @param capacity      Usable byte capacity of the stream buffer.
-    /// @param trigger_level Minimum bytes available before a blocking receive unblocks;
+    /// @param[out] handle        Output handle; populated on success.
+    /// @param[in] buffer         Caller-supplied storage; must be at least @p capacity + 1 bytes.
+    /// @param[in] capacity       Usable byte capacity of the stream buffer.
+    /// @param[in] trigger_level  Minimum bytes available before a blocking receive unblocks;
     ///                      clamped to 1 if 0 is passed.
-    /// @return `osal::ok()` on success, `error_code::invalid_argument` for bad parameters,
-    ///         `error_code::out_of_resources` if the pool or semaphores are exhausted.
+    /// @retval osal::ok()                    On success.
+    /// @retval error_code::invalid_argument  For bad parameters.
+    /// @retval error_code::out_of_resources  If the pool or semaphores are exhausted.
     osal::result osal_stream_buffer_create(osal::active_traits::stream_buffer_handle_t* handle, void* buffer,
                                            std::size_t capacity, std::size_t trigger_level) noexcept
     {
@@ -245,8 +246,9 @@ extern "C"
     }
 
     /// @brief Destroy an emulated stream buffer and release its pool slot.
-    /// @param handle Handle to destroy; silently ignored if null or uninitialized.
-    /// @return `osal::ok()` on success, `error_code::not_initialized` if null.
+    /// @param[in,out] handle  Handle to destroy; silently ignored if null or uninitialized.
+    /// @retval osal::ok()                   On success.
+    /// @retval error_code::not_initialized  If null.
     osal::result osal_stream_buffer_destroy(osal::active_traits::stream_buffer_handle_t* handle) noexcept
     {
         if (!handle || !handle->native) [[unlikely]]
@@ -266,13 +268,14 @@ extern "C"
     // ---------------------------------------------------------------------------
 
     /// @brief Write @p len bytes into the stream buffer, blocking until space is available.
-    /// @param handle        Stream buffer handle.
-    /// @param data          Data to write.
-    /// @param len           Number of bytes to write; must be <= @p capacity.
-    /// @param timeout_ticks Maximum ticks to wait for space; use `osal::WAIT_FOREVER` for indefinite.
-    /// @return `osal::ok()` on success, `error_code::timeout` if space is not available within
-    ///         the timeout, `error_code::not_initialized` or `error_code::invalid_argument` for
-    ///         bad parameters.
+    /// @param[in] handle         Stream buffer handle.
+    /// @param[in] data           Data to write.
+    /// @param[in] len            Number of bytes to write; must be <= @p capacity.
+    /// @param[in] timeout_ticks  Maximum ticks to wait for space; use `osal::WAIT_FOREVER` for indefinite.
+    /// @retval osal::ok()                    On success.
+    /// @retval error_code::timeout           If space is not available within the timeout.
+    /// @retval error_code::not_initialized   For bad parameters.
+    /// @retval error_code::invalid_argument  For bad parameters.
     osal::result osal_stream_buffer_send(osal::active_traits::stream_buffer_handle_t* handle, const void* data,
                                          std::size_t len, osal::tick_t timeout_ticks) noexcept
     {
@@ -347,10 +350,10 @@ extern "C"
 
     /// @brief Read up to @p max_len bytes from the stream buffer, blocking until the
     ///        trigger level is reached or the timeout expires.
-    /// @param handle        Stream buffer handle.
-    /// @param buf           Output buffer for received bytes.
-    /// @param max_len       Maximum bytes to read.
-    /// @param timeout_ticks Maximum ticks to block; use `osal::WAIT_FOREVER` for indefinite.
+    /// @param[in] handle         Stream buffer handle.
+    /// @param[out] buf           Output buffer for received bytes.
+    /// @param[in] max_len        Maximum bytes to read.
+    /// @param[in] timeout_ticks  Maximum ticks to block; use `osal::WAIT_FOREVER` for indefinite.
     /// @return Number of bytes actually read, or 0 on timeout or bad parameters.
     std::size_t osal_stream_buffer_receive(osal::active_traits::stream_buffer_handle_t* handle, void* buf,
                                            std::size_t max_len, osal::tick_t timeout_ticks) noexcept
@@ -418,7 +421,7 @@ extern "C"
     // ---------------------------------------------------------------------------
 
     /// @brief Return the number of bytes currently available to read.
-    /// @param handle Stream buffer handle (const).
+    /// @param[in] handle  Stream buffer handle (const).
     /// @return Byte count, or 0 if @p handle is null.
     std::size_t osal_stream_buffer_available(const osal::active_traits::stream_buffer_handle_t* handle) noexcept
     {
@@ -430,7 +433,7 @@ extern "C"
     }
 
     /// @brief Return the number of bytes that can be written without blocking.
-    /// @param handle Stream buffer handle (const).
+    /// @param[in] handle  Stream buffer handle (const).
     /// @return Free byte count, or 0 if @p handle is null.
     std::size_t osal_stream_buffer_free_space(const osal::active_traits::stream_buffer_handle_t* handle) noexcept
     {
@@ -446,8 +449,9 @@ extern "C"
     // ---------------------------------------------------------------------------
 
     /// @brief Discard all buffered data by advancing the consumer tail to the producer head.
-    /// @param handle Stream buffer handle.
-    /// @return `osal::ok()` on success, `error_code::not_initialized` if null.
+    /// @param[in] handle  Stream buffer handle.
+    /// @retval osal::ok()                   On success.
+    /// @retval error_code::not_initialized  If null.
     osal::result osal_stream_buffer_reset(osal::active_traits::stream_buffer_handle_t* handle) noexcept
     {
         if (!handle || !handle->native) [[unlikely]]

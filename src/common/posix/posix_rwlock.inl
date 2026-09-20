@@ -25,9 +25,10 @@
 // -------------------------------------------------------------------------
 
 /// @brief Create a POSIX read-write lock via `pthread_rwlock_init`.
-/// @param handle Output handle; populated on success.
-/// @return `osal::ok()` on success, `error_code::invalid_argument` if null,
-///         `error_code::out_of_resources` on allocation or init failure.
+/// @param[out] handle  Output handle; populated on success.
+/// @retval osal::ok()                    On success.
+/// @retval error_code::invalid_argument  If null.
+/// @retval error_code::out_of_resources  On allocation or init failure.
 osal::result osal_rwlock_create(osal::active_traits::rwlock_handle_t* handle) noexcept
 {
     if (!handle)
@@ -50,8 +51,8 @@ osal::result osal_rwlock_create(osal::active_traits::rwlock_handle_t* handle) no
 }
 
 /// @brief Destroy a POSIX read-write lock via `pthread_rwlock_destroy`.
-/// @param handle Handle to destroy; silently ignored if null.
-/// @return Always `osal::ok()`.
+/// @param[in,out] handle  Handle to destroy; silently ignored if null.
+/// @retval osal::ok()  Always.
 osal::result osal_rwlock_destroy(osal::active_traits::rwlock_handle_t* handle) noexcept
 {
     if (!handle || !handle->native)
@@ -65,12 +66,13 @@ osal::result osal_rwlock_destroy(osal::active_traits::rwlock_handle_t* handle) n
 }
 
 /// @brief Acquire the read lock via `pthread_rwlock_rdlock` or `pthread_rwlock_timedrdlock`.
-/// @param handle        RW-lock handle.
-/// @param timeout_ticks Ticks to wait; `WAIT_FOREVER` → blocking, `NO_WAIT` → try,
+/// @param[in] handle         RW-lock handle.
+/// @param[in] timeout_ticks  Ticks to wait; `WAIT_FOREVER` → blocking, `NO_WAIT` → try,
 ///                      other → `pthread_rwlock_timedrdlock` with absolute deadline
 ///                      from `OSAL_POSIX_RW_ABS(timeout_ticks)`.
-/// @return `osal::ok()` on acquisition, `error_code::timeout` on failure,
-///         `error_code::not_initialized` if null.
+/// @retval osal::ok()                   On acquisition.
+/// @retval error_code::timeout          On failure.
+/// @retval error_code::not_initialized  If null.
 osal::result osal_rwlock_read_lock(osal::active_traits::rwlock_handle_t* handle, osal::tick_t timeout_ticks) noexcept
 {
     if (!handle || !handle->native)
@@ -94,9 +96,10 @@ osal::result osal_rwlock_read_lock(osal::active_traits::rwlock_handle_t* handle,
 }
 
 /// @brief Release a read lock via `pthread_rwlock_unlock`.
-/// @param handle RW-lock handle.
-/// @return `osal::ok()` on success, `error_code::not_initialized` if null,
-///         `error_code::unknown` on pthread error.
+/// @param[in] handle  RW-lock handle.
+/// @retval osal::ok()                   On success.
+/// @retval error_code::not_initialized  If null.
+/// @retval error_code::unknown          On pthread error.
 osal::result osal_rwlock_read_unlock(osal::active_traits::rwlock_handle_t* handle) noexcept
 {
     if (!handle || !handle->native)
@@ -108,12 +111,13 @@ osal::result osal_rwlock_read_unlock(osal::active_traits::rwlock_handle_t* handl
 }
 
 /// @brief Acquire the write lock via `pthread_rwlock_wrlock` or `pthread_rwlock_timedwrlock`.
-/// @param handle        RW-lock handle.
-/// @param timeout_ticks Ticks to wait; `WAIT_FOREVER` → blocking, `NO_WAIT` → try,
+/// @param[in] handle         RW-lock handle.
+/// @param[in] timeout_ticks  Ticks to wait; `WAIT_FOREVER` → blocking, `NO_WAIT` → try,
 ///                      other → `pthread_rwlock_timedwrlock` with absolute deadline
 ///                      from `OSAL_POSIX_RW_ABS(timeout_ticks)`.
-/// @return `osal::ok()` on acquisition, `error_code::timeout` on failure,
-///         `error_code::not_initialized` if null.
+/// @retval osal::ok()                   On acquisition.
+/// @retval error_code::timeout          On failure.
+/// @retval error_code::not_initialized  If null.
 osal::result osal_rwlock_write_lock(osal::active_traits::rwlock_handle_t* handle, osal::tick_t timeout_ticks) noexcept
 {
     if (!handle || !handle->native)
@@ -137,9 +141,10 @@ osal::result osal_rwlock_write_lock(osal::active_traits::rwlock_handle_t* handle
 }
 
 /// @brief Release a write lock via `pthread_rwlock_unlock`.
-/// @param handle RW-lock handle.
-/// @return `osal::ok()` on success, `error_code::not_initialized` if null,
-///         `error_code::unknown` on pthread error.
+/// @param[in] handle  RW-lock handle.
+/// @retval osal::ok()                   On success.
+/// @retval error_code::not_initialized  If null.
+/// @retval error_code::unknown          On pthread error.
 osal::result osal_rwlock_write_unlock(osal::active_traits::rwlock_handle_t* handle) noexcept
 {
     if (!handle || !handle->native)
