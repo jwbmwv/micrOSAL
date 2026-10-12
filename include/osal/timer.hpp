@@ -23,6 +23,7 @@
 #include "backends.hpp"
 #include "clock.hpp"
 #include "error.hpp"
+#include "diagnostics.hpp"
 #include "types.hpp"
 #include <cstdint>
 
@@ -98,6 +99,21 @@ public:
     /// @brief True when the active backend provides timer support.
     static constexpr bool is_supported = supports_requirement<support_requirement::timer>;
 
+    /// @brief Whether backend quiescence can permit reclamation after a start attempt.
+    /// @details False means close() returns not_supported after any start attempt,
+    ///          retaining the native handle/slot; even stopping does not make it
+    ///          reclaimable. Keep this object and its callback context alive.
+    ///          True is not a promise that every close succeeds: callers must still
+    ///          satisfy backend quiescence and thread/callback-context restrictions.
+#if defined(OSAL_BACKEND_THREADX) || defined(OSAL_BACKEND_PX5) || defined(OSAL_BACKEND_MICRIUM) ||          \
+    defined(OSAL_BACKEND_CHIBIOS) || defined(OSAL_BACKEND_EMBOS) || defined(OSAL_BACKEND_VXWORKS) ||        \
+    defined(OSAL_BACKEND_NUTTX) || defined(OSAL_BACKEND_CMSIS_RTOS) || defined(OSAL_BACKEND_CMSIS_RTOS2) || \
+    (defined(OSAL_BACKEND_ZEPHYR) && defined(CONFIG_SMP) && CONFIG_SMP)
+    static constexpr bool can_reclaim_after_start = false;
+#else
+    static constexpr bool can_reclaim_after_start = true;
+#endif
+
     /// @brief Enforce timer support at compile time.
     template<typename Backend = active_backend>
     static consteval void require_support()
@@ -118,37 +134,26 @@ public:
           const char* name = nullptr) noexcept
         : valid_(false)
     {
-        if constexpr (timer_backend<active_backend>)
+        if (callback == nullptr || period.count() <= 0)
+        {
+            initialization_status_ = error_code::invalid_argument;
+        }
+        else if constexpr (timer_backend<active_backend>)
         {
             const tick_t ticks = clock_utils::ms_to_ticks(period);
-            valid_ = osal_timer_create(&handle_, name, callback, arg, ticks, mode == timer_mode::periodic).ok();
+            initialization_status_ =
+                osal_timer_create(&handle_, name, callback, arg, ticks, mode == timer_mode::periodic);
         }
+        record_initialization();
     }
 
     /// @brief Constructs from an immutable config (config may reside in FLASH).
     /// @param[in] cfg  Configuration — typically declared @c const / @c constexpr.
     /// @complexity O(1)
-    explicit timer(const timer_config& cfg) noexcept : valid_(false)
-    {
-        if constexpr (timer_backend<active_backend>)
-        {
-            const tick_t ticks = clock_utils::ms_to_ticks(cfg.period);
-            valid_ =
-                osal_timer_create(&handle_, cfg.name, cfg.callback, cfg.arg, ticks, cfg.mode == timer_mode::periodic)
-                    .ok();
-        }
-    }
+    explicit timer(const timer_config& cfg) noexcept : timer(cfg.callback, cfg.arg, cfg.period, cfg.mode, cfg.name) {}
 
     /// @brief Destructs the timer (stops if active).
-    ~timer() noexcept
-    {
-        if (valid_)
-        {
-            (void)osal_timer_stop(&handle_);
-            (void)osal_timer_destroy(&handle_);
-            valid_ = false;
-        }
-    }
+    ~timer() noexcept { (void)close(); }
 
     timer(const timer&)            = delete;
     timer& operator=(const timer&) = delete;
@@ -164,6 +169,10 @@ public:
     {
         if constexpr (timer_backend<active_backend>)
         {
+            if (!valid_)
+            {
+                return error_code::not_initialized;
+            }
             return osal_timer_start(&handle_);
         }
         return error_code::not_supported;
@@ -174,6 +183,10 @@ public:
     {
         if constexpr (timer_backend<active_backend>)
         {
+            if (!valid_)
+            {
+                return error_code::not_initialized;
+            }
             return osal_timer_stop(&handle_);
         }
         return error_code::not_supported;
@@ -184,17 +197,32 @@ public:
     {
         if constexpr (timer_backend<active_backend>)
         {
+            if (!valid_)
+            {
+                return error_code::not_initialized;
+            }
             return osal_timer_reset(&handle_);
         }
         return error_code::not_supported;
     }
 
-    /// @brief Changes the timer period without restarting it.
+    /// @brief Changes the timer period while preserving its mode and active state.
+    /// @details An inactive timer remains inactive. An active timer begins a new
+    ///          interval at the new period. One-shot/periodic mode is preserved.
+    ///          Backends unable to guarantee this contract return not_supported.
     /// @param[in] period  New period.
     [[nodiscard]] result set_period(milliseconds period) noexcept
     {
+        if (period.count() <= 0)
+        {
+            return error_code::invalid_argument;
+        }
         if constexpr (timer_backend<active_backend>)
         {
+            if (!valid_)
+            {
+                return error_code::not_initialized;
+            }
             const tick_t ticks = clock_utils::ms_to_ticks(period);
             return osal_timer_set_period(&handle_, ticks);
         }
@@ -204,18 +232,51 @@ public:
     // ---- query -------------------------------------------------------------
 
     /// @brief Returns true if the timer was successfully created.
-    [[nodiscard]] bool valid() const noexcept { return valid_; }
+    [[nodiscard]] bool   valid() const noexcept { return valid_; }
+    [[nodiscard]] result initialization_status() const noexcept { return initialization_status_; }
+
+    /// @brief Stops and destroys the timer; a destroy failure retains ownership.
+    /// @details Destruction itself stops the timer. Call only from thread context
+    ///          after quiescing other users; the destructor remains best-effort.
+    ///          On failure keep this object and its callback context alive.
+    [[nodiscard]] result close() noexcept
+    {
+        if (!valid_)
+        {
+            return ok();
+        }
+        const result status = osal_timer_destroy(&handle_);
+        diagnostics(diagnostic_resource::timer).attempt(status);
+        if (status.ok())
+        {
+            valid_ = false;
+            diagnostics(diagnostic_resource::timer).release();
+        }
+        return status;
+    }
     /// @brief Returns true if the timer is currently running.
     [[nodiscard]] bool is_active() const noexcept
     {
         if constexpr (timer_backend<active_backend>)
         {
-            return osal_timer_is_active(&handle_);
+            return valid_ && osal_timer_is_active(&handle_);
         }
         return false;
     }
 
 private:
+    void record_initialization() noexcept
+    {
+        valid_         = initialization_status_.ok();
+        auto& counters = diagnostics(diagnostic_resource::timer);
+        counters.attempt(initialization_status_);
+        if (valid_)
+        {
+            counters.acquire();
+        }
+    }
+
+    result                        initialization_status_{error_code::not_supported};
     bool                          valid_;
     active_traits::timer_handle_t handle_{};
 };

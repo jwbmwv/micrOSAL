@@ -20,6 +20,29 @@
 When `join()` returns `osal::ok()` the internal handle is cleared and the
 `osal::thread` object may be safely destroyed or re-used.
 
+Creating through an already-owned thread handle returns `already_exists`
+without overwriting the first thread. Linux/POSIX validate stack and scheduling
+attributes before starting the entry function; an explicitly too-small stack
+returns `invalid_argument` instead of silently using a default stack. Requested
+Linux CPU affinity is applied through creation attributes rather than after the
+thread starts. Thread names remain best-effort debug metadata. Retain the
+`create()` result (also available as `initialization_status()`) and always join
+or detach a successfully created thread before destroying its wrapper/stack.
+
+Zephyr requires a caller-owned native stack created with its stack macros.
+Missing/zero-sized stacks return `invalid_argument` without an assertion or
+pool allocation; live handles are rejected before acquiring another thread slot.
+
+Production bare-metal builds do not support thread creation:
+`thread::is_supported` is `false` and `create()` returns `not_supported`.
+The hosted self-tick test scheduler uses separate stacks and is not a target
+context-switch port.
+
+Detach is backend-dependent. Zephyr, ThreadX, PX5, Micrium, and embOS return
+`not_supported` without releasing the live thread handle. Use `join()` before
+destroying the wrapper or caller-owned stack. On ports supporting detach,
+caller-owned stack storage must still outlive the detached thread.
+
 ---
 
 ## Priority Model
@@ -39,7 +62,8 @@ Each backend maps this range linearly to its native priority scheme:
 - **Zephyr** — mapped to Zephyr preemptive priorities `[zmax, 0]`.
 - **POSIX / Linux** — mapped to `SCHED_FIFO` priorities if `priority != NORMAL`;
   otherwise inherits parent scheduling policy.
-- **Bare-metal** — priority is ignored; cooperative scheduling only.
+- **Bare-metal** — production threads are unsupported; hosted tests ignore
+  priority and use cooperative scheduling.
 - **CMSIS-RTOS** — mapped to `osPriority` enum (7 levels: Idle…Realtime).
 - **CMSIS-RTOS2** — mapped to `osPriority_t` enum (56 levels: Idle…Realtime7).
 
@@ -104,8 +128,8 @@ Notes:
 - In FreeRTOS static mode, the first `sizeof(StaticTask_t)` bytes of
   `thread_config::stack` are used for the task control block; the remaining
   bytes form the usable task stack.
-- In the bare-metal backend, task metadata is stored but no independent stack
-  switch occurs; each task runs on the scheduler's call stack.
+- In hosted bare-metal tests, each task uses a separate `ucontext` stack.
+  Production bare-metal thread and worker-thread creation are unsupported.
 
 ## Backend Allocation Profiles
 
@@ -118,9 +142,9 @@ into a smaller set of storage models.
 | --- | --- | --- | --- |
 | FreeRTOS | Static pool + caller-supplied storage by default | Thread / work-queue stack storage; queue, stream-buffer, message-buffer, and memory-pool backing storage | Defining `OSAL_FREERTOS_DYNAMIC_ALLOC` enables FreeRTOS dynamic-allocation paths for task/control objects. |
 | Zephyr | Static pool + caller-supplied storage | Thread / work-queue stack storage; queue and memory-pool backing storage | Current backend keeps `k_mutex`, `k_sem`, `k_msgq`, `k_timer`, and related objects in fixed backend pools. |
-| ThreadX | Static pool + caller-supplied storage | Thread / work-queue stack storage; queue and memory-pool backing storage | Current backend uses fixed slot arrays for native `TX_*` objects. |
-| PX5 | Static pool + caller-supplied storage | Thread / work-queue stack storage; queue and memory-pool backing storage | Same model as ThreadX, with PX5 native wait-set support. |
-| Bare-metal | Static pool + caller-supplied storage | Task / work-queue stack storage; queue and memory-pool backing storage | Cooperative scheduler; tasks are tracked in static pools and run on the scheduler call stack. |
+| ThreadX | Static pool + caller-supplied storage | Thread / work-queue stack storage; memory-pool backing storage | Native queues use fixed aligned internal word storage to preserve exact byte copies; oversized configurations fail. |
+| PX5 | Static pool + caller-supplied storage | Thread / work-queue stack storage; memory-pool backing storage | Same queue-storage model as ThreadX, with PX5 native wait-set support. |
+| Bare-metal | Static pool + caller-supplied primitive storage | Queue and memory-pool backing storage | Production thread creation is unsupported. Separate-stack cooperative scheduling is hosted-test-only. |
 | Micrium µC/OS-III | Static pool + caller-supplied storage | Thread stack storage; queue and memory-pool backing storage | Current backend uses fixed `OS_TCB`, `OS_MUTEX`, `OS_SEM`, `OS_Q`, and `OS_TMR` pools. |
 | ChibiOS | Static pool + caller-supplied storage | Thread stack storage; mailbox / queue and memory-pool backing storage | Current backend uses fixed pools for threads, mutexes, semaphores, mailboxes, timers, events, and condvars. |
 | embOS | Static pool + caller-supplied storage | Thread stack storage; queue and memory-pool backing storage | Current backend uses fixed pools for OS tasks and synchronization objects. |

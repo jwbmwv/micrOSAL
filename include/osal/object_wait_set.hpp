@@ -3,6 +3,7 @@
 /// @brief OSAL object wait multiplexing for portable RTOS-style waits
 /// @details Provides osal::object_wait_set, a portable polling-based wait-set
 ///          for OSAL objects with non-destructive readiness queries.
+///          An explicit wait_signal opts into event-driven producer wakes.
 ///
 ///          This complements osal::wait_set:
 ///          - osal::wait_set        : OS/native descriptors (epoll, poll, PX5)
@@ -28,6 +29,7 @@
 #include "stream_buffer.hpp"
 #include "thread.hpp"
 #include "types.hpp"
+#include "wait_signal.hpp"
 #include "work_queue.hpp"
 
 #include <cstddef>
@@ -50,10 +52,10 @@ namespace osal
 {
 
 /// @defgroup osal_object_wait_set OSAL Object Wait-Set
-/// @brief Polling-based multiplex wait for OSAL objects.
+/// @brief Portable multiplex wait for OSAL objects.
 /// @{
 
-/// @brief Polling wait set for OSAL objects with non-destructive readiness.
+/// @brief Portable wait set for OSAL objects with non-destructive readiness.
 /// @details Each registration associates a caller-defined integer identifier
 ///          with one OSAL object and a readiness predicate. The wait set does
 ///          not consume data or events unless the specific registration opts
@@ -63,7 +65,8 @@ namespace osal
 ///          a fixed interval (default `OSAL_OBJECT_WAIT_SET_POLL_INTERVAL_MS`
 ///          = 1 ms).  This is portable but trades CPU cycles for simplicity.
 ///          On battery-powered or latency-sensitive systems, consider tuning
-///          the poll interval or using the native `wait_set` primitive when
+///          the poll interval, opting into producer-notified `wait_signal`
+///          overloads, or using the native `wait_set` primitive when
 ///          the backend provides one (`capabilities<B>::has_wait_set`).
 class object_wait_set
 {
@@ -331,6 +334,45 @@ public:
     result wait(std::span<int> ready_ids, std::size_t& n_ready, milliseconds timeout = milliseconds{-1}) noexcept
     {
         return wait(ready_ids.data(), ready_ids.size(), n_ready, timeout);
+    }
+
+    /// @brief Event-driven opt-in wait; every relevant producer must notify signal.
+    /// @details Claims the signal and registers cancellation before probing.
+    ///          Cancellation wins over readiness at the next loop check.
+    result wait(wait_signal& signal, int* ready_ids, std::size_t max_ready, std::size_t& n_ready,
+                milliseconds timeout = milliseconds{-1}, stop_token token = {}) noexcept
+    {
+        n_ready = 0U;
+        if (ready_ids == nullptr && max_ready != 0U)
+        {
+            return error_code::invalid_argument;
+        }
+        return wait_until_ready(
+            signal,
+            [&]() noexcept
+            {
+                std::size_t count = 0U;
+                for (auto& entry : entries_)
+                {
+                    if (entry.active && entry.probe != nullptr && entry.probe(entry))
+                    {
+                        if (count < max_ready)
+                        {
+                            ready_ids[count] = entry.id;
+                        }
+                        ++count;
+                    }
+                }
+                n_ready = count < max_ready ? count : max_ready;
+                return count != 0U;
+            },
+            timeout, token);
+    }
+
+    result wait(wait_signal& signal, std::span<int> ready_ids, std::size_t& n_ready,
+                milliseconds timeout = milliseconds{-1}, stop_token token = {}) noexcept
+    {
+        return wait(signal, ready_ids.data(), ready_ids.size(), n_ready, timeout, token);
     }
 
 #if defined(__cpp_lib_expected) && __cpp_lib_expected >= 202202L

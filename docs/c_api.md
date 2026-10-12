@@ -41,6 +41,28 @@ slot state. `osal_delayable_work_handle` is a composite helper built from a
 `timer`, `mutex`, `work_queue`, and inline dispatch state, because there is no
 native backend handle to cast to for these portable higher-level helpers.
 
+Initialize handles to zero before first creation (`osal_mutex_handle m = {0};`
+in C, `osal::thread` already does this internally). In particular, creating a
+core resource through a handle which still owns a resource now returns
+`OSAL_ALREADY_EXISTS`. Close/join/detach the existing resource before reuse;
+failed lifecycle calls retain ownership. Never pass an uninitialized or
+copied owning handle. Apply zero-initialization to composite helper handles
+as well, including their nested primitive handles.
+
+`osal_c_mutex_create_with_policy` accepts a separate policy descriptor without
+changing the legacy `osal_mutex_config` layout. Native defaults preserve the
+previous behavior. Explicit policies are never silently substituted: unsupported
+requests return `OSAL_NOT_SUPPORTED`. Robust acquisition can return
+`OSAL_OWNER_DIED` **while owning the lock**; repair protected state, call
+`osal_c_mutex_consistent`, then unlock. Unlocking without repair permanently
+marks the mutex unrecoverable. Use the checked C++ guard for equivalent ownership
+tracking; ordinary boolean/convenience locking is unsuitable for robust mutexes.
+
+The delayable-work handle includes a generation-tagged state and split
+deadline fields so stale timer callbacks cannot consume a replacement arm.
+This changes its composite layout: rebuild C and C++ consumers together with
+the library. Backend-backed opaque handle layouts remain unchanged.
+
 ### Error code mapping
 
 The C return type is `osal_result_t` (`int32_t`).  Values match the C++
@@ -62,6 +84,10 @@ The C return type is `osal_result_t` (`int32_t`).  Values match the C++
 | `OSAL_DEADLOCK_DETECTED` | 11 | `osal::error_code::deadlock_detected` |
 | `OSAL_NOT_OWNER` | 12 | `osal::error_code::not_owner` |
 | `OSAL_ISR_INVALID` | 13 | `osal::error_code::isr_invalid` |
+| `OSAL_BARRIER_SERIAL` | 14 | `osal::error_code::barrier_serial` (serial participant, not a failure) |
+| `OSAL_OWNER_DIED` | 15 | `osal::error_code::owner_died` (robust mutex acquired, state needs repair) |
+| `OSAL_NOT_RECOVERABLE` | 16 | `osal::error_code::not_recoverable` |
+| `OSAL_CANCELLED` | 17 | `osal::error_code::cancelled` |
 | `OSAL_UNKNOWN` | 255 | `osal::error_code::unknown` |
 
 ### Naming convention
@@ -77,7 +103,8 @@ which have C linkage but take C++ parameter types.
 | Primitive | C functions |
 | --- | --- |
 | **Clock** | `osal_c_clock_monotonic_ms`, `_system_ms`, `_ticks`, `_tick_period_us` |
-| **Mutex** | `osal_c_mutex_create`, `_create_with_cfg`, `_destroy`, `_lock`, `_try_lock`, `_unlock` |
+| **Mutex** | `osal_c_mutex_create`, `_create_with_cfg`, `_create_with_policy`, `_consistent`, `_destroy`, `_lock`, `_try_lock`, `_unlock` |
+| **Diagnostics** | `osal_c_diagnostics_read` reads the shared global resource snapshot |
 | **Semaphore** | `osal_c_semaphore_create`, `_create_with_cfg`, `_destroy`, `_give`, `_give_isr`, `_take`, `_try_take` |
 | **Queue** | `osal_c_queue_create`, `_create_with_cfg`, `_destroy`, `_send`, `_send_isr`, `_receive`, `_receive_isr`, `_peek`, `_count`, `_free` |
 | **Mailbox** | No dedicated C handle; use `osal_c_queue_*` with `capacity = 1` |
@@ -123,7 +150,7 @@ Both remain allocation-free:
 ```c
 uint32_t values[2] = {0};
 uint8_t pending[2] = {0};
-osal_notification_handle note;
+osal_notification_handle note = {0};
 
 osal_c_notification_create(&note, values, pending, 2);
 osal_c_notification_notify(&note, 0x1234U, OSAL_NOTIFICATION_OVERWRITE, 1);
@@ -145,8 +172,8 @@ static void delayed_cb(void* arg)
         (void)arg;
 }
 
-osal_work_queue_handle wq;
-osal_delayable_work_handle work;
+osal_work_queue_handle wq = {0};
+osal_delayable_work_handle work = {0};
 
 osal_c_work_queue_create(&wq, wq_stack, sizeof(wq_stack), 8, "c_wq");
 osal_c_delayable_work_create(&work, &wq, delayed_cb, NULL, "c_dw");
@@ -185,7 +212,7 @@ Behavior mirrors the C++ emulation:
 ### C usage example
 
 ```c
-osal_tls_key_handle tls;
+osal_tls_key_handle tls = {0};
 if (osal_c_tls_key_create(&tls) == OSAL_OK)
 {
     int worker_id = 7;
@@ -213,7 +240,7 @@ static const osal_semaphore_config sem_cfg = {
     .max_count     = 5
 };
 
-osal_semaphore_handle sem;
+osal_semaphore_handle sem = {0};
 osal_c_semaphore_create_with_cfg(&sem, &sem_cfg);
 ```
 
@@ -246,10 +273,10 @@ void producer(void* arg)
 
 int main(void)
 {
-    osal_queue_handle q;
+    osal_queue_handle q = {0};
     osal_c_queue_create(&q, NULL, sizeof(int), 8);
 
-    osal_thread_handle thr;
+    osal_thread_handle thr = {0};
     osal_c_thread_create(&thr, producer, &q,
                          OSAL_PRIORITY_NORMAL, 0,
                          NULL, 0, "prod");

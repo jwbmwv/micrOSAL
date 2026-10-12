@@ -36,12 +36,55 @@
 #include <selectLib.h>
 #include <condVarLib.h>
 #include <ctime>
+#include <atomic>
 #include <cassert>
 #include <cstring>
 #include <limits>
 
 namespace
 {
+struct vx_sem_slot
+{
+    std::atomic<bool>     used{};
+    std::atomic<SEM_ID>   id{};
+    std::atomic<unsigned> count{};
+    unsigned              maximum{};
+
+    osal::result reserve() noexcept
+    {
+        unsigned value = count.load(std::memory_order_relaxed);
+        for (unsigned attempt = 0; attempt < 32U; ++attempt)
+        {
+            if (value >= maximum)
+            {
+                return osal::error_code::overflow;
+            }
+            if (count.compare_exchange_weak(value, value + 1U, std::memory_order_relaxed))
+            {
+                return osal::ok();
+            }
+        }
+        return osal::error_code::would_block;
+    }
+};
+static_assert(std::atomic<unsigned>::is_always_lock_free);
+static_assert(std::atomic<SEM_ID>::is_always_lock_free);
+#ifndef OSAL_VX_MAX_SEMS
+#define OSAL_VX_MAX_SEMS 64
+#endif
+vx_sem_slot vx_sems[OSAL_VX_MAX_SEMS];
+
+vx_sem_slot* vx_sem_find(SEM_ID id) noexcept
+{
+    for (auto& slot : vx_sems)
+    {
+        if (slot.id.load(std::memory_order_acquire) == id)
+        {
+            return &slot;
+        }
+    }
+    return nullptr;
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -64,9 +107,9 @@ int to_vx_ticks(osal::tick_t t) noexcept
     {
         return NO_WAIT;
     }
-    // OSAL ticks are milliseconds; convert to VxWorks ticks.
-    const int rate = sysClkRateGet();
-    return static_cast<int>((static_cast<long long>(t) * rate) / 1000LL);
+    // OSAL timeouts already use the same tick unit as tickGet().
+    return t > static_cast<osal::tick_t>(std::numeric_limits<int>::max()) ? std::numeric_limits<int>::max()
+                                                                          : static_cast<int>(t);
 }
 
 // ---------------------------------------------------------------------------
@@ -82,31 +125,32 @@ struct vx_timer_ctx
     WDOG_ID               wd{};
     int                   period_ticks{};  ///< 0 = one-shot
     bool                  auto_reload{};
+    std::atomic<bool>     used{};
+    std::atomic<bool>     ever_started{};
+    std::atomic<bool>     active{};
+    std::atomic<bool>     callback_gate{};
 };
 vx_timer_ctx vx_timer_ctxs[OSAL_VX_MAX_TIMERS];
 
 struct vx_queue_slot
 {
-    MSG_Q_ID    id{};
-    std::size_t item_size{};
-    std::size_t capacity{};
-    bool        used{};
+    MSG_Q_ID          id{};
+    std::size_t       item_size{};
+    std::size_t       capacity{};
+    std::atomic<bool> used{};
 };
 vx_queue_slot vx_queues[OSAL_VX_MAX_QUEUES];
+static_assert(std::atomic<bool>::is_always_lock_free);
 
 vx_queue_slot* vx_queue_acquire() noexcept
 {
-    const int key = intLock();
     for (auto& queue : vx_queues)
     {
-        if (!queue.used)
+        if (!queue.used.exchange(true, std::memory_order_acquire))
         {
-            queue.used = true;
-            intUnlock(key);
             return &queue;
         }
     }
-    intUnlock(key);
     return nullptr;
 }
 
@@ -117,17 +161,28 @@ void vx_queue_release(vx_queue_slot* queue) noexcept
         return;
     }
 
-    const int key    = intLock();
     queue->id        = nullptr;
     queue->item_size = 0U;
     queue->capacity  = 0U;
-    queue->used      = false;
-    intUnlock(key);
+    queue->used.store(false, std::memory_order_release);
 }
 
 void vx_timer_expiry(long ctx_idx) noexcept
 {
     auto& ctx = vx_timer_ctxs[ctx_idx];
+    if (ctx.callback_gate.exchange(true, std::memory_order_acquire))
+    {
+        return;
+    }
+    if (!ctx.active.load(std::memory_order_acquire))
+    {
+        ctx.callback_gate.store(false, std::memory_order_release);
+        return;
+    }
+    if (!ctx.auto_reload)
+    {
+        ctx.active.store(false, std::memory_order_release);
+    }
     if (ctx.fn != nullptr)
     {
         ctx.fn(ctx.arg);
@@ -136,6 +191,7 @@ void vx_timer_expiry(long ctx_idx) noexcept
     {
         wdStart(ctx.wd, ctx.period_ticks, reinterpret_cast<FUNCPTR>(vx_timer_expiry), ctx_idx);
     }
+    ctx.callback_gate.store(false, std::memory_order_release);
 }
 
 }  // namespace
@@ -200,7 +256,14 @@ extern "C"
                                     osal::priority_t   priority, osal::affinity_t /*affinity*/, void* /*stack*/,
                                     osal::stack_size_t stack_bytes, const char* name) noexcept
     {
-        assert(handle != nullptr && entry != nullptr);
+        if (handle == nullptr || entry == nullptr)
+        {
+            return osal::error_code::invalid_argument;
+        }
+        if (handle->native != nullptr)
+        {
+            return osal::error_code::already_exists;
+        }
         const int tid = taskSpawn(const_cast<char*>(name != nullptr ? name : "osal"), osal_to_vx_priority(priority), 0,
                                   static_cast<int>(stack_bytes), reinterpret_cast<FUNCPTR>(entry),
                                   reinterpret_cast<_Vx_usr_arg_t>(arg), 0, 0, 0, 0, 0, 0, 0, 0, 0);
@@ -384,13 +447,35 @@ extern "C"
     /// @retval osal::ok()                    On success.
     /// @retval error_code::out_of_resources  On failure.
     osal::result osal_semaphore_create(osal::active_traits::semaphore_handle_t* handle, unsigned initial_count,
-                                       unsigned /*max_count*/) noexcept
+                                       unsigned max_count) noexcept
     {
-        SEM_ID sem = semCCreate(SEM_Q_PRIORITY, static_cast<int>(initial_count));
-        if (sem == SEM_ID_NULL)
+        if (handle == nullptr || max_count == 0U || initial_count > max_count ||
+            max_count > static_cast<unsigned>(std::numeric_limits<int>::max()))
+        {
+            return osal::error_code::invalid_argument;
+        }
+        vx_sem_slot* slot = nullptr;
+        for (auto& candidate : vx_sems)
+        {
+            if (!candidate.used.exchange(true, std::memory_order_acquire))
+            {
+                slot = &candidate;
+                break;
+            }
+        }
+        if (slot == nullptr)
         {
             return osal::error_code::out_of_resources;
         }
+        SEM_ID sem = semCCreate(SEM_Q_PRIORITY, static_cast<int>(initial_count));
+        if (sem == SEM_ID_NULL)
+        {
+            slot->used.store(false, std::memory_order_release);
+            return osal::error_code::out_of_resources;
+        }
+        slot->maximum = max_count;
+        slot->count.store(initial_count, std::memory_order_relaxed);
+        slot->id.store(sem, std::memory_order_release);
         handle->native = static_cast<void*>(sem);
         return osal::ok();
     }
@@ -404,7 +489,13 @@ extern "C"
         {
             return osal::ok();
         }
-        semDelete(static_cast<SEM_ID>(handle->native));
+        auto* slot = vx_sem_find(static_cast<SEM_ID>(handle->native));
+        if (slot == nullptr || semDelete(static_cast<SEM_ID>(handle->native)) != OK)
+        {
+            return osal::error_code::unknown;
+        }
+        slot->id.store(SEM_ID_NULL, std::memory_order_release);
+        slot->used.store(false, std::memory_order_release);
         handle->native = nullptr;
         return osal::ok();
     }
@@ -419,7 +510,22 @@ extern "C"
         {
             return osal::error_code::not_initialized;
         }
-        return (semGive(static_cast<SEM_ID>(handle->native)) == OK) ? osal::ok() : osal::error_code::unknown;
+        auto* slot = vx_sem_find(static_cast<SEM_ID>(handle->native));
+        if (slot == nullptr)
+        {
+            return osal::error_code::not_initialized;
+        }
+        const auto reserved = slot->reserve();
+        if (!reserved.ok())
+        {
+            return reserved;
+        }
+        if (semGive(static_cast<SEM_ID>(handle->native)) != OK)
+        {
+            slot->count.fetch_sub(1U, std::memory_order_relaxed);
+            return osal::error_code::unknown;
+        }
+        return osal::ok();
     }
 
     /// @brief Increment the semaphore from ISR context (`semGive` is ISR-safe).
@@ -443,6 +549,10 @@ extern "C"
             return osal::error_code::not_initialized;
         }
         const STATUS rc = semTake(static_cast<SEM_ID>(handle->native), to_vx_ticks(timeout_ticks));
+        if (rc == OK)
+        {
+            vx_sem_find(static_cast<SEM_ID>(handle->native))->count.fetch_sub(1U, std::memory_order_relaxed);
+        }
         return (rc == OK) ? osal::ok() : osal::error_code::timeout;
     }
 
@@ -626,12 +736,20 @@ extern "C"
                                    osal_timer_callback_t callback, void* arg, osal::tick_t period_ticks,
                                    bool auto_reload) noexcept
     {
-        assert(handle != nullptr && callback != nullptr);
+        if (handle == nullptr || callback == nullptr || period_ticks == 0U || period_ticks == osal::WAIT_FOREVER ||
+            period_ticks > static_cast<osal::tick_t>(std::numeric_limits<int>::max()))
+        {
+            return osal::error_code::invalid_argument;
+        }
+        if (handle->native != nullptr)
+        {
+            return osal::error_code::already_exists;
+        }
         // Find a free context slot.
         long idx = -1;
         for (long i = 0; i < OSAL_VX_MAX_TIMERS; ++i)
         {
-            if (vx_timer_ctxs[i].fn == nullptr)
+            if (!vx_timer_ctxs[i].used.exchange(true, std::memory_order_acquire))
             {
                 idx = i;
                 break;
@@ -645,6 +763,7 @@ extern "C"
         WDOG_ID wd = wdCreate();
         if (wd == nullptr)
         {
+            vx_timer_ctxs[idx].used.store(false, std::memory_order_release);
             return osal::error_code::out_of_resources;
         }
 
@@ -654,8 +773,11 @@ extern "C"
         ctx.wd           = wd;
         ctx.auto_reload  = auto_reload;
         ctx.period_ticks = to_vx_ticks(period_ticks);
+        ctx.ever_started.store(false, std::memory_order_relaxed);
+        ctx.active.store(false, std::memory_order_relaxed);
+        ctx.callback_gate.store(false, std::memory_order_relaxed);
 
-        handle->native = reinterpret_cast<void*>(static_cast<intptr_t>(idx));
+        handle->native = reinterpret_cast<void*>(static_cast<intptr_t>(idx + 1));
         return osal::ok();
     }
 
@@ -668,10 +790,15 @@ extern "C"
         {
             return osal::ok();
         }
-        const long idx = static_cast<long>(reinterpret_cast<intptr_t>(handle->native));
+        const long idx = static_cast<long>(reinterpret_cast<intptr_t>(handle->native)) - 1;
         if (idx >= 0 && idx < OSAL_VX_MAX_TIMERS)
         {
             auto& ctx = vx_timer_ctxs[idx];
+            // Watchdog deletion is not a verified SMP callback lifetime barrier.
+            if (ctx.ever_started.load(std::memory_order_acquire))
+            {
+                return osal::error_code::not_supported;
+            }
             if (ctx.wd != nullptr)
             {
                 wdCancel(ctx.wd);
@@ -679,6 +806,7 @@ extern "C"
             }
             ctx.fn = nullptr;
             ctx.wd = nullptr;
+            ctx.used.store(false, std::memory_order_release);
         }
         handle->native = nullptr;
         return osal::ok();
@@ -694,13 +822,22 @@ extern "C"
         {
             return osal::error_code::not_initialized;
         }
-        const long idx = static_cast<long>(reinterpret_cast<intptr_t>(handle->native));
+        const long idx = static_cast<long>(reinterpret_cast<intptr_t>(handle->native)) - 1;
         if (idx < 0 || idx >= OSAL_VX_MAX_TIMERS || vx_timer_ctxs[idx].wd == nullptr)
         {
             return osal::error_code::not_initialized;
         }
-        auto&        ctx = vx_timer_ctxs[idx];
-        const STATUS rc  = wdStart(ctx.wd, ctx.period_ticks, reinterpret_cast<FUNCPTR>(vx_timer_expiry), idx);
+        auto& ctx = vx_timer_ctxs[idx];
+        if (ctx.ever_started.exchange(true, std::memory_order_acq_rel))
+        {
+            return osal::error_code::not_supported;
+        }
+        ctx.active.store(true, std::memory_order_release);
+        const STATUS rc = wdStart(ctx.wd, ctx.period_ticks, reinterpret_cast<FUNCPTR>(vx_timer_expiry), idx);
+        if (rc != OK)
+        {
+            ctx.active.store(false, std::memory_order_release);
+        }
         return (rc == OK) ? osal::ok() : osal::error_code::unknown;
     }
 
@@ -714,12 +851,23 @@ extern "C"
         {
             return osal::error_code::not_initialized;
         }
-        const long idx = static_cast<long>(reinterpret_cast<intptr_t>(handle->native));
+        const long idx = static_cast<long>(reinterpret_cast<intptr_t>(handle->native)) - 1;
         if (idx < 0 || idx >= OSAL_VX_MAX_TIMERS || vx_timer_ctxs[idx].wd == nullptr)
         {
             return osal::error_code::not_initialized;
         }
-        wdCancel(vx_timer_ctxs[idx].wd);
+        auto& ctx = vx_timer_ctxs[idx];
+        if (ctx.callback_gate.exchange(true, std::memory_order_acquire))
+        {
+            return osal::error_code::not_supported;
+        }
+        ctx.active.store(false, std::memory_order_release);
+        const STATUS rc = wdCancel(ctx.wd);
+        ctx.callback_gate.store(false, std::memory_order_release);
+        if (rc != OK)
+        {
+            return osal::error_code::unknown;
+        }
         return osal::ok();
     }
 
@@ -728,7 +876,11 @@ extern "C"
     /// @retval osal::ok()  On success.
     osal::result osal_timer_reset(osal::active_traits::timer_handle_t* handle) noexcept
     {
-        osal_timer_stop(handle);
+        const auto stopped = osal_timer_stop(handle);
+        if (!stopped.ok())
+        {
+            return stopped;
+        }
         return osal_timer_start(handle);
     }
 
@@ -744,17 +896,31 @@ extern "C"
         {
             return osal::error_code::not_initialized;
         }
-        const long idx = static_cast<long>(reinterpret_cast<intptr_t>(handle->native));
+        const long idx = static_cast<long>(reinterpret_cast<intptr_t>(handle->native)) - 1;
         if (idx < 0 || idx >= OSAL_VX_MAX_TIMERS)
         {
             return osal::error_code::not_initialized;
         }
+        if (vx_timer_ctxs[idx].active.load(std::memory_order_acquire))
+        {
+            return osal::error_code::not_supported;
+        }
+        if (new_period_ticks == 0U || new_period_ticks == osal::WAIT_FOREVER ||
+            new_period_ticks > static_cast<osal::tick_t>(std::numeric_limits<int>::max()))
+        {
+            return osal::error_code::invalid_argument;
+        }
+        if (vx_timer_ctxs[idx].callback_gate.exchange(true, std::memory_order_acquire))
+        {
+            return osal::error_code::not_supported;
+        }
         vx_timer_ctxs[idx].period_ticks = to_vx_ticks(new_period_ticks);
+        vx_timer_ctxs[idx].callback_gate.store(false, std::memory_order_release);
         return osal::ok();
     }
 
     /// @brief Query whether a watchdog timer is active.
-    /// @note VxWorks 7 does not expose a direct "is active" query; returns `true` if the wd handle is non-null.
+    /// @note A shadow flag tracks explicit start/stop and one-shot expiry.
     /// @param[in] handle  Timer handle (const).
     /// @return `true` if the watchdog appears active, `false` otherwise.
     bool osal_timer_is_active(const osal::active_traits::timer_handle_t* handle) noexcept
@@ -763,10 +929,8 @@ extern "C"
         {
             return false;
         }
-        const long idx = static_cast<long>(reinterpret_cast<intptr_t>(handle->native));
-        // VxWorks 7 does not expose a direct "is active" query for watchdogs.
-        // A custom flag could track this; for now return true if the wd exists.
-        return idx >= 0 && idx < OSAL_VX_MAX_TIMERS && vx_timer_ctxs[idx].wd != nullptr;
+        const long idx = static_cast<long>(reinterpret_cast<intptr_t>(handle->native)) - 1;
+        return idx >= 0 && idx < OSAL_VX_MAX_TIMERS && vx_timer_ctxs[idx].active.load(std::memory_order_acquire);
     }
 
     // ---------------------------------------------------------------------------

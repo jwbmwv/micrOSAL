@@ -1,0 +1,39 @@
+# SPDX-License-Identifier: Apache-2.0
+set(prefix "@CMAKE_CURRENT_BINARY_DIR@/package-prefix")
+set(consumer_build "@CMAKE_CURRENT_BINARY_DIR@/package-consumer")
+set(config_args)
+set(ctest_config_args)
+if(OSAL_TEST_CONFIG)
+    list(APPEND config_args --config "${OSAL_TEST_CONFIG}")
+    list(APPEND ctest_config_args -C "${OSAL_TEST_CONFIG}")
+endif()
+
+function(checked_command)
+    execute_process(COMMAND ${ARGV} RESULT_VARIABLE status)
+    if(NOT status EQUAL 0)
+        message(FATAL_ERROR "Command failed (${status}): ${ARGV}")
+    endif()
+endfunction()
+
+checked_command("@CMAKE_COMMAND@" --install "@PROJECT_BINARY_DIR@" --prefix "${prefix}"
+    ${config_args})
+set(PACKAGE_FIND_VERSION "0.0.2")
+set(PACKAGE_FIND_VERSION_MAJOR 0)
+set(PACKAGE_FIND_VERSION_MINOR 0)
+set(PACKAGE_FIND_VERSION_PATCH 2)
+set(PACKAGE_FIND_VERSION_COUNT 3)
+include("${prefix}/@CMAKE_INSTALL_LIBDIR@/cmake/microsal/microsal-config-version.cmake")
+if(PACKAGE_VERSION_COMPATIBLE)
+    message(FATAL_ERROR "The changed 0.1 ABI must not advertise compatibility with 0.0")
+endif()
+checked_command("@CMAKE_COMMAND@"
+    -S "@CMAKE_CURRENT_SOURCE_DIR@/package_consumer"
+    -B "${consumer_build}"
+    "-DCMAKE_PREFIX_PATH=${prefix}"
+    "-DCMAKE_CXX_COMPILER=@CMAKE_CXX_COMPILER@"
+    "-DCMAKE_BUILD_TYPE=${OSAL_TEST_CONFIG}"
+    "-DCMAKE_CXX_FLAGS=@CMAKE_CXX_FLAGS@"
+    "-DCMAKE_EXE_LINKER_FLAGS=@CMAKE_EXE_LINKER_FLAGS@")
+checked_command("@CMAKE_COMMAND@" --build "${consumer_build}" ${config_args})
+checked_command("@CMAKE_CTEST_COMMAND@" --test-dir "${consumer_build}" --output-on-failure
+    ${ctest_config_args})

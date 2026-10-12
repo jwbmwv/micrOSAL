@@ -43,7 +43,7 @@ struct osal_signal_capabilities
     static constexpr bool native_observers = false;
     /// @brief Backend supports topic-to-topic message routing.
     static constexpr bool native_routing = false;
-    /// @brief Backend supports zero-copy or near-zero-copy publish.
+    /// @brief Backend implements ownership-preserving zero-copy payload transport.
     static constexpr bool zero_copy = false;
 };
 
@@ -287,7 +287,7 @@ struct osal_signal_capabilities<bus_backend_cmsis_rtos2>
 };
 
 // ---------------------------------------------------------------------------
-// bus_backend_mock — all premium flags enabled (for test coverage)
+// bus_backend_mock — native observer hooks; copying payload transport
 // ---------------------------------------------------------------------------
 
 template<>
@@ -295,8 +295,8 @@ struct osal_signal_capabilities<bus_backend_mock>
 {
     static constexpr bool native_pubsub    = true;
     static constexpr bool native_observers = true;
-    static constexpr bool native_routing   = true;
-    static constexpr bool zero_copy        = true;
+    static constexpr bool native_routing   = false;
+    static constexpr bool zero_copy        = false;
 };
 
 // ---------------------------------------------------------------------------

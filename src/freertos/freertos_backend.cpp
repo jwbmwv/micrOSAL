@@ -70,6 +70,14 @@
 #error "MicrOSAL FreeRTOS backend requires configUSE_TIMERS == 1."
 #endif
 
+#if !defined(INCLUDE_xTimerPendFunctionCall) || (INCLUDE_xTimerPendFunctionCall != 1)
+#error "MicrOSAL FreeRTOS backend requires INCLUDE_xTimerPendFunctionCall == 1 for timer deletion completion."
+#endif
+
+#if !defined(INCLUDE_xTaskGetSchedulerState) || (INCLUDE_xTaskGetSchedulerState != 1)
+#error "MicrOSAL FreeRTOS backend requires INCLUDE_xTaskGetSchedulerState == 1 for timer deletion context checks."
+#endif
+
 #if !defined(configUSE_EVENT_GROUPS) || (configUSE_EVENT_GROUPS != 1)
 #error "MicrOSAL FreeRTOS backend requires configUSE_EVENT_GROUPS == 1."
 #endif
@@ -144,8 +152,22 @@ struct fr_cb_pair
 {
     osal_timer_callback_t fn{nullptr};
     void*                 a{nullptr};
+    bool                  used{false};
+    std::atomic<bool>     suppress{false};
 };
 fr_cb_pair fr_cb_pairs[OSAL_FREERTOS_MAX_TIMERS];
+
+void fr_timer_fence(SemaphoreHandle_t done) noexcept
+{
+    const auto signal_done = [](void* sem, std::uint32_t)
+    { (void)xSemaphoreGive(static_cast<SemaphoreHandle_t>(sem)); };
+    while (xTimerPendFunctionCall(signal_done, done, 0U, portMAX_DELAY) != pdPASS)
+    {
+    }
+    while (xSemaphoreTake(done, portMAX_DELAY) != pdTRUE)
+    {
+    }
+}
 }  // namespace
 
 // ---------------------------------------------------------------------------
@@ -192,8 +214,14 @@ static_assert(OSAL_FREERTOS_MAX_THREADS > 0, "OSAL_FREERTOS_MAX_THREADS must be 
 
 namespace
 {
-StaticSemaphore_t fr_mutex_pool[OSAL_FREERTOS_MAX_MUTEXES];
-bool              fr_mutex_used[OSAL_FREERTOS_MAX_MUTEXES];
+struct fr_mutex_ctx
+{
+    SemaphoreHandle_t sem{nullptr};
+    bool              recursive{false};
+    StaticSemaphore_t storage{};
+};
+fr_mutex_ctx fr_mutex_pool[OSAL_FREERTOS_MAX_MUTEXES];
+bool         fr_mutex_used[OSAL_FREERTOS_MAX_MUTEXES];
 
 StaticSemaphore_t fr_sem_pool[OSAL_FREERTOS_MAX_SEMAPHORES];
 bool              fr_sem_used[OSAL_FREERTOS_MAX_SEMAPHORES];
@@ -220,14 +248,17 @@ bool                 fr_mbuf_used[OSAL_FREERTOS_MAX_MESSAGE_BUFFERS];
 template<typename T, std::size_t N>
 T* fr_pool_acquire(T (&pool)[N], bool (&used)[N]) noexcept
 {
+    taskENTER_CRITICAL();
     for (std::size_t i = 0U; i < N; ++i)
     {
         if (!used[i])
         {
             used[i] = true;
+            taskEXIT_CRITICAL();
             return &pool[i];
         }
     }
+    taskEXIT_CRITICAL();
     return nullptr;
 }
 
@@ -235,21 +266,32 @@ T* fr_pool_acquire(T (&pool)[N], bool (&used)[N]) noexcept
 template<typename T, std::size_t N>
 void fr_pool_release(T (&pool)[N], bool (&used)[N], T* p) noexcept
 {
+    taskENTER_CRITICAL();
     for (std::size_t i = 0U; i < N; ++i)
     {
         if (&pool[i] == p)
         {
             used[i] = false;
+            taskEXIT_CRITICAL();
             return;
         }
     }
+    taskEXIT_CRITICAL();
 }
 }  // namespace
 
 #endif  // !OSAL_FREERTOS_DYNAMIC_ALLOC
 
+#if defined(OSAL_FREERTOS_DYNAMIC_ALLOC)
+struct fr_mutex_ctx
+{
+    SemaphoreHandle_t sem{nullptr};
+    bool              recursive{false};
+};
+#endif
+
 // ---------------------------------------------------------------------------
-// Thread join context (dynamic-alloc path only)
+// Thread join context
 // ---------------------------------------------------------------------------
 /// @brief Per-thread context backing join/detach semantics for FreeRTOS tasks.
 struct fr_thread_ctx_t
@@ -261,8 +303,9 @@ struct fr_thread_ctx_t
 #if !defined(OSAL_FREERTOS_DYNAMIC_ALLOC)
     StaticSemaphore_t done_sem_storage{};  ///< Static storage for join semaphore.
 #endif
-    std::atomic<bool> finished{false};  ///< Task entry has returned.
-    std::atomic<bool> detached{false};  ///< Handle no longer owns cleanup.
+    std::atomic<bool>     finished{false};  ///< Task entry has returned.
+    std::atomic<bool>     detached{false};  ///< Handle no longer owns cleanup.
+    std::atomic<unsigned> owners{2U};       ///< Handle and task each own a reference.
 };
 
 #if !defined(OSAL_FREERTOS_DYNAMIC_ALLOC)
@@ -319,6 +362,14 @@ void fr_thread_ctx_destroy(fr_thread_ctx_t* ctx) noexcept
 #endif
 }
 
+void fr_thread_ctx_release_owner(fr_thread_ctx_t* ctx, unsigned count = 1U) noexcept
+{
+    if (ctx->owners.fetch_sub(count, std::memory_order_acq_rel) == count)
+    {
+        fr_thread_ctx_destroy(ctx);
+    }
+}
+
 fr_thread_ctx_t* fr_thread_ctx_from_handle(osal::active_traits::thread_handle_t* handle) noexcept
 {
     if (handle == nullptr || handle->native == nullptr)
@@ -357,25 +408,33 @@ TaskHandle_t fr_task_from_handle(const osal::active_traits::thread_handle_t* han
     return ctx->task;
 }
 
-/// @brief FreeRTOS task body: runs user_entry then signals done_sem.
+/// @brief Runs user_entry, then parks joinable tasks for synchronous deletion.
 void fr_thread_wrapper_fn(void* arg) noexcept
 {
     auto* ctx = static_cast<fr_thread_ctx_t*>(arg);
     ctx->user_entry(ctx->user_arg);
 
-    ctx->task = nullptr;
+    taskENTER_CRITICAL();
     ctx->finished.store(true, std::memory_order_release);
 
     if (ctx->detached.load(std::memory_order_acquire))
     {
-        fr_thread_ctx_destroy(ctx);
+        fr_thread_ctx_release_owner(ctx);
+        taskEXIT_CRITICAL();
+        vTaskDelete(nullptr);
     }
     else
     {
         (void)xSemaphoreGive(ctx->done_sem);
+        taskEXIT_CRITICAL();
+        // Self-deletion defers TCB reclamation to idle, so join could otherwise
+        // return while FreeRTOS still references the caller's static stack.
+        // The joiner (or a late detacher) deletes this task synchronously.
+        for (;;)
+        {
+            (void)ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+        }
     }
-
-    vTaskDelete(nullptr);  // self-delete
 }
 }  // namespace
 
@@ -501,6 +560,7 @@ extern "C"
         ctx->done_sem   = nullptr;
         ctx->finished.store(false, std::memory_order_release);
         ctx->detached.store(false, std::memory_order_release);
+        ctx->owners.store(2U, std::memory_order_release);
 
         ctx->done_sem = xSemaphoreCreateBinaryStatic(&ctx->done_sem_storage);
         if (ctx->done_sem == nullptr)
@@ -545,8 +605,8 @@ extern "C"
     }
 
     /// @brief Waits for a task to finish and releases its resources.
-    /// @details Both the static-alloc and dynamic-alloc paths wait for the task wrapper to
-    ///          signal completion, then release the per-task join context.
+    /// @details Waits for entry completion, then synchronously deletes the parked native
+    ///          task before releasing its context and caller-owned static stack storage.
     /// @param[in,out] handle  Handle of the task to join; set to null on return.
     /// @retval osal::ok()                   On success.
     /// @retval error_code::timeout          If the wait expires.
@@ -564,14 +624,15 @@ extern "C"
             return osal::error_code::timeout;
         }
 
+        vTaskDelete(ctx->task);
         handle->native = nullptr;
-        fr_thread_ctx_destroy(ctx);
+        fr_thread_ctx_release_owner(ctx, 2U);
         return osal::ok();
     }
 
     /// @brief Detaches a task handle so the task manages its own lifecycle.
-    /// @details Marks the task as detached; the wrapper frees the join context after the
-    ///          task exits.  If the task already finished, cleanup happens immediately.
+    /// @details Deletes an already-completed task synchronously. Otherwise drops the
+    ///          handle's reference and lets the running task reclaim its context on exit.
     /// @param[in,out] handle  Handle to detach; native field set to @c nullptr.
     /// @retval osal::ok()                   On success.
     /// @retval error_code::not_initialized  If the handle is null.
@@ -583,13 +644,17 @@ extern "C"
             return osal::error_code::not_initialized;
         }
 
+        taskENTER_CRITICAL();
         ctx->detached.store(true, std::memory_order_release);
+        const bool finished = ctx->finished.load(std::memory_order_acquire);
+        taskEXIT_CRITICAL();
+        if (finished)
+        {
+            vTaskDelete(ctx->task);
+        }
         handle->native = nullptr;
 
-        if (ctx->finished.load(std::memory_order_acquire))
-        {
-            fr_thread_ctx_destroy(ctx);
-        }
+        fr_thread_ctx_release_owner(ctx, finished ? 2U : 1U);
 
         return osal::ok();
     }
@@ -806,38 +871,32 @@ extern "C"
     osal::result osal_mutex_create(osal::active_traits::mutex_handle_t* handle, bool recursive) noexcept
     {
         assert(handle != nullptr);
-        SemaphoreHandle_t sem = nullptr;
-        if (recursive)
-        {
 #if defined(OSAL_FREERTOS_DYNAMIC_ALLOC)
-            sem = xSemaphoreCreateRecursiveMutex();
+        auto* ctx = new (std::nothrow) fr_mutex_ctx{};
 #else
-            auto* stor = fr_pool_acquire(fr_mutex_pool, fr_mutex_used);
-            if (stor == nullptr)
-            {
-                return osal::error_code::out_of_resources;
-            }
-            sem = xSemaphoreCreateRecursiveMutexStatic(stor);
+        auto* ctx = fr_pool_acquire(fr_mutex_pool, fr_mutex_used);
 #endif
-        }
-        else
-        {
-#if defined(OSAL_FREERTOS_DYNAMIC_ALLOC)
-            sem = xSemaphoreCreateMutex();
-#else
-            auto* stor = fr_pool_acquire(fr_mutex_pool, fr_mutex_used);
-            if (stor == nullptr)
-            {
-                return osal::error_code::out_of_resources;
-            }
-            sem = xSemaphoreCreateMutexStatic(stor);
-#endif
-        }
-        if (sem == nullptr)
+        if (ctx == nullptr)
         {
             return osal::error_code::out_of_resources;
         }
-        handle->native = static_cast<void*>(sem);
+        ctx->recursive = recursive;
+#if defined(OSAL_FREERTOS_DYNAMIC_ALLOC)
+        ctx->sem = recursive ? xSemaphoreCreateRecursiveMutex() : xSemaphoreCreateMutex();
+#else
+        ctx->sem = recursive ? xSemaphoreCreateRecursiveMutexStatic(&ctx->storage)
+                             : xSemaphoreCreateMutexStatic(&ctx->storage);
+#endif
+        if (ctx->sem == nullptr)
+        {
+#if defined(OSAL_FREERTOS_DYNAMIC_ALLOC)
+            delete ctx;
+#else
+            fr_pool_release(fr_mutex_pool, fr_mutex_used, ctx);
+#endif
+            return osal::error_code::out_of_resources;
+        }
+        handle->native = static_cast<void*>(ctx);
         return osal::ok();
     }
 
@@ -848,13 +907,13 @@ extern "C"
     {
         if (handle != nullptr && handle->native != nullptr)
         {
+            auto* ctx = static_cast<fr_mutex_ctx*>(handle->native);
+            vSemaphoreDelete(ctx->sem);
 #if !defined(OSAL_FREERTOS_DYNAMIC_ALLOC)
-            // Recover the StaticSemaphore_t that backs this handle.
-            // FreeRTOS static mutexes: the SemaphoreHandle_t points to the
-            // StaticSemaphore_t storage.  Release the pool slot.
-            fr_pool_release(fr_mutex_pool, fr_mutex_used, reinterpret_cast<StaticSemaphore_t*>(handle->native));
+            fr_pool_release(fr_mutex_pool, fr_mutex_used, ctx);
+#else
+            delete ctx;
 #endif
-            vSemaphoreDelete(static_cast<SemaphoreHandle_t>(handle->native));
             handle->native = nullptr;
         }
         return osal::ok();
@@ -872,8 +931,9 @@ extern "C"
         {
             return osal::error_code::not_initialized;
         }
-        const BaseType_t rc =
-            xSemaphoreTake(static_cast<SemaphoreHandle_t>(handle->native), to_freertos_ticks(timeout_ticks));
+        const auto*      ctx = static_cast<fr_mutex_ctx*>(handle->native);
+        const BaseType_t rc  = ctx->recursive ? xSemaphoreTakeRecursive(ctx->sem, to_freertos_ticks(timeout_ticks))
+                                              : xSemaphoreTake(ctx->sem, to_freertos_ticks(timeout_ticks));
         return (rc == pdTRUE) ? osal::ok() : osal::error_code::timeout;
     }
 
@@ -896,8 +956,9 @@ extern "C"
         {
             return osal::error_code::not_initialized;
         }
-        xSemaphoreGive(static_cast<SemaphoreHandle_t>(handle->native));
-        return osal::ok();
+        const auto*      ctx = static_cast<fr_mutex_ctx*>(handle->native);
+        const BaseType_t rc  = ctx->recursive ? xSemaphoreGiveRecursive(ctx->sem) : xSemaphoreGive(ctx->sem);
+        return rc == pdTRUE ? osal::ok() : osal::error_code::unknown;
     }
 
     // ---------------------------------------------------------------------------
@@ -917,6 +978,10 @@ extern "C"
                                        unsigned max_count) noexcept
     {
         assert(handle != nullptr);
+        if (max_count == 0U || initial_count > max_count)
+        {
+            return osal::error_code::invalid_argument;
+        }
         SemaphoreHandle_t sem = nullptr;
 #if defined(OSAL_FREERTOS_DYNAMIC_ALLOC)
         if (max_count == 1U)
@@ -954,6 +1019,9 @@ extern "C"
 #endif
         if (sem == nullptr)
         {
+#if !defined(OSAL_FREERTOS_DYNAMIC_ALLOC)
+            fr_pool_release(fr_sem_pool, fr_sem_used, stor);
+#endif
             return osal::error_code::out_of_resources;
         }
         handle->native = static_cast<void*>(sem);
@@ -967,10 +1035,10 @@ extern "C"
     {
         if (handle != nullptr && handle->native != nullptr)
         {
+            vSemaphoreDelete(static_cast<SemaphoreHandle_t>(handle->native));
 #if !defined(OSAL_FREERTOS_DYNAMIC_ALLOC)
             fr_pool_release(fr_sem_pool, fr_sem_used, reinterpret_cast<StaticSemaphore_t*>(handle->native));
 #endif
-            vSemaphoreDelete(static_cast<SemaphoreHandle_t>(handle->native));
             handle->native = nullptr;
         }
         return osal::ok();
@@ -1244,30 +1312,30 @@ extern "C"
         assert(callback != nullptr);
         assert(period_ticks > 0U);
 
-        // Wrap the OSAL callback: FreeRTOS timer callback receives TimerHandle_t.
-        // We use pvTimerGetTimerID to recover the arg pointer.
-        // The actual OSAL callback pointer is stored as the timer ID.
-        // This requires encoding both callback+arg — we use a small static pair.
         fr_cb_pair* p = nullptr;
+        taskENTER_CRITICAL();
         for (auto& slot : fr_cb_pairs)
         {
-            if (slot.fn == nullptr)
+            if (!slot.used)
             {
-                p = &slot;
+                p         = &slot;
+                slot.used = true;
                 break;
             }
         }
+        taskEXIT_CRITICAL();
         if (p == nullptr)
         {
             return osal::error_code::out_of_resources;
         }
         p->fn = callback;
         p->a  = arg;
+        p->suppress.store(false, std::memory_order_release);
 
         auto fr_callback = [](TimerHandle_t th)
         {
             const auto* pair = static_cast<fr_cb_pair*>(pvTimerGetTimerID(th));
-            if (pair != nullptr && pair->fn != nullptr)
+            if (pair != nullptr && pair->fn != nullptr && !pair->suppress.load(std::memory_order_acquire))
             {
                 pair->fn(pair->a);
             }
@@ -1280,7 +1348,9 @@ extern "C"
         auto* stor = fr_pool_acquire(fr_timer_pool, fr_timer_used);
         if (stor == nullptr)
         {
-            p->fn = nullptr;
+            taskENTER_CRITICAL();
+            p->used = false;
+            taskEXIT_CRITICAL();
             return osal::error_code::out_of_resources;
         }
         TimerHandle_t t = xTimerCreateStatic((name != nullptr) ? name : "osal", static_cast<TickType_t>(period_ticks),
@@ -1288,7 +1358,12 @@ extern "C"
 #endif
         if (t == nullptr)
         {
-            p->fn = nullptr;
+#if !defined(OSAL_FREERTOS_DYNAMIC_ALLOC)
+            fr_pool_release(fr_timer_pool, fr_timer_used, stor);
+#endif
+            taskENTER_CRITICAL();
+            p->used = false;
+            taskEXIT_CRITICAL();
             return osal::error_code::out_of_resources;
         }
         handle->native = static_cast<void*>(t);
@@ -1297,23 +1372,52 @@ extern "C"
 
     /// @brief Stops and deletes a software timer, releasing its callback pair slot.
     /// @param[in,out] handle  Handle to destroy; native field cleared on return.
-    /// @retval osal::ok()  Always.
+    /// @details Waits for a daemon-queue fence after deletion before reclaiming storage.
+    ///          Must be called from a task with the scheduler running, not a timer callback.
+    /// @retval error_code::not_supported  Called from the timer daemon or without a running scheduler.
+    /// @retval error_code::unknown        A deletion command could not be queued.
     osal::result osal_timer_destroy(osal::active_traits::timer_handle_t* handle) noexcept
     {
         if (handle != nullptr && handle->native != nullptr)
         {
             auto* th = static_cast<TimerHandle_t>(handle->native);
-            // Release the callback pair slot.
-            auto* pair = static_cast<fr_cb_pair*>(pvTimerGetTimerID(th));
-            if (pair != nullptr)
+            if (xTaskGetSchedulerState() != taskSCHEDULER_RUNNING ||
+                xTaskGetCurrentTaskHandle() == xTimerGetTimerDaemonTaskHandle())
             {
-                pair->fn = nullptr;
-                pair->a  = nullptr;
+                return osal::error_code::not_supported;
             }
+            auto* pair = static_cast<fr_cb_pair*>(pvTimerGetTimerID(th));
+#if defined(OSAL_FREERTOS_DYNAMIC_ALLOC)
+            SemaphoreHandle_t done = xSemaphoreCreateBinary();
+#else
+            StaticSemaphore_t done_storage{};
+            SemaphoreHandle_t done = xSemaphoreCreateBinaryStatic(&done_storage);
+#endif
+            if (done == nullptr)
+            {
+                return osal::error_code::out_of_resources;
+            }
+            if (xTimerDelete(th, portMAX_DELAY) != pdPASS)
+            {
+                vSemaphoreDelete(done);
+                return osal::error_code::unknown;
+            }
+            // Commands are FIFO: the fence cannot execute until native deletion completes.
+            // portMAX_DELAY is finite when INCLUDE_vTaskSuspend is disabled. Once delete
+            // is accepted, retain ownership until the fence has actually completed.
+            fr_timer_fence(done);
+            vSemaphoreDelete(done);
 #if !defined(OSAL_FREERTOS_DYNAMIC_ALLOC)
             fr_pool_release(fr_timer_pool, fr_timer_used, reinterpret_cast<StaticTimer_t*>(handle->native));
 #endif
-            xTimerDelete(th, 0U);
+            taskENTER_CRITICAL();
+            if (pair != nullptr)
+            {
+                pair->fn   = nullptr;
+                pair->a    = nullptr;
+                pair->used = false;
+            }
+            taskEXIT_CRITICAL();
             handle->native = nullptr;
         }
         return osal::ok();
@@ -1344,8 +1448,8 @@ extern "C"
         {
             return osal::error_code::not_initialized;
         }
-        xTimerStop(static_cast<TimerHandle_t>(handle->native), 0U);
-        return osal::ok();
+        const BaseType_t rc = xTimerStop(static_cast<TimerHandle_t>(handle->native), 0U);
+        return rc == pdPASS ? osal::ok() : osal::error_code::unknown;
     }
 
     /// @brief Resets the timer, restarting its period from now.
@@ -1364,12 +1468,16 @@ extern "C"
     }
 
     /// @brief Changes the period of an existing timer.
-    /// @details The change is posted to the timer daemon and takes effect at the next expiry.
+    /// @details Settles earlier commands and preserves inactive state and native reload mode.
+    ///          Requires a running scheduler and a non-daemon task.
     /// @param[in] handle            Handle of the timer.
     /// @param[in] new_period_ticks  New period in scheduler ticks; must be > 0.
     /// @retval osal::ok()                   On success.
     /// @retval error_code::unknown          If the daemon queue is full.
     /// @retval error_code::not_initialized  If the handle is null.
+    /// @retval error_code::not_supported    If called from the daemon or without a running scheduler.
+    /// @retval error_code::out_of_resources If completion semaphore allocation fails.
+    /// @retval error_code::invalid_argument If the period converts to zero native ticks.
     osal::result osal_timer_set_period(osal::active_traits::timer_handle_t* handle,
                                        osal::tick_t                         new_period_ticks) noexcept
     {
@@ -1377,9 +1485,49 @@ extern "C"
         {
             return osal::error_code::not_initialized;
         }
-        const BaseType_t rc = xTimerChangePeriod(static_cast<TimerHandle_t>(handle->native),
-                                                 static_cast<TickType_t>(new_period_ticks), 0U);
-        return (rc == pdPASS) ? osal::ok() : osal::error_code::unknown;
+        if (new_period_ticks == 0U || static_cast<TickType_t>(new_period_ticks) == 0U)
+        {
+            return osal::error_code::invalid_argument;
+        }
+        if (xTaskGetSchedulerState() != taskSCHEDULER_RUNNING ||
+            xTaskGetCurrentTaskHandle() == xTimerGetTimerDaemonTaskHandle())
+        {
+            return osal::error_code::not_supported;
+        }
+#if defined(OSAL_FREERTOS_DYNAMIC_ALLOC)
+        SemaphoreHandle_t done = xSemaphoreCreateBinary();
+#else
+        StaticSemaphore_t done_storage{};
+        SemaphoreHandle_t done = xSemaphoreCreateBinaryStatic(&done_storage);
+#endif
+        if (done == nullptr)
+        {
+            return osal::error_code::out_of_resources;
+        }
+        auto* const timer = static_cast<TimerHandle_t>(handle->native);
+        fr_timer_fence(done);
+        const bool active = xTimerIsTimerActive(timer) != pdFALSE;
+        auto*      pair   = static_cast<fr_cb_pair*>(pvTimerGetTimerID(timer));
+        if (!active)
+        {
+            // ChangePeriod starts inactive native timers. Suppress expiry throughout
+            // the change/stop command window, even when the daemon preempts us.
+            pair->suppress.store(true, std::memory_order_release);
+        }
+        const BaseType_t rc = xTimerChangePeriod(timer, static_cast<TickType_t>(new_period_ticks), portMAX_DELAY);
+        if (rc == pdPASS)
+        {
+            if (!active)
+            {
+                while (xTimerStop(timer, portMAX_DELAY) != pdPASS)
+                {
+                }
+            }
+            fr_timer_fence(done);
+        }
+        pair->suppress.store(false, std::memory_order_release);
+        vSemaphoreDelete(done);
+        return rc == pdPASS ? osal::ok() : osal::error_code::unknown;
     }
 
     /// @brief Queries whether a timer is currently running.
@@ -1418,6 +1566,9 @@ extern "C"
 #endif
         if (eg == nullptr)
         {
+#if !defined(OSAL_FREERTOS_DYNAMIC_ALLOC)
+            fr_pool_release(fr_event_pool, fr_event_used, stor);
+#endif
             return osal::error_code::out_of_resources;
         }
         handle->native = static_cast<void*>(eg);
@@ -1431,10 +1582,10 @@ extern "C"
     {
         if (handle != nullptr && handle->native != nullptr)
         {
+            vEventGroupDelete(static_cast<EventGroupHandle_t>(handle->native));
 #if !defined(OSAL_FREERTOS_DYNAMIC_ALLOC)
             fr_pool_release(fr_event_pool, fr_event_used, reinterpret_cast<StaticEventGroup_t*>(handle->native));
 #endif
-            vEventGroupDelete(static_cast<EventGroupHandle_t>(handle->native));
             handle->native = nullptr;
         }
         return osal::ok();
@@ -1693,10 +1844,10 @@ extern "C"
             return osal::error_code::not_initialized;
         }
         auto* h = static_cast<StreamBufferHandle_t>(handle->native);
+        vStreamBufferDelete(h);
 #if !defined(OSAL_FREERTOS_DYNAMIC_ALLOC)
         fr_pool_release(fr_sbuf_pool, fr_sbuf_used, reinterpret_cast<StaticStreamBuffer_t*>(handle->native));
 #endif
-        vStreamBufferDelete(h);  // no-op for static buffers; frees heap for dynamic
         handle->native = nullptr;
         return osal::ok();
     }
@@ -1879,10 +2030,10 @@ extern "C"
             return osal::error_code::not_initialized;
         }
         auto* h = static_cast<MessageBufferHandle_t>(handle->native);
+        vMessageBufferDelete(h);
 #if !defined(OSAL_FREERTOS_DYNAMIC_ALLOC)
         fr_pool_release(fr_mbuf_pool, fr_mbuf_used, reinterpret_cast<StaticStreamBuffer_t*>(handle->native));
 #endif
-        vMessageBufferDelete(h);  // no-op for static; frees heap for dynamic
         handle->native = nullptr;
         return osal::ok();
     }

@@ -9,7 +9,7 @@
 ///   - Observer table capacity limit
 ///   - publish() fans out to both queue-subscribers AND observers
 ///   - publish_zero_copy() falls back to copy on non-zero-copy backends
-///   - route_to() stub returns false (pending registry)
+///   - route_to() without a bound registry returns false
 ///   - Premium capability flags on mock backend
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <doctest/doctest.h>
@@ -205,10 +205,10 @@ TEST_CASE("osal_signal_premium: publish_zero_copy nullptr returns false")
 }
 
 // ---------------------------------------------------------------------------
-// route_to (stub)
+// route_to without registry
 // ---------------------------------------------------------------------------
 
-TEST_CASE("osal_signal_premium: route_to stub returns false")
+TEST_CASE("osal_signal_premium: route_to without registry returns false")
 {
     MockTopic     topic;
     std::uint32_t msg{1U};
@@ -223,8 +223,8 @@ TEST_CASE("osal_signal_premium: capability concepts on mock backend")
 {
     static_assert(osal::native_pubsub_backend<osal::bus_backend_mock>);
     static_assert(osal::native_observer_backend<osal::bus_backend_mock>);
-    static_assert(osal::zero_copy_backend<osal::bus_backend_mock>);
-    static_assert(osal::native_routing_backend<osal::bus_backend_mock>);
+    static_assert(!osal::zero_copy_backend<osal::bus_backend_mock>);
+    static_assert(!osal::native_routing_backend<osal::bus_backend_mock>);
     CHECK(true);  // concepts checked at compile time
 }
 

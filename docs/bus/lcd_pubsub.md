@@ -15,9 +15,19 @@ preserving the same per-subscriber FIFO contract as the generic backend.
 | Dynamic allocation | None in the implemented generic and delegated backends |
 | Publish complexity | `O(MaxSubscribers)` non-blocking sends |
 | Subscriber model | Per-subscriber FIFO queue (pull model) |
-| Thread safety | `subscribe()`, `unsubscribe()`, and `publish()` are mutex-protected |
+| Thread safety | Subscription metadata and queries are mutex-protected; blocking receives reserve their slot without holding the topic mutex |
 | Slot reuse | Reused subscriber slots are purged before reassignment |
 | Full subscriber queue | That subscriber silently drops the publish; the overall call returns `true` if any active subscriber accepted the message |
+
+Generic topics expose `valid()` and reject subscription/publication when their
+mutex or any subscriber queue failed initialization. `unsubscribe()` returns
+`false` while a receive is in progress, preventing a reused slot from delivering
+a new subscriber's data to an old receiver. Complete or time out receivers
+before unsubscribing; this API does not cancel an indefinite receive.
+
+Queue sends during publication are nonblocking, but acquiring the topic mutex
+can block behind another topic operation. Topics and their observed objects
+must still outlive all operations using them.
 
 ## API Reference
 

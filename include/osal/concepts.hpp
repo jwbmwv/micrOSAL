@@ -135,6 +135,15 @@ concept backend_traits_spec = backend_tag<Backend> &&
 template<typename Backend>
 concept backend_descriptor = backend_capabilities_spec<Backend> && backend_traits_spec<Backend>;
 
+/// @brief Backend has a safe thread-context implementation.
+template<typename Backend>
+concept thread_backend = backend_descriptor<Backend> &&
+#if defined(OSAL_BM_TEST_SELF_TICK)
+                         true;
+#else
+                         (!std::same_as<Backend, backend_baremetal>);
+#endif
+
 /// @brief Backend has timed queue send/receive operations.
 template<typename Backend>
 concept timed_queue_backend = backend_descriptor<Backend> && capabilities<Backend>::has_timed_queue;

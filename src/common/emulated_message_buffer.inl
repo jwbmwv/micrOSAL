@@ -391,7 +391,7 @@ extern "C"
                     // Full message present — consume it.
                     emu_mb_skip(s, kMsgHeaderBytes);  // advance past the header
 
-                    if (msg_len <= static_cast<osal_mb_length_t>(max_len))
+                    if (static_cast<std::size_t>(msg_len) <= max_len)
                     {
                         // Caller-supplied buffer is large enough → copy all payload.
                         emu_mb_read(s, static_cast<std::uint8_t*>(buf), static_cast<std::size_t>(msg_len));
@@ -459,7 +459,7 @@ extern "C"
 
         emu_mb_skip(s, kMsgHeaderBytes);
 
-        if (msg_len <= static_cast<osal_mb_length_t>(max_len))
+        if (static_cast<std::size_t>(msg_len) <= max_len)
         {
             emu_mb_read(s, static_cast<std::uint8_t*>(buf), static_cast<std::size_t>(msg_len));
         }

@@ -98,7 +98,7 @@ FetchContent_MakeAvailable(doctest)
 # ---------------------------------------------------------------------------
 # Test executable
 # ---------------------------------------------------------------------------
-add_executable(test_freertos src/main.cpp)
+add_executable(test_freertos src/main.cpp src/portable_features.cpp)
 
 target_include_directories(test_freertos PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}           # FreeRTOSConfig.h
@@ -127,6 +127,15 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
 endif()
 
 target_link_libraries(test_freertos PRIVATE microsal freertos_kernel pthread)
+
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    # V11.1.0's POSIX event wait lacks cancellation cleanup for its mutex.
+    target_compile_definitions(test_freertos PRIVATE OSAL_FREERTOS_POSIX_CANCEL_CLEANUP)
+    target_link_options(test_freertos PRIVATE
+        "LINKER:--wrap=pthread_cond_wait"
+        "LINKER:--wrap=pthread_cond_timedwait"
+    )
+endif()
 
 # ---------------------------------------------------------------------------
 # CTest registration

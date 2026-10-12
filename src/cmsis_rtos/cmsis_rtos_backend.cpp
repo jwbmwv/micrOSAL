@@ -67,23 +67,43 @@ namespace
 
 struct cmsis1_thread_slot
 {
-    osThreadId id{};
-    bool       used{};
+    osThreadId        id{};
+    std::atomic<bool> used{};
 };
 cmsis1_thread_slot cmsis1_threads[OSAL_CMSIS1_MAX_THREADS];
 
 struct cmsis1_mutex_slot
 {
-    osMutexId id{};
-    bool      used{};
+    osMutexId         id{};
+    std::atomic<bool> used{};
 };
 cmsis1_mutex_slot cmsis1_mutexes[OSAL_CMSIS1_MAX_MUTEXES];
 
 struct cmsis1_sem_slot
 {
-    osSemaphoreId id{};
-    bool          used{};
+    osSemaphoreId         id{};
+    std::atomic<bool>     used{};
+    std::atomic<unsigned> count{};
+    unsigned              maximum{};
+
+    osal::result reserve() noexcept
+    {
+        unsigned value = count.load(std::memory_order_relaxed);
+        for (unsigned attempt = 0; attempt < 32U; ++attempt)
+        {
+            if (value >= maximum)
+            {
+                return osal::error_code::overflow;
+            }
+            if (count.compare_exchange_weak(value, value + 1U, std::memory_order_relaxed))
+            {
+                return osal::ok();
+            }
+        }
+        return osal::error_code::would_block;
+    }
 };
+static_assert(std::atomic<unsigned>::is_always_lock_free);
 cmsis1_sem_slot cmsis1_sems[OSAL_CMSIS1_MAX_SEMS];
 
 struct cmsis1_queue_slot
@@ -92,8 +112,8 @@ struct cmsis1_queue_slot
     std::size_t              item_size{};
     std::size_t              capacity{};
     std::atomic<std::size_t> count{0U};
-    bool                     used{};
-    bool                     active{};
+    std::atomic<bool>        used{};
+    std::atomic<bool>        active{};
 };
 cmsis1_queue_slot cmsis1_queues[OSAL_CMSIS1_MAX_QUEUES];
 
@@ -101,26 +121,25 @@ cmsis1_queue_slot* cmsis1_queue_acquire(std::size_t item_size, std::size_t capac
 {
     // CMSIS-RTOS v1 has no portable message-queue delete operation. Reuse a
     // compatible native queue before consuming a previously unused slot.
-    for (auto& queue : cmsis1_queues)
+    for (unsigned pass = 0U; pass < 2U; ++pass)
     {
-        if (!queue.active && queue.used && queue.item_size == item_size && queue.capacity == capacity)
+        for (auto& queue : cmsis1_queues)
         {
-            queue.active = true;
-            queue.count.store(0U, std::memory_order_relaxed);
-            return &queue;
-        }
-    }
-
-    for (auto& queue : cmsis1_queues)
-    {
-        if (!queue.used)
-        {
-            queue.used      = true;
-            queue.active    = true;
-            queue.item_size = item_size;
-            queue.capacity  = capacity;
-            queue.count.store(0U, std::memory_order_relaxed);
-            return &queue;
+            bool inactive = false;
+            if (queue.active.compare_exchange_strong(inactive, true, std::memory_order_acquire))
+            {
+                const bool matches =
+                    pass == 0U ? queue.used && queue.item_size == item_size && queue.capacity == capacity : !queue.used;
+                if (matches)
+                {
+                    queue.used      = true;
+                    queue.item_size = item_size;
+                    queue.capacity  = capacity;
+                    queue.count.store(0U, std::memory_order_relaxed);
+                    return &queue;
+                }
+                queue.active.store(false, std::memory_order_release);
+            }
         }
     }
     return nullptr;
@@ -146,18 +165,22 @@ struct cmsis1_timer_slot
     void*                 arg{};
     osal::tick_t          period{};
     bool                  auto_reload{};
-    bool                  used{};
+    std::atomic<bool>     used{};
+    std::atomic<bool>     ever_started{};
+    std::atomic<bool>     active{};
 };
 cmsis1_timer_slot cmsis1_timers[OSAL_CMSIS1_MAX_TIMERS];
 
 struct cmsis1_pool_slot
 {
-    osPoolId    id{};
-    std::size_t block_size{};
-    std::size_t block_count{};
-    bool        used{};
+    osPoolId          id{};
+    std::size_t       block_size{};
+    std::size_t       block_count{};
+    std::atomic<bool> used{};
 };
 cmsis1_pool_slot cmsis1_pools[OSAL_CMSIS1_MAX_POOLS];
+static_assert(std::atomic<bool>::is_always_lock_free);
+static_assert(std::atomic<std::size_t>::is_always_lock_free);
 
 // ---------------------------------------------------------------------------
 // Pool helpers
@@ -167,9 +190,8 @@ T* slot_acquire(T (&pool)[N]) noexcept
 {
     for (std::size_t i = 0; i < N; ++i)
     {
-        if (!pool[i].used)
+        if (!pool[i].used.exchange(true, std::memory_order_acquire))
         {
-            pool[i].used = true;
             return &pool[i];
         }
     }
@@ -182,7 +204,7 @@ void slot_release(T (&pool)[N], T* p) noexcept
     (void)pool;
     if (p != nullptr)
     {
-        p->used = false;
+        p->used.store(false, std::memory_order_release);
     }
 }
 
@@ -224,6 +246,10 @@ void cmsis1_timer_callback(void const* arg) noexcept
     auto* slot = const_cast<cmsis1_timer_slot*>(static_cast<const cmsis1_timer_slot*>(arg));
     if (slot != nullptr && slot->fn != nullptr)
     {
+        if (!slot->auto_reload)
+        {
+            slot->active.store(false, std::memory_order_release);
+        }
         slot->fn(slot->arg);
     }
 }
@@ -240,7 +266,7 @@ extern "C"
     /// @return Milliseconds elapsed since kernel start.
     std::int64_t osal_clock_monotonic_ms() noexcept
     {
-        return static_cast<std::int64_t>(osKernelSysTick() / (osKernelSysTickMicroSec(1000U)));
+        return static_cast<std::int64_t>(osKernelSysTick()) * 1000LL / osKernelSysTickFrequency;
     }
 
     /// @brief Return wall-clock time in milliseconds (aliased to monotonic on CMSIS-RTOS v1).
@@ -250,11 +276,11 @@ extern "C"
         return osal_clock_monotonic_ms();
     }
 
-    /// @brief Return the raw CMSIS-RTOS v1 system tick counter.
-    /// @return Current osKernelSysTick() value.
+    /// @brief Return ticks in the millisecond unit used by CMSIS-RTOS v1 timeouts.
+    /// @return Milliseconds since kernel start.
     osal::tick_t osal_clock_ticks() noexcept
     {
-        return static_cast<osal::tick_t>(osKernelSysTick());
+        return static_cast<osal::tick_t>(osal_clock_monotonic_ms());
     }
 
     /// @brief Return the tick period in microseconds.
@@ -281,7 +307,14 @@ extern "C"
                                     osal::priority_t   priority, osal::affinity_t /*affinity*/, void* /*stack*/,
                                     osal::stack_size_t stack_bytes, const char* /*name*/) noexcept
     {
-        assert(handle != nullptr && entry != nullptr);
+        if (handle == nullptr || entry == nullptr)
+        {
+            return osal::error_code::invalid_argument;
+        }
+        if (handle->native != nullptr)
+        {
+            return osal::error_code::already_exists;
+        }
         auto* slot = slot_acquire(cmsis1_threads);
         if (slot == nullptr)
         {
@@ -304,9 +337,9 @@ extern "C"
         return osal::ok();
     }
 
-    /// @brief Terminate a thread and release its slot.
+    /// @brief CMSIS-RTOS v1 has no portable completion/join operation.
     /// @param[in,out] handle  Thread handle to join.
-    /// @retval osal::ok()                         On success.
+    /// @retval osal::error_code::not_supported  A live thread is never terminated by join.
     /// @retval osal::error_code::not_initialized  If the handle is null.
     osal::result osal_thread_join(osal::active_traits::thread_handle_t* handle, osal::tick_t /*timeout*/) noexcept
     {
@@ -314,11 +347,7 @@ extern "C"
         {
             return osal::error_code::not_initialized;
         }
-        auto* slot = static_cast<cmsis1_thread_slot*>(handle->native);
-        osThreadTerminate(slot->id);
-        slot_release(cmsis1_threads, slot);
-        handle->native = nullptr;
-        return osal::ok();
+        return osal::error_code::not_supported;
     }
 
     /// @brief Detach a thread, releasing its slot without waiting.
@@ -496,8 +525,13 @@ extern "C"
     /// @retval osal::ok()                          On success.
     /// @retval osal::error_code::out_of_resources  On failure.
     osal::result osal_semaphore_create(osal::active_traits::semaphore_handle_t* handle, unsigned initial_count,
-                                       unsigned /*max_count*/) noexcept
+                                       unsigned max_count) noexcept
     {
+        if (handle == nullptr || max_count == 0U || initial_count > max_count ||
+            max_count > static_cast<unsigned>(INT32_MAX))
+        {
+            return osal::error_code::invalid_argument;
+        }
         assert(handle != nullptr);
         auto* slot = slot_acquire(cmsis1_sems);
         if (slot == nullptr)
@@ -506,7 +540,9 @@ extern "C"
         }
 
         osSemaphoreDef_t def = {};
-        slot->id             = osSemaphoreCreate(&def, static_cast<int32_t>(initial_count));
+        slot->maximum        = max_count;
+        slot->count.store(initial_count, std::memory_order_relaxed);
+        slot->id = osSemaphoreCreate(&def, static_cast<int32_t>(initial_count));
         if (slot->id == nullptr)
         {
             slot_release(cmsis1_sems, slot);
@@ -526,7 +562,10 @@ extern "C"
             return osal::ok();
         }
         auto* slot = static_cast<cmsis1_sem_slot*>(handle->native);
-        osSemaphoreDelete(slot->id);
+        if (osSemaphoreDelete(slot->id) != osOK)
+        {
+            return osal::error_code::unknown;
+        }
         slot_release(cmsis1_sems, slot);
         handle->native = nullptr;
         return osal::ok();
@@ -542,8 +581,17 @@ extern "C"
         {
             return osal::error_code::not_initialized;
         }
-        auto*          slot = static_cast<cmsis1_sem_slot*>(handle->native);
-        const osStatus s    = osSemaphoreRelease(slot->id);
+        auto*      slot     = static_cast<cmsis1_sem_slot*>(handle->native);
+        const auto reserved = slot->reserve();
+        if (!reserved.ok())
+        {
+            return reserved;
+        }
+        const osStatus s = osSemaphoreRelease(slot->id);
+        if (s != osOK)
+        {
+            slot->count.fetch_sub(1U, std::memory_order_relaxed);
+        }
         return (s == osOK) ? osal::ok() : osal::error_code::unknown;
     }
 
@@ -573,6 +621,7 @@ extern "C"
         const int32_t tokens = osSemaphoreWait(slot->id, to_cmsis1_timeout(timeout_ticks));
         if (tokens > 0)
         {
+            slot->count.fetch_sub(1U, std::memory_order_relaxed);
             return osal::ok();
         }
         return (timeout_ticks == osal::NO_WAIT) ? osal::error_code::would_block : osal::error_code::timeout;
@@ -600,7 +649,7 @@ extern "C"
     osal::result osal_queue_create(osal::active_traits::queue_handle_t* handle, void* /*buffer*/, std::size_t item_size,
                                    std::size_t capacity) noexcept
     {
-        if (handle == nullptr || item_size == 0U || capacity == 0U)
+        if (handle == nullptr || item_size == 0U || capacity == 0U || capacity > 0xffffffffULL)
         {
             return osal::error_code::invalid_argument;
         }
@@ -631,8 +680,8 @@ extern "C"
         {
             slot->item_size = 0U;
             slot->capacity  = 0U;
-            slot->active    = false;
             slot->used      = false;
+            slot->active.store(false, std::memory_order_release);
             return osal::error_code::out_of_resources;
         }
         handle->native = static_cast<void*>(slot);
@@ -652,7 +701,7 @@ extern "C"
         }
         auto* slot = static_cast<cmsis1_queue_slot*>(handle->native);
         cmsis1_queue_drain(slot);
-        slot->active   = false;
+        slot->active.store(false, std::memory_order_release);
         handle->native = nullptr;
         return osal::ok();
     }
@@ -671,16 +720,42 @@ extern "C"
         {
             return osal::error_code::not_initialized;
         }
-        auto*    slot = static_cast<cmsis1_queue_slot*>(handle->native);
-        uint32_t val  = 0U;
-        std::memcpy(&val, item, slot->item_size);
-        const osStatus s = osMessagePut(slot->id, val, to_cmsis1_timeout(timeout_ticks));
-        if (s == osOK)
+        auto* slot = static_cast<cmsis1_queue_slot*>(handle->native);
+        if (item == nullptr)
         {
-            slot->count.fetch_add(1U, std::memory_order_relaxed);
-            return osal::ok();
+            return osal::error_code::invalid_argument;
         }
-        return (timeout_ticks == osal::NO_WAIT) ? osal::error_code::would_block : osal::error_code::timeout;
+        uint32_t val = 0U;
+        std::memcpy(&val, item, slot->item_size);
+        const auto start = osKernelSysTick();
+        for (;;)
+        {
+            // Reserve before publication: a woken receiver must see its count.
+            std::size_t count = slot->count.load(std::memory_order_relaxed);
+            if (count < slot->capacity &&
+                slot->count.compare_exchange_strong(count, count + 1U, std::memory_order_relaxed))
+            {
+                if (osMessagePut(slot->id, val, 0U) == osOK)
+                {
+                    return osal::ok();
+                }
+                slot->count.fetch_sub(1U, std::memory_order_relaxed);
+            }
+            if (timeout_ticks == osal::NO_WAIT)
+            {
+                return osal::error_code::would_block;
+            }
+            const auto elapsed = static_cast<std::uint32_t>(osKernelSysTick() - start);
+            if (timeout_ticks != osal::WAIT_FOREVER &&
+                static_cast<std::uint64_t>(elapsed) * 1000U / osKernelSysTickFrequency >= timeout_ticks)
+            {
+                return osal::error_code::timeout;
+            }
+            if (osDelay(1U) != osOK)
+            {
+                return osal::error_code::unknown;
+            }
+        }
     }
 
     /// @brief Send a message from ISR context (osMessagePut is ISR-safe in CMSIS-RTOS v1).
@@ -707,17 +782,17 @@ extern "C"
         {
             return osal::error_code::not_initialized;
         }
-        auto*   slot = static_cast<cmsis1_queue_slot*>(handle->native);
-        osEvent ev   = osMessageGet(slot->id, to_cmsis1_timeout(timeout_ticks));
+        auto* slot = static_cast<cmsis1_queue_slot*>(handle->native);
+        if (item == nullptr)
+        {
+            return osal::error_code::invalid_argument;
+        }
+        osEvent ev = osMessageGet(slot->id, to_cmsis1_timeout(timeout_ticks));
         if (ev.status == osEventMessage)
         {
             uint32_t val = ev.value.v;
             std::memcpy(item, &val, slot->item_size);
-            std::size_t count = slot->count.load(std::memory_order_relaxed);
-            while (count > 0U && !slot->count.compare_exchange_weak(count, count - 1U, std::memory_order_relaxed,
-                                                                    std::memory_order_relaxed))
-            {
-            }
+            slot->count.fetch_sub(1U, std::memory_order_relaxed);
             return osal::ok();
         }
         return (timeout_ticks == osal::NO_WAIT) ? osal::error_code::would_block : osal::error_code::timeout;
@@ -780,7 +855,15 @@ extern "C"
                                    osal_timer_callback_t callback, void* arg, osal::tick_t period_ticks,
                                    bool auto_reload) noexcept
     {
-        assert(handle != nullptr && callback != nullptr);
+        if (handle == nullptr || callback == nullptr || period_ticks == 0U || period_ticks == osal::WAIT_FOREVER ||
+            period_ticks > UINT32_MAX)
+        {
+            return osal::error_code::invalid_argument;
+        }
+        if (handle->native != nullptr)
+        {
+            return osal::error_code::already_exists;
+        }
         auto* slot = slot_acquire(cmsis1_timers);
         if (slot == nullptr)
         {
@@ -790,6 +873,8 @@ extern "C"
         slot->arg         = arg;
         slot->period      = period_ticks;
         slot->auto_reload = auto_reload;
+        slot->ever_started.store(false, std::memory_order_relaxed);
+        slot->active.store(false, std::memory_order_relaxed);
 
         osTimerDef_t def = {};
         def.ptimer       = cmsis1_timer_callback;
@@ -814,7 +899,15 @@ extern "C"
             return osal::ok();
         }
         auto* slot = static_cast<cmsis1_timer_slot*>(handle->native);
-        osTimerDelete(slot->id);
+        // CMSIS v1 does not specify a queued-callback reclamation barrier.
+        if (slot->ever_started.load(std::memory_order_acquire))
+        {
+            return osal::error_code::not_supported;
+        }
+        if (osTimerDelete(slot->id) != osOK)
+        {
+            return osal::error_code::unknown;
+        }
         slot->fn = nullptr;
         slot_release(cmsis1_timers, slot);
         handle->native = nullptr;
@@ -832,8 +925,14 @@ extern "C"
         {
             return osal::error_code::not_initialized;
         }
-        auto*          slot = static_cast<cmsis1_timer_slot*>(handle->native);
-        const osStatus s    = osTimerStart(slot->id, static_cast<uint32_t>(slot->period));
+        auto* slot = static_cast<cmsis1_timer_slot*>(handle->native);
+        slot->ever_started.store(true, std::memory_order_release);
+        slot->active.store(true, std::memory_order_release);
+        const osStatus s = osTimerStart(slot->id, static_cast<uint32_t>(slot->period));
+        if (s != osOK)
+        {
+            slot->active.store(false, std::memory_order_release);
+        }
         return (s == osOK) ? osal::ok() : osal::error_code::unknown;
     }
 
@@ -850,6 +949,10 @@ extern "C"
         }
         auto*          slot = static_cast<cmsis1_timer_slot*>(handle->native);
         const osStatus s    = osTimerStop(slot->id);
+        if (s == osOK)
+        {
+            slot->active.store(false, std::memory_order_release);
+        }
         return (s == osOK) ? osal::ok() : osal::error_code::unknown;
     }
 
@@ -862,7 +965,7 @@ extern "C"
         return osal_timer_start(handle);
     }
 
-    /// @brief Change the period stored in the slot; takes effect on next osTimerStart().
+    /// @brief Change a stopped timer's period; active changes are not supported.
     /// @param[in] handle            Timer handle.
     /// @param[in] new_period_ticks  New period in OSAL ticks.
     /// @retval osal::ok()                         On success.
@@ -874,19 +977,27 @@ extern "C"
         {
             return osal::error_code::not_initialized;
         }
-        auto* slot   = static_cast<cmsis1_timer_slot*>(handle->native);
+        auto* slot = static_cast<cmsis1_timer_slot*>(handle->native);
+        if (new_period_ticks == 0U || new_period_ticks == osal::WAIT_FOREVER || new_period_ticks > UINT32_MAX)
+        {
+            return osal::error_code::invalid_argument;
+        }
+        if (slot->active.load(std::memory_order_acquire))
+        {
+            return osal::error_code::not_supported;
+        }
         slot->period = new_period_ticks;
         // Will take effect on next start
         return osal::ok();
     }
 
     /// @brief Query whether a timer is currently active.
-    /// @details CMSIS-RTOS v1 has no osTimerIsRunning; always returns false.
-    /// @return Always false.
-    bool osal_timer_is_active(const osal::active_traits::timer_handle_t* /*handle*/) noexcept
+    /// @details CMSIS-RTOS v1 has no osTimerIsRunning; track start/stop and one-shot expiry.
+    /// @return The shadow active flag, or false for an invalid handle.
+    bool osal_timer_is_active(const osal::active_traits::timer_handle_t* handle) noexcept
     {
-        // CMSIS-RTOS v1 has no osTimerIsRunning; best-effort: false
-        return false;
+        return handle != nullptr && handle->native != nullptr &&
+               static_cast<const cmsis1_timer_slot*>(handle->native)->active.load(std::memory_order_acquire);
     }
 
     // ---------------------------------------------------------------------------

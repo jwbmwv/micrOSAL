@@ -71,7 +71,7 @@ public:
     delayable_work(work_queue& queue, work_func_t func, void* arg = nullptr, const char* name = "dw") noexcept
         : queue_(&queue), func_(func), arg_(arg),
           timer_{timer_thunk, this, milliseconds{1}, timer_mode::one_shot, name},
-          state_(static_cast<std::uint8_t>(state::idle)), dispatch_error_(static_cast<std::int32_t>(error_code::ok)),
+          state_(static_cast<std::uint32_t>(state::idle)), dispatch_error_(static_cast<std::int32_t>(error_code::ok)),
           dispatch_failed_(false), valid_(queue.valid() && (func != nullptr) && mtx_.valid() && timer_.valid() &&
                                           delayable_work_backend<active_backend>)
     {
@@ -125,7 +125,7 @@ public:
 
         mutex::lock_guard lock{mtx_};
         state             current = load_state();
-        if ((current == state::queued) || (current == state::running))
+        if ((current == state::queued) || (current == state::running) || (current == state::stopping))
         {
             return error_code::would_block;
         }
@@ -133,17 +133,17 @@ public:
         if (current == state::armed)
         {
             state expected = state::armed;
-            if (!compare_exchange_state(expected, state::idle))
+            if (!compare_exchange_state(expected, state::stopping))
             {
-                if ((expected == state::queued) || (expected == state::running))
-                {
-                    return error_code::would_block;
-                }
+                return error_code::would_block;
             }
-            else
+            const result stopped = timer_.stop();
+            if (!stopped.ok())
             {
-                (void)timer_.stop();
+                store_state(state::armed);
+                return stopped;
             }
+            store_state(state::idle);
         }
 
         clear_dispatch_error_locked();
@@ -171,13 +171,18 @@ public:
         }
 
         state expected = state::armed;
-        if (!compare_exchange_state(expected, state::idle))
+        if (!compare_exchange_state(expected, state::stopping))
         {
             return (expected == state::idle) ? ok() : result{error_code::would_block};
         }
 
-        clear_dispatch_error_locked();
-        return timer_.stop();
+        const result stopped = timer_.stop();
+        store_state(stopped.ok() ? state::idle : state::armed);
+        if (stopped.ok())
+        {
+            clear_dispatch_error_locked();
+        }
+        return stopped;
     }
 
     /// @brief Wait until the item becomes idle.
@@ -223,7 +228,7 @@ public:
     [[nodiscard]] bool pending() const noexcept
     {
         const state current = load_state();
-        return (current == state::armed) || (current == state::queued) || (current == state::running);
+        return current != state::idle;
     }
 
     /// @brief Report whether the callback is executing on the work queue.
@@ -233,10 +238,11 @@ public:
 private:
     enum class state : std::uint8_t
     {
-        idle    = 0U,
-        armed   = 1U,
-        queued  = 2U,
-        running = 3U,
+        idle     = 0U,
+        armed    = 1U,
+        queued   = 2U,
+        running  = 3U,
+        stopping = 4U,
     };
 
     static void timer_thunk(void* arg) noexcept
@@ -259,8 +265,20 @@ private:
 
     void on_timer() noexcept
     {
-        state expected = state::armed;
-        if (!compare_exchange_state(expected, state::queued))
+        auto expected = state_.load(std::memory_order_acquire);
+        if (decode_state(expected) != state::armed)
+        {
+            return;
+        }
+        const auto started = load_time(start_low_, start_high_);
+        const auto delay   = load_time(delay_low_, delay_high_);
+        const auto now     = static_cast<std::uint64_t>(osal_clock_monotonic_ms());
+        if (now - started < delay)
+        {
+            return;
+        }
+        if (!state_.compare_exchange_strong(expected, with_state(expected, state::queued), std::memory_order_acq_rel,
+                                            std::memory_order_acquire))
         {
             return;
         }
@@ -269,8 +287,8 @@ private:
                                                                              : queue_->submit(work_thunk, this);
         if (!r.ok())
         {
-            store_state(state::idle);
             set_dispatch_error(r.code());
+            store_state(state::idle);
         }
     }
 
@@ -290,13 +308,17 @@ private:
 
     result arm_locked(milliseconds delay) noexcept
     {
+        const auto   now        = static_cast<std::uint64_t>(osal_clock_monotonic_ms());
         const result set_period = timer_.set_period(delay);
         if (!set_period.ok())
         {
             return set_period;
         }
 
-        store_state(state::armed);
+        store_time(start_low_, start_high_, now);
+        store_time(delay_low_, delay_high_, static_cast<std::uint64_t>(delay.count()));
+        const auto generation = (state_.load(std::memory_order_relaxed) & ~kStateMask) + kGenerationStep;
+        state_.store(generation | static_cast<std::uint32_t>(state::armed), std::memory_order_release);
         const result start = timer_.start();
         if (!start.ok())
         {
@@ -315,8 +337,8 @@ private:
             return ok();
         }
 
-        store_state(state::idle);
         set_dispatch_error(r.code());
+        store_state(state::idle);
         return r;
     }
 
@@ -344,24 +366,51 @@ private:
         return result{code};
     }
 
-    [[nodiscard]] state load_state() const noexcept
-    {
-        return static_cast<state>(state_.load(std::memory_order_acquire));
-    }
+    [[nodiscard]] state load_state() const noexcept { return decode_state(state_.load(std::memory_order_acquire)); }
 
     void store_state(state value) noexcept
     {
-        state_.store(static_cast<std::uint8_t>(value), std::memory_order_release);
+        const auto current = state_.load(std::memory_order_relaxed);
+        state_.store(with_state(current, value), std::memory_order_release);
     }
 
     bool compare_exchange_state(state& expected, state desired) noexcept
     {
-        auto expected_raw = static_cast<std::uint8_t>(expected);
-        bool exchanged    = false;
-        exchanged         = state_.compare_exchange_strong(expected_raw, static_cast<std::uint8_t>(desired),
-                                                           std::memory_order_acq_rel, std::memory_order_acquire);
-        expected          = static_cast<state>(expected_raw);
+        auto expected_raw = state_.load(std::memory_order_acquire);
+        if (decode_state(expected_raw) != expected)
+        {
+            expected = decode_state(expected_raw);
+            return false;
+        }
+        const bool exchanged = state_.compare_exchange_strong(expected_raw, with_state(expected_raw, desired),
+                                                              std::memory_order_acq_rel, std::memory_order_acquire);
+        expected             = decode_state(expected_raw);
         return exchanged;
+    }
+
+    static constexpr std::uint32_t kStateMask      = 7U;
+    static constexpr std::uint32_t kGenerationStep = 8U;
+
+    static state decode_state(std::uint32_t value) noexcept { return static_cast<state>(value & kStateMask); }
+
+    static std::uint32_t with_state(std::uint32_t value, state desired) noexcept
+    {
+        return (value & ~kStateMask) | static_cast<std::uint32_t>(desired);
+    }
+
+    // Split timestamps keep timer-ISR accesses on lock-free 32-bit atomics.
+    static std::uint64_t load_time(const std::atomic<std::uint32_t>& low,
+                                   const std::atomic<std::uint32_t>& high) noexcept
+    {
+        return (static_cast<std::uint64_t>(high.load(std::memory_order_relaxed)) << 32U) |
+               low.load(std::memory_order_relaxed);
+    }
+
+    static void store_time(std::atomic<std::uint32_t>& low, std::atomic<std::uint32_t>& high,
+                           std::uint64_t value) noexcept
+    {
+        low.store(static_cast<std::uint32_t>(value), std::memory_order_relaxed);
+        high.store(static_cast<std::uint32_t>(value >> 32U), std::memory_order_relaxed);
     }
 
     [[nodiscard]] static milliseconds poll_interval() noexcept
@@ -370,15 +419,19 @@ private:
         return (tick.count() > 0) ? tick : milliseconds{1};
     }
 
-    work_queue*               queue_;
-    work_func_t               func_;
-    void*                     arg_;
-    mutable mutex             mtx_;
-    timer                     timer_;
-    std::atomic<std::uint8_t> state_;
-    std::atomic<std::int32_t> dispatch_error_;
-    std::atomic<bool>         dispatch_failed_;
-    bool                      valid_{false};
+    work_queue*                queue_;
+    work_func_t                func_;
+    void*                      arg_;
+    mutable mutex              mtx_;
+    timer                      timer_;
+    std::atomic<std::uint32_t> state_;
+    std::atomic<std::uint32_t> start_low_{0U};
+    std::atomic<std::uint32_t> start_high_{0U};
+    std::atomic<std::uint32_t> delay_low_{0U};
+    std::atomic<std::uint32_t> delay_high_{0U};
+    std::atomic<std::int32_t>  dispatch_error_;
+    std::atomic<bool>          dispatch_failed_;
+    bool                       valid_{false};
 };
 
 /// @} // osal_delayable_work

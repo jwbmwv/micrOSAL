@@ -24,8 +24,14 @@
 #include "backends.hpp"
 #include "clock.hpp"
 #include "error.hpp"
+#include "diagnostics.hpp"
 #include "types.hpp"
 #include <cstdint>
+
+namespace osal
+{
+struct mutex_config;
+}
 
 // Forward-declare backend implementation functions (defined in src/<backend>/).
 extern "C"
@@ -39,6 +45,9 @@ extern "C"
     osal::result osal_mutex_try_lock(osal::active_traits::mutex_handle_t* handle) noexcept;
 
     osal::result osal_mutex_unlock(osal::active_traits::mutex_handle_t* handle) noexcept;
+    osal::result osal_mutex_create_config(osal::active_traits::mutex_handle_t* handle,
+                                          const osal::mutex_config*            config) noexcept;
+    osal::result osal_mutex_consistent(osal::active_traits::mutex_handle_t* handle) noexcept;
 
 }  // extern "C"
 
@@ -74,9 +83,26 @@ enum class mutex_type : std::uint8_t
 ///          constexpr osal::mutex_config cfg{osal::mutex_type::recursive};
 ///          osal::mutex m{cfg};  // only handle_ + valid_ in RAM
 ///          @endcode
+enum class mutex_protocol : std::uint8_t
+{
+    native_default,
+    none,
+    priority_inheritance,
+    priority_ceiling
+};
+
+enum class mutex_robustness : std::uint8_t
+{
+    non_robust,
+    robust
+};
+
 struct mutex_config
 {
-    mutex_type type = mutex_type::normal;  ///< Mutex locking semantics.
+    mutex_type       type             = mutex_type::normal;  ///< Mutex locking semantics.
+    mutex_protocol   protocol         = mutex_protocol::native_default;
+    mutex_robustness robustness       = mutex_robustness::non_robust;
+    int              priority_ceiling = 0;  ///< Native scheduler priority; used only by priority_ceiling.
 };
 
 // ---------------------------------------------------------------------------
@@ -91,6 +117,26 @@ struct mutex_config
 class mutex
 {
 public:
+    [[nodiscard]] static constexpr bool supports_protocol(mutex_protocol protocol) noexcept
+    {
+        if (protocol == mutex_protocol::native_default)
+        {
+            return true;
+        }
+#if defined(OSAL_BACKEND_LINUX) || defined(OSAL_BACKEND_POSIX)
+        return protocol <= mutex_protocol::priority_ceiling;
+#elif defined(OSAL_BACKEND_FREERTOS) || defined(OSAL_BACKEND_ZEPHYR)
+        return protocol == mutex_protocol::priority_inheritance && active_capabilities::has_priority_inheritance;
+#else
+        return false;
+#endif
+    }
+    static constexpr bool supports_robustness =
+#if (defined(OSAL_BACKEND_LINUX) || defined(OSAL_BACKEND_POSIX)) && defined(__linux__)
+        true;
+#else
+        false;
+#endif
     // ---- construction / destruction ----------------------------------------
 
     /// @brief Constructs and initialises the mutex.
@@ -100,10 +146,7 @@ public:
     ///          state; check valid() before use in safety-critical code.
     /// @complexity O(1)
     /// @blocking   Never — initialisation uses static storage only.
-    explicit mutex(mutex_type type = mutex_type::normal) noexcept : valid_(false)
-    {
-        valid_ = osal_mutex_create(&handle_, type == mutex_type::recursive).ok();
-    }
+    explicit mutex(mutex_type type = mutex_type::normal) noexcept : mutex(mutex_config{type}) {}
 
     /// @brief Constructs from an immutable config (config may reside in FLASH).
     /// @param[in] cfg  Configuration — typically declared @c const / @c constexpr.
@@ -111,20 +154,20 @@ public:
     /// @blocking   Never.
     explicit mutex(const mutex_config& cfg) noexcept : valid_(false)
     {
-        valid_ = osal_mutex_create(&handle_, cfg.type == mutex_type::recursive).ok();
+        initialization_status_ = osal_mutex_create_config(&handle_, &cfg);
+        valid_                 = initialization_status_.ok();
+        auto& counters         = diagnostics(diagnostic_resource::mutex);
+        counters.attempt(initialization_status_);
+        if (valid_)
+        {
+            counters.acquire();
+        }
     }
 
     /// @brief Destructs and releases the mutex.
     /// @warning  Destroying a locked mutex is undefined behaviour (UB) on all backends.
     /// @complexity O(1)
-    ~mutex() noexcept
-    {
-        if (valid_)
-        {
-            (void)osal_mutex_destroy(&handle_);
-            valid_ = false;
-        }
-    }
+    ~mutex() noexcept { (void)close(); }
 
     // Disable copy and move — OS handles are non-transferable.
     mutex(const mutex&)            = delete;
@@ -136,7 +179,93 @@ public:
 
     /// @brief Returns true if the mutex was successfully initialised.
     /// @return true if the backing OS primitive is valid.
-    [[nodiscard]] bool valid() const noexcept { return valid_; }
+    [[nodiscard]] bool   valid() const noexcept { return valid_; }
+    [[nodiscard]] result initialization_status() const noexcept { return initialization_status_; }
+
+    /// Close only when unlocked and without waiters. A failed close retains ownership.
+    [[nodiscard]] result close() noexcept
+    {
+        if (!valid_)
+        {
+            return ok();
+        }
+        const result status = osal_mutex_destroy(&handle_);
+        if (status.ok())
+        {
+            valid_ = false;
+            diagnostics(diagnostic_resource::mutex).release();
+        }
+        return status;
+    }
+
+    [[nodiscard]] result checked_lock(milliseconds timeout = milliseconds{-1}) noexcept
+    {
+        if (!valid_)
+        {
+            return error_code::not_initialized;
+        }
+        if constexpr (!active_capabilities::has_timed_mutex)
+        {
+            if (timeout.count() > 0)
+            {
+                return error_code::not_supported;
+            }
+        }
+        const result status =
+            timeout.count() == 0
+                ? osal_mutex_try_lock(&handle_)
+                : osal_mutex_lock(&handle_, timeout.count() < 0 ? WAIT_FOREVER : clock_utils::ms_to_ticks(timeout));
+        auto& counters = diagnostics(diagnostic_resource::mutex);
+        counters.attempt(status);
+        if (status == error_code::timeout || status == error_code::would_block)
+        {
+            counters.contended();
+        }
+        return status;
+    }
+    [[nodiscard]] result checked_unlock() noexcept { return osal_mutex_unlock(&handle_); }
+    /// Mark repaired protected state consistent after owner_died; caller must own the robust mutex.
+    [[nodiscard]] result consistent() noexcept { return osal_mutex_consistent(&handle_); }
+
+    class checked_lock_guard
+    {
+    public:
+        explicit checked_lock_guard(mutex& m, milliseconds timeout = milliseconds{-1}) noexcept
+            : mutex_(m), status_(m.checked_lock(timeout)), owns_(status_.ok() || status_ == error_code::owner_died)
+        {
+        }
+        ~checked_lock_guard() noexcept
+        {
+            if (owns_)
+            {
+                (void)mutex_.checked_unlock();
+            }
+        }
+        checked_lock_guard(const checked_lock_guard&)            = delete;
+        checked_lock_guard& operator=(const checked_lock_guard&) = delete;
+        checked_lock_guard(checked_lock_guard&&)                 = delete;
+        checked_lock_guard&  operator=(checked_lock_guard&&)     = delete;
+        [[nodiscard]] result status() const noexcept { return status_; }
+        [[nodiscard]] bool   owns_lock() const noexcept { return owns_; }
+        [[nodiscard]] result unlock() noexcept
+        {
+            if (!owns_)
+            {
+                return error_code::not_owner;
+            }
+            const result status = mutex_.checked_unlock();
+            if (status.ok())
+            {
+                owns_ = false;
+            }
+            return status;
+        }
+
+    private:
+        mutex& mutex_;
+        result status_;
+        bool   owns_;
+    };
 
     // ---- locking -----------------------------------------------------------
 
@@ -147,14 +276,14 @@ public:
     /// @note    Not ISR-safe on any backend.
     /// @complexity O(1)
     /// @blocking   Potentially blocking.
-    void lock() noexcept { (void)osal_mutex_lock(&handle_, WAIT_FOREVER); }
+    void lock() noexcept { (void)checked_lock(); }
 
     /// @brief Attempts to acquire the mutex without blocking.
     /// @return true if the mutex was acquired; false if already locked by another thread.
     /// @note    Not ISR-safe on any backend.
     /// @complexity O(1)
     /// @blocking   Never.
-    bool try_lock() noexcept { return osal_mutex_try_lock(&handle_).ok(); }
+    bool try_lock() noexcept { return checked_lock(milliseconds{0}).ok(); }
 
     /// @brief Acquires the mutex, blocking up to @p timeout_ms milliseconds.
     /// @param[in] timeout_ms  Maximum time to wait.
@@ -214,7 +343,8 @@ public:
 
 private:
     // ---- data members (mutable runtime state only — config is consumed at init)
-    bool                          valid_;     ///< Initialisation succeeded.
+    bool                          valid_;  ///< Initialisation succeeded.
+    result                        initialization_status_{error_code::not_initialized};
     active_traits::mutex_handle_t handle_{};  ///< Opaque backend handle.
 };
 

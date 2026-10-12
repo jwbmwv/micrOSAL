@@ -3,7 +3,7 @@
 This document catalogues what is and is not tested. It is updated manually
 whenever new tests are added. Four independent test suites exist:
 
-- **Hosted/doctest suite** — 28 test binaries built with CMake, run via CTest; this includes the
+- **Hosted/doctest suite** — core primitive and bus test binaries built with CMake, run via CTest; this includes the
   three bus/pubsub executables under `tests/bus/` and is used in CI for Linux, POSIX, Bare-metal,
   RTEMS, and INTEGRITY backend validation.
 - **FreeRTOS/doctest suite** — single `tests/freertos/src/main.cpp`, built with CMake, run via
@@ -17,7 +17,94 @@ whenever new tests are added. Four independent test suites exist:
 
 ---
 
+## Correctness conformance additions
+
+- Linux/POSIX backend conformance and shared-emulation concurrency regressions
+  exercise the hardened synchronization, timeout, and buffer contracts.
+- Portable adapter tests check exact byte copies with guard bytes, bounded
+  queue capacity, non-destructive unsupported peek, and persistent event bits.
+- Linux delayed-work fault injection exercises failed timer stop, rejected stale
+  expiry, dispatch-error consumption, failed pub/sub backing queues, and receiver
+  slot retention through both C++ and C helper surfaces.
+- The first README C++ example is extracted and compiled by the Linux/POSIX
+  build, then executed as a test.
+- An installed-package consumer independently configures, builds, and executes
+  both canonical `MicrOSAL::OSAL` and legacy `MicrOSAL::microsal` targets.
+- Wait-set tests own pipes rather than assuming stdin is epoll-compatible.
+
+Conformance and concurrency tests are regression evidence. Neither host threads
+nor injected callbacks establish real ISR, SMP, or hardware timing behavior.
+The current runner output is authoritative for case/binary counts; historical
+counts below describe previously recorded runs.
+
+### FreeRTOS simulation root cause and regression
+
+The pool-churn regression exposed a critical-section nesting underflow and
+unsafe native task-storage reuse; both are fixed without removing competing
+tasks. A separate V11.1.0 GCC/POSIX cancellation race abandoned the event mutex
+when a cancelled condition waiter reacquired it. The Linux simulator target
+now installs standard POSIX cancellation cleanup through linker wrappers, with
+success, timeout, invalid-argument and cancellation behavior verified.
+
+Static and dynamic allocations each passed 30 focused stress repetitions and
+10 full-suite repetitions with the hook enabled (57 cases / 1295 assertions per
+full suite); freshly configured default targets also passed 10 full suites each.
+With the seven portable-feature cases added, both allocation modes pass
+**64 cases / 1378 assertions** and another 10 full-suite repetitions each.
+This is repeatability evidence for the hosted simulator, not board/ISR timing
+sign-off. The case remains enabled. Other V11.1.0 POSIX integrations need the
+same cleanup or an upstream kernel fix.
+
+Reproduce using an independently configured FreeRTOS build:
+
+```bash
+ctest --test-dir build-freertos --output-on-failure --repeat until-fail:10
+timeout 8s build-freertos/test_freertos --test-case='*pools*'
+```
+
 ## Backend under test
+
+### Portable extension verification (0.1.0)
+
+New registered binaries cover owned-loan identity/no-copy fanout and release,
+typed registry dispatch/unregister/cycle handling, bounded stop callbacks,
+lost-wakeup/cancellation races, native semaphore wake fault injection, checked
+initialization/close failures and ownership retention, mutex inheritance and
+robust recovery, and actual diagnostics. Lifecycle fault injection wraps
+creation/destruction rather than inferring error preservation from `valid()`.
+
+The current integration runs pass Linux **40/40**, POSIX **39/39**, and Linux
+ASan/UBSan/alignment **40/40** CTest binaries. Zephyr `native_sim/native/64`
+at 100 Hz passes **119** cases, including inactive period
+updates and one-shot preservation. Installed package validation checks that the
+`0.1.0` package rejects the changed `0.0` ABI. These portable/hosted results do
+not certify unprovisioned native SDKs, real ISR notification, SMP reclamation or
+hardware real-time behavior.
+
+Hosted bare-metal, RTEMS and INTEGRITY each pass **34/34** binaries. Bare-metal
+explicitly rejects event-driven native waiting: its timed semaphore operation
+spins rather than providing a native blocking wake. Cancellation and polling
+remain available. Native SDK-independent header policy checks cover all 17
+backend selectors; they do not compile the corresponding native adapter sources.
+
+Both native simulators now execute the shared checks in
+[`portable_feature_checks.hpp`](../tests/portable_feature_checks.hpp), registered
+through their own doctest/ztest translation units. Seven cases per simulator
+verify immovable-payload loan fanout and identical addresses, exact pool
+occupancy/exhaustion/release statistics, typed routing and stale IDs, checked
+stop/callback lifecycle, cross-task readiness/cancellation wakeups, multi-object
+readiness IDs without consuming data, inheritance policy, checked guards and
+resource counters. Thread checks also exercise invalid native stacks and
+duplicate creation without losing ownership.
+
+The hosted core strict clang-tidy slice and native test analysis pass. Zephyr
+analysis uses an analysis-only compile database mapping GCC
+`-fno-freestanding` to Clang `-fhosted` and omitting GCC's
+`-fno-reorder-functions`; SDK/build compilation is unchanged. The Zephyr
+backend still has existing style/header-cycle warnings, not new errors from
+these checks. The nRF Connect extension cannot resolve this build's toolchain
+metadata, so native-simulator validation uses its configured SDK/toolchain
+environment directly.
 
 Nine build targets are covered by automated builds or runtime suites:
 
