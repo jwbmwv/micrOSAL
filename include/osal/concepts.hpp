@@ -180,7 +180,7 @@ concept wait_set_backend = backend_descriptor<Backend> && capabilities<Backend>:
 /// @brief Backend can safely hand timer expiry to work_queue submission.
 template<typename Backend>
 concept delayable_work_backend =
-    backend_descriptor<Backend> && capabilities<Backend>::has_timer &&
+    backend_descriptor<Backend> && !std::same_as<Backend, backend_cmsis_rtos2> && capabilities<Backend>::has_timer &&
     (!capabilities<Backend>::timer_callbacks_may_run_in_isr || capabilities<Backend>::has_isr_work_queue_submit);
 
 /// @brief Queue/mailbox element type accepted by the backend C ABI.

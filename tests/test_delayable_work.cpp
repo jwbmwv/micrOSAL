@@ -8,6 +8,7 @@
 #include <atomic>
 
 static_assert(osal::delayable_work::is_supported == osal::delayable_work_backend<osal::active_backend>);
+static_assert(!osal::delayable_work_backend<osal::backend_cmsis_rtos2>);
 
 alignas(16) static std::uint8_t dw_stack[65536];
 

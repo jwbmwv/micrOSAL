@@ -213,11 +213,7 @@ void c_delayable_work_work_cb(void* arg) noexcept;
 /// @return `true` when timer expiry can always hand work into the queue safely.
 [[nodiscard]] bool delayable_backend_supported() noexcept
 {
-    if constexpr (osal::active_capabilities::timer_callbacks_may_run_in_isr)
-    {
-        return osal::active_capabilities::has_isr_work_queue_submit;
-    }
-    return true;
+    return osal::delayable_work_backend<osal::active_backend>;
 }
 
 /// @brief Load the composite delayable-work state atomically.
