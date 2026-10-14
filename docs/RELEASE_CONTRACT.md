@@ -147,7 +147,9 @@ API reference; this does not enable them in a C++20 build.
 - Delayed-work cancellation and rescheduling propagate timer-stop failures and
   retain the arm on failure. An expiry from a previous arm cannot consume a
   replacement before its deadline. Dispatch errors are published before idle,
-  so a completed `flush()` observes the failure.
+  so a completed `flush()` observes the failure. The C helper checks deadlines
+  in native OSAL ticks, preserving sub-millisecond delays and tick-counter
+  wraparound without rounding its expiry guard to milliseconds.
 - Pub/sub subscription fails when backing resources did not initialize.
   Unsubscribe returns `false` while a blocking receive holds that slot;
   callers must let receivers finish before releasing the subscription.

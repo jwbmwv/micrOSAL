@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
+#include "detail/atomic_compat.hpp"
 #include "error.hpp"
 #include <array>
-#include <atomic>
 #include <cstddef>
 #include <cstdint>
 

@@ -320,15 +320,14 @@ osal_result_t delayable_enqueue_locked(osal_delayable_work_handle* handle) noexc
 /// @return Result of the timer period/start operations.
 osal_result_t delayable_arm_locked(osal_delayable_work_handle* handle, osal_tick_t delay_ticks) noexcept
 {
-    const auto          started = static_cast<std::uint64_t>(osal_clock_monotonic_ms());
+    const auto          started = static_cast<std::uint64_t>(osal_clock_ticks());
     const osal_result_t set_rc  = osal_c_timer_set_period(&handle->timer, delay_ticks);
     if (set_rc != OSAL_OK)
     {
         return set_rc;
     }
 
-    const auto duration = osal::clock_utils::ticks_to_ms(static_cast<osal::tick_t>(delay_ticks));
-    const auto delay    = static_cast<std::uint64_t>((duration.count() > 0) ? duration.count() : 1);
+    const auto delay = static_cast<std::uint64_t>(delay_ticks);
     __atomic_store_n(&handle->start_low, static_cast<std::uint32_t>(started), __ATOMIC_RELAXED);
     __atomic_store_n(&handle->start_high, static_cast<std::uint32_t>(started >> 32U), __ATOMIC_RELAXED);
     __atomic_store_n(&handle->delay_low, static_cast<std::uint32_t>(delay), __ATOMIC_RELAXED);
@@ -406,8 +405,8 @@ void c_delayable_work_timer_cb(void* arg) noexcept
                          __atomic_load_n(&handle->start_low, __ATOMIC_RELAXED);
     const auto delay = (static_cast<std::uint64_t>(__atomic_load_n(&handle->delay_high, __ATOMIC_RELAXED)) << 32U) |
                        __atomic_load_n(&handle->delay_low, __ATOMIC_RELAXED);
-    const auto now = static_cast<std::uint64_t>(osal_clock_monotonic_ms());
-    if (now - started < delay)
+    const auto elapsed = static_cast<osal::tick_t>(osal_clock_ticks() - static_cast<osal::tick_t>(started));
+    if (static_cast<std::uint64_t>(elapsed) < delay)
     {
         return;
     }

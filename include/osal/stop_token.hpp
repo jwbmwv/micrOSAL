@@ -2,9 +2,9 @@
 #pragma once
 
 #include "condvar.hpp"
+#include "detail/atomic_compat.hpp"
 #include "error.hpp"
 #include "thread.hpp"
-#include <atomic>
 #include <cstddef>
 #include <cstdint>
 

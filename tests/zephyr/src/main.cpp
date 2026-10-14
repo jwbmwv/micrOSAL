@@ -1443,7 +1443,8 @@ ZTEST(osal_c_api, test_delayable_work_round_trip)
     zassert_equal(osal_c_delayable_work_create(&work, &wq, zephyr_c_delayable_cb, &g_z_c_delayable_count, "z_c_dw"),
                   OSAL_OK, NULL);
     zassert_equal(osal_c_delayable_work_schedule(&work, 10U), OSAL_OK, NULL);
-    zassert_equal(osal_c_delayable_work_flush(&work, OSAL_WAIT_FOREVER), OSAL_OK, NULL);
+    zassert_equal(osal_c_delayable_work_flush(&work, osal::clock_utils::ms_to_ticks(osal::milliseconds{1000})), OSAL_OK,
+                  NULL);
     zassert_equal(g_z_c_delayable_count, 1, NULL);
     zassert_equal(osal_c_delayable_work_destroy(&work), OSAL_OK, NULL);
     osal_c_work_queue_destroy(&wq);

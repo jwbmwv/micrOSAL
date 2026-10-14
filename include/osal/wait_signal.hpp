@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
+#include "detail/atomic_compat.hpp"
 #include "diagnostics.hpp"
 #include "semaphore.hpp"
 #include "stop_token.hpp"
-#include <atomic>
 #include <type_traits>
 
 namespace osal

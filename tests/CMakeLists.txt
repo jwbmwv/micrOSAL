@@ -89,6 +89,8 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Cla
         osal_add_test(test_delayable_work_faults test_delayable_work_faults.cpp)
         target_link_options(test_delayable_work_faults PRIVATE
             "LINKER:--wrap=osal_clock_monotonic_ms"
+            "LINKER:--wrap=osal_clock_ticks"
+            "LINKER:--wrap=osal_clock_tick_period_us"
             "LINKER:--wrap=osal_queue_create"
             "LINKER:--wrap=osal_queue_receive"
             "LINKER:--wrap=osal_timer_create"

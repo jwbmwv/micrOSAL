@@ -6,11 +6,14 @@
 #include <osal/osal_c.h>
 
 #include <atomic>
+#include <limits>
 #include <thread>
 
 namespace
 {
 std::atomic<std::int64_t>            now_ms{0};
+std::atomic<osal::tick_t>            now_ticks{0};
+std::atomic<std::uint32_t>           tick_period_us{1000U};
 std::atomic<bool>                    clock_stub{false};
 bool                                 fail_create    = false;
 bool                                 fail_stop      = false;
@@ -28,6 +31,20 @@ extern "C" std::int64_t osal_test_wrap_clock_monotonic_ms() noexcept asm("__wrap
 extern "C" std::int64_t osal_test_wrap_clock_monotonic_ms() noexcept
 {
     return clock_stub.load() ? now_ms.load() : osal_test_real_clock_monotonic_ms();
+}
+
+extern "C" osal::tick_t osal_test_real_clock_ticks() noexcept asm("__real_osal_clock_ticks");
+extern "C" osal::tick_t osal_test_wrap_clock_ticks() noexcept asm("__wrap_osal_clock_ticks");
+extern "C" osal::tick_t osal_test_wrap_clock_ticks() noexcept
+{
+    return clock_stub.load() ? now_ticks.load() : osal_test_real_clock_ticks();
+}
+
+extern "C" std::uint32_t osal_test_real_clock_tick_period_us() noexcept asm("__real_osal_clock_tick_period_us");
+extern "C" std::uint32_t osal_test_wrap_clock_tick_period_us() noexcept asm("__wrap_osal_clock_tick_period_us");
+extern "C" std::uint32_t osal_test_wrap_clock_tick_period_us() noexcept
+{
+    return clock_stub.load() ? tick_period_us.load() : osal_test_real_clock_tick_period_us();
 }
 
 extern "C" osal::result osal_test_real_queue_create(osal::active_traits::queue_handle_t*, void*, std::size_t,
@@ -198,6 +215,7 @@ TEST_CASE("C delayable work: stop failures and old expiries cannot consume a rep
               &work, &queue, +[](void* arg) { static_cast<std::atomic<unsigned>*>(arg)->fetch_add(1U); }, &calls,
               "faults") == OSAL_OK);
     now_ms.store(1000);
+    now_ticks.store(1000U);
     clock_stub.store(true);
     CHECK(osal_c_delayable_work_schedule(&work, 100U) == OSAL_OK);
     fail_stop = true;
@@ -207,16 +225,54 @@ TEST_CASE("C delayable work: stop failures and old expiries cannot consume a rep
     fail_stop = false;
     CHECK(osal_c_delayable_work_reschedule(&work, 200U) == OSAL_OK);
     now_ms.store(1100);
+    now_ticks.store(1100U);
     saved_callback(saved_argument);
     CHECK(osal_c_delayable_work_scheduled(&work) != 0);
     CHECK(calls.load() == 0U);
     now_ms.store(1200);
+    now_ticks.store(1200U);
     fail_submit = true;
     saved_callback(saved_argument);
     fail_submit = false;
     CHECK(osal_c_delayable_work_flush(&work, 0U) == OSAL_OVERFLOW);
     CHECK(osal_c_delayable_work_flush(&work, 0U) == OSAL_OK);
     clock_stub.store(false);
+    CHECK(osal_c_delayable_work_destroy(&work) == OSAL_OK);
+    CHECK(osal_c_work_queue_destroy(&queue) == OSAL_OK);
+}
+
+TEST_CASE("C delayable work: tick deadlines preserve sub-millisecond delays and wraparound")
+{
+    osal::tick_t started = 10U;
+    SUBCASE("sub-millisecond delay") {}
+    SUBCASE("tick counter wraps")
+    {
+        started = std::numeric_limits<osal::tick_t>::max() - 1U;
+    }
+
+    osal_work_queue_handle queue{};
+    REQUIRE(osal_c_work_queue_create(&queue, nullptr, 0U, 4U, "tick_deadline") == OSAL_OK);
+    osal_delayable_work_handle work{};
+    std::atomic<unsigned>      calls{0U};
+    REQUIRE(osal_c_delayable_work_create(
+                &work, &queue, +[](void* arg) { static_cast<std::atomic<unsigned>*>(arg)->fetch_add(1U); }, &calls,
+                "tick_deadline") == OSAL_OK);
+    now_ms.store(0);
+    now_ticks.store(started);
+    tick_period_us.store(100U);
+    clock_stub.store(true);
+    CHECK(osal_c_delayable_work_schedule(&work, 3U) == OSAL_OK);
+    now_ticks.store(static_cast<osal::tick_t>(started + 2U));
+    saved_callback(saved_argument);
+    CHECK(osal_c_delayable_work_scheduled(&work) != 0);
+    CHECK(calls.load() == 0U);
+    now_ticks.store(static_cast<osal::tick_t>(started + 3U));
+    saved_callback(saved_argument);
+    CHECK(osal_c_work_queue_flush(&queue, OSAL_WAIT_FOREVER) == OSAL_OK);
+    CHECK(osal_c_delayable_work_flush(&work, OSAL_NO_WAIT) == OSAL_OK);
+    CHECK(calls.load() == 1U);
+    clock_stub.store(false);
+    tick_period_us.store(1000U);
     CHECK(osal_c_delayable_work_destroy(&work) == OSAL_OK);
     CHECK(osal_c_work_queue_destroy(&queue) == OSAL_OK);
 }

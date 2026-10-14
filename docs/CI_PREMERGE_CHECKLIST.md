@@ -83,6 +83,10 @@ ctest --test-dir build-freertos --output-on-failure
 ### NuttX
 
 - [ ] NuttX sim validation rerun when NuttX path changed.
+- [ ] Public headers using atomics include `osal/detail/atomic_compat.hpp`
+      rather than `<atomic>` directly, including when included before `osal.hpp`.
+- [ ] The test app links the shared C bridge as well as the NuttX backend;
+      C++ mutex configuration also depends on the shared bridge.
 
 ## 4) Off-Rails Checks (must stay true)
 
