@@ -222,14 +222,16 @@ public:
             *link = next_;
             --source_->count_;
         }
-        while (executing_)
+        while (executing_.load(std::memory_order_acquire))
         {
             if (timeout.count() >= 0 && deadline.expired())
             {
                 const result unlocked = source_->unlock();
                 return unlocked.ok() ? result{error_code::timeout} : unlocked;
             }
-            const tick_t ticks  = timeout.count() < 0 ? WAIT_FOREVER : clock_utils::ms_to_ticks(deadline.remaining());
+            tick_t       ticks = timeout.count() < 0 ? WAIT_FOREVER : clock_utils::ms_to_ticks(deadline.remaining());
+            const tick_t poll_ticks = clock_utils::ms_to_ticks(milliseconds{10});
+            ticks                   = ticks == WAIT_FOREVER || ticks > poll_ticks ? poll_ticks : ticks;
             const result waited = osal_condvar_wait(&source_->completion_, source_->metadata_.native_handle(), ticks);
             if (!waited.ok() && waited != error_code::timeout && waited != error_code::would_block)
             {
@@ -257,12 +259,12 @@ public:
 
 private:
     friend class stop_source;
-    stop_source*   source_;
-    callback_type  callback_;
-    void*          argument_;
-    stop_callback* next_      = nullptr;
-    bool           executing_ = false;
-    result         status_;
+    stop_source*      source_;
+    callback_type     callback_;
+    void*             argument_;
+    stop_callback*    next_ = nullptr;
+    std::atomic<bool> executing_{false};
+    result            status_;
 };
 
 inline result stop_source::request_stop(bool& first_request) noexcept
@@ -287,7 +289,7 @@ inline result stop_source::request_stop(bool& first_request) noexcept
         auto* callback = head_;
         head_          = callback->next_;
         --count_;
-        callback->executing_  = true;
+        callback->executing_.store(true, std::memory_order_release);
         const result unlocked = unlock();
         if (!unlocked.ok())
         {
@@ -297,9 +299,11 @@ inline result stop_source::request_stop(bool& first_request) noexcept
         locked = lock();
         if (!locked.ok())
         {
+            callback->executing_.store(false, std::memory_order_release);
+            (void)record(osal_condvar_notify_all(&completion_));
             return locked;
         }
-        callback->executing_ = false;
+        callback->executing_.store(false, std::memory_order_release);
         // Wake while holding metadata; unregister re-acquires it before returning.
         const result notified = record(osal_condvar_notify_all(&completion_));
         if (!notified.ok())

@@ -72,12 +72,16 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Cla
         "LINKER:--wrap=osal_work_queue_destroy"
         "LINKER:--wrap=osal_queue_create")
     target_compile_definitions(test_cancellation_wait PRIVATE
-        OSAL_TEST_WAIT_SIGNAL_FAULTS OSAL_TEST_WAIT_SIGNAL_DESTROY_FAULTS)
+        OSAL_TEST_WAIT_SIGNAL_FAULTS OSAL_TEST_WAIT_SIGNAL_DESTROY_FAULTS OSAL_TEST_STOP_SOURCE_FAULTS)
     target_link_options(test_cancellation_wait PRIVATE
         "LINKER:--wrap=osal_semaphore_create"
         "LINKER:--wrap=osal_semaphore_take"
         "LINKER:--wrap=osal_semaphore_give"
-        "LINKER:--wrap=osal_semaphore_destroy")
+        "LINKER:--wrap=osal_semaphore_destroy"
+        "LINKER:--wrap=osal_mutex_create_config"
+        "LINKER:--wrap=osal_condvar_create"
+        "LINKER:--wrap=osal_mutex_lock"
+        "LINKER:--wrap=osal_condvar_notify_all")
     target_compile_definitions(test_queue PRIVATE OSAL_TEST_QUEUE_FAULT_INJECTION)
     target_link_options(test_queue PRIVATE
         "LINKER:--wrap=osal_queue_create"

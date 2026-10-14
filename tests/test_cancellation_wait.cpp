@@ -394,6 +394,46 @@ TEST_CASE("stop: initialization and synchronization failures are explicit")
         CHECK(callback.close().ok());
     }
 }
+
+TEST_CASE("stop: failed source-lock reacquisition completes unregister handoff")
+{
+    osal::stop_source source;
+    REQUIRE(source.valid());
+    struct context
+    {
+        std::atomic<bool> entered{false};
+        std::atomic<bool> resume{false};
+    } ctx;
+    alignas(osal::stop_callback) std::array<std::byte, sizeof(osal::stop_callback)> storage{};
+    auto* callback = new (storage.data()) osal::stop_callback{source.get_token(),
+                                                              [](void* p) noexcept
+                                                              {
+                                                                  auto& state = *static_cast<context*>(p);
+                                                                  state.entered.store(true);
+                                                                  while (!state.resume.load())
+                                                                  {
+                                                                      std::this_thread::yield();
+                                                                  }
+                                                                  fail_source_lock.store(true);
+                                                              },
+                                                              &ctx};
+    REQUIRE(callback->status().ok());
+    std::thread requester{[&] { (void)source.request_stop(); }};
+    while (!ctx.entered.load())
+    {
+        std::this_thread::yield();
+    }
+    osal::result close_result{osal::error_code::unknown};
+    std::thread  unregister{[&] { close_result = callback->close(); }};
+    std::this_thread::sleep_for(10ms);
+    ctx.resume.store(true);
+    requester.join();
+    fail_source_lock.store(false);
+    unregister.join();
+    CHECK(close_result.ok());
+    CHECK(source.status() == osal::error_code::permission_denied);
+    callback->~stop_callback();
+}
 #endif
 
 TEST_CASE("stop: registration racing request invokes callback exactly once")
