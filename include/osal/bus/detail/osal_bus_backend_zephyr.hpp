@@ -39,7 +39,7 @@ namespace zephyr_bus_detail
     {
         return K_NO_WAIT;
     }
-    return K_MSEC(static_cast<int64_t>(timeout_ticks));
+    return K_TICKS(static_cast<int64_t>(timeout_ticks));
 }
 
 }  // namespace zephyr_bus_detail

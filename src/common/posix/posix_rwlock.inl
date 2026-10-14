@@ -11,8 +11,8 @@
 ///          // POSIX (CLOCK_REALTIME — mandated by pthread_rwlock_timedrdlock):
 ///          #define OSAL_POSIX_RW_ABS(t)  ms_to_abs_timespec_realtime(t)
 ///
-///          // Linux / NuttX / QNX (CLOCK_MONOTONIC):
-///          #define OSAL_POSIX_RW_ABS(t)  ms_to_abs_timespec(t)   // or ms_to_abs_mono(t)
+///          // Deadlines must match the native timed-lock clock.
+///          // Standard pthread_rwlock_timed*lock uses CLOCK_REALTIME.
 ///          @endcode
 ///
 ///          Prerequisites: <pthread.h> included, extern "C" scope active,

@@ -111,6 +111,10 @@ extern "C"
         OSAL_DEADLOCK_DETECTED = 11,
         OSAL_NOT_OWNER         = 12,
         OSAL_ISR_INVALID       = 13,
+        OSAL_BARRIER_SERIAL    = 14,
+        OSAL_OWNER_DIED        = 15,
+        OSAL_NOT_RECOVERABLE   = 16,
+        OSAL_CANCELLED         = 17,
         OSAL_UNKNOWN           = 255
     };
 
@@ -213,6 +217,48 @@ typedef uint32_t osal_tick_t;
     {
         int recursive; /**< Non-zero for recursive mutex. */
     } osal_mutex_config;
+
+    typedef enum
+    {
+        OSAL_MUTEX_NATIVE_DEFAULT       = 0,
+        OSAL_MUTEX_PROTOCOL_NONE        = 1,
+        OSAL_MUTEX_PRIORITY_INHERITANCE = 2,
+        OSAL_MUTEX_PRIORITY_CEILING     = 3
+    } osal_mutex_protocol;
+
+    typedef enum
+    {
+        OSAL_MUTEX_NON_ROBUST = 0,
+        OSAL_MUTEX_ROBUST     = 1
+    } osal_mutex_robustness;
+
+    /** Separate descriptor preserves the legacy osal_mutex_config layout. */
+    typedef struct
+    {
+        int                   recursive;
+        osal_mutex_protocol   protocol;
+        osal_mutex_robustness robustness;
+        int                   priority_ceiling;
+    } osal_mutex_policy_config;
+
+    typedef enum
+    {
+        OSAL_DIAGNOSTIC_MUTEX = 0,
+        OSAL_DIAGNOSTIC_SEMAPHORE,
+        OSAL_DIAGNOSTIC_QUEUE,
+        OSAL_DIAGNOSTIC_THREAD,
+        OSAL_DIAGNOSTIC_TIMER,
+        OSAL_DIAGNOSTIC_WORK_QUEUE,
+        OSAL_DIAGNOSTIC_EMULATED_MEMORY_POOL,
+        OSAL_DIAGNOSTIC_EMULATED_WORK_QUEUE
+    } osal_diagnostic_resource;
+
+    typedef struct
+    {
+        uint32_t capacity, in_use, high_water;
+        uint32_t attempts, successes, failures;
+        uint32_t contention, drops, backlog;
+    } osal_diagnostic_snapshot;
 
     /** @brief Semaphore creation config. */
     typedef struct
@@ -398,7 +444,11 @@ typedef uint32_t osal_tick_t;
         osal_c_work_func_t      func;
         void*                   arg;
         osal_result_t           dispatch_error;
-        uint8_t                 state;
+        uint32_t                state;
+        uint32_t                start_low;
+        uint32_t                start_high;
+        uint32_t                delay_low;
+        uint32_t                delay_high;
         uint8_t                 dispatch_failed;
         uint8_t                 valid;
     } osal_delayable_work_handle;
@@ -567,7 +617,10 @@ typedef uint32_t osal_tick_t;
     /* ======================================================================== */
 
     osal_result_t osal_c_mutex_create(osal_mutex_handle* handle, int recursive);
+    osal_result_t osal_c_diagnostics_read(osal_diagnostic_resource resource, osal_diagnostic_snapshot* snapshot);
     osal_result_t osal_c_mutex_create_with_cfg(osal_mutex_handle* handle, const osal_mutex_config* cfg);
+    osal_result_t osal_c_mutex_create_with_policy(osal_mutex_handle* handle, const osal_mutex_policy_config* cfg);
+    osal_result_t osal_c_mutex_consistent(osal_mutex_handle* handle);
     osal_result_t osal_c_mutex_destroy(osal_mutex_handle* handle);
     osal_result_t osal_c_mutex_lock(osal_mutex_handle* handle, osal_tick_t timeout);
     osal_result_t osal_c_mutex_try_lock(osal_mutex_handle* handle);

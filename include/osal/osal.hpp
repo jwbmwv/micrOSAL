@@ -62,6 +62,7 @@
 
 // Core types and error codes (no backend dependency).
 #include "error.hpp"
+#include "diagnostics.hpp"
 #include "types.hpp"
 #include "concepts.hpp"
 #include "capabilities.hpp"
@@ -72,6 +73,8 @@
 #include "clock.hpp"
 #include "mutex.hpp"
 #include "semaphore.hpp"
+#include "stop_token.hpp"
+#include "wait_signal.hpp"
 #include "thread.hpp"
 #include "queue.hpp"
 #include "mailbox.hpp"

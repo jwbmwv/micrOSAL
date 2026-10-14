@@ -14,7 +14,7 @@ seventeen backends:
 | `PX5` | PX5 RTOS (ThreadX superset) | `src/px5/px5_backend.cpp` |
 | `POSIX` | Any POSIX:2008 system | `src/posix/posix_backend.cpp` |
 | `LINUX` | Linux ≥ 4.11 (extends POSIX) | `src/linux/linux_backend.cpp` |
-| `BAREMETAL` | No OS — cooperative, single-core | `src/bare_metal/bare_metal_backend.cpp` |
+| `BAREMETAL` | No OS — single-context primitives; hosted test-only cooperative threads | `src/bare_metal/bare_metal_backend.cpp` |
 | `VXWORKS` | VxWorks 7 (Wind River) | `src/vxworks/vxworks_backend.cpp` |
 | `NUTTX` | Apache NuttX ≥ 12 | `src/nuttx/nuttx_backend.cpp` |
 | `MICRIUM` | Micrium µC/OS-III | `src/micrium/micrium_backend.cpp` |
@@ -288,9 +288,9 @@ Key flags and which backends support them:
 | `has_cpu_load_stats` | cfg§ | ✓ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✓ | ✗ | ✗ | ✗ | ✗ | ✗ |
 | `has_wait_set` | ✗ | ✗ | ✗ | ✓ | ✓ | ✓ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✓ | ✓ | ✗ | ✗ |
 | `has_native_event_flags` | ✓ | ✓ | ✓ | ✓ | ✗ | ✗ | ✗ | ✗ | ✗ | ✓ | ✓ | ✓ | ✗ | ✗ | ✗ | ✗ | ✓ |
-| `has_native_work_queue` | ✗ | ✓ | ✗ | ✗ | ✗ | ✗ | ✗ | ✓ | ✓ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ |
+| `has_native_work_queue` | ✗ | ✓ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✓ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ |
 | `has_native_condvar` | ✗ | ✓ | ✗ | ✗ | ✓ | ✓ | ✗ | ✓ | ✓ | ✗ | ✓ | ✗ | ✓ | ✓ | ✓ | ✗ | ✗ |
-| `has_native_memory_pool` | ✗ | ✗ | ✓ | ✓ | ✗ | ✗ | ✗ | ✓ | ✗ | ✓ | ✓ | ✓ | ✗ | ✗ | ✗ | ✓ | ✓ |
+| `has_native_memory_pool` | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✓ | ✓ |
 | `has_native_stream_buffer` | ✓ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ |
 | `has_isr_stream_buffer` | ✓ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ |
 | `has_native_message_buffer` | ✓ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ |
@@ -401,9 +401,9 @@ thread executes them in FIFO order.
 
 | Strategy | Backends | Implementation |
 | --- | --- | --- |
-| Native | Zephyr, NuttX, VxWorks | `k_work_queue`, `work_queue()`, `jobQueueLib` |
+| Native | Zephyr, NuttX | `k_work_queue`, `work_queue()` |
 | Emulated (pthread) | POSIX, Linux, RTEMS, INTEGRITY | `posix_pthread_work_queue.inl` — dedicated pthread + ring buffer + `pthread_cond_t` |
-| Emulated (OSAL) | All other 10 backends | `emulated_work_queue.inl` — worker thread + ring buffer + `osal::condvar` |
+| Emulated (OSAL) | Remaining backends, including VxWorks | `emulated_work_queue.inl` — worker thread + ring buffer + `osal::condvar`; production bare-metal worker creation unsupported |
 
 Compile-time detection:
 
@@ -512,8 +512,8 @@ storage buffer.
 
 | Strategy | Backends | Implementation |
 | --- | --- | --- |
-| Native | ThreadX, PX5, VxWorks, Micrium, ChibiOS, embOS, CMSIS-RTOS, CMSIS-RTOS2 | `tx_block_pool`, `memPartLib`, `OSMemCreate`, `chPoolInit`, `OS_MEMPOOL`, `osPool`, `osMemoryPool` |
-| Emulated | FreeRTOS, Zephyr, POSIX, Linux, NuttX, QNX, RTEMS, INTEGRITY, Bare-metal | Bitmap + OSAL mutex + counting semaphore |
+| Native | CMSIS-RTOS, CMSIS-RTOS2 | `osPool`, `osMemoryPool` |
+| Emulated | FreeRTOS, Zephyr, ThreadX, PX5, VxWorks, Micrium, ChibiOS, embOS, POSIX, Linux, NuttX, QNX, RTEMS, INTEGRITY, Bare-metal | Bitmap + OSAL mutex + counting semaphore |
 
 Compile-time detection:
 
@@ -1065,3 +1065,159 @@ does not currently expose a non-destructive semaphore count/availability query.
 
 This is intentionally a conservative, portable complement to native wait-set
 backends, not a replacement for OS-level descriptor waiting.
+
+## Cooperative Cancellation
+
+`osal::stop_source` is a noncopyable, caller-owned cancellation state with
+borrowed `osal::stop_token` values. `request_stop()` sets a sticky stop request
+and returns `true` only for the first request. It never terminates or deletes a
+thread: worker code must observe its token, unwind its own resources, and return.
+Registrations remain bounded, caller-owned and allocation-free. The source owns
+an existing OSAL mutex and condition variable: static-pool backends remain
+allocation-free; hosted backend primitives may use their existing control
+allocations. There is no shared ownership, RTTI, virtual dispatch, or new
+backend ABI surface in these helpers. Check `initialization_status()` (or
+`status()`/`valid()`) before publishing a source or its token: mutex/condition
+variable creation failures are preserved, not treated as absent cancellation.
+
+The source **must outlive every token, callback and concurrent operation**.
+Destroying a source does not request stop or wait for threads. Token copies
+do not extend its lifetime. An empty token explicitly means no cancellation;
+it is not an invalid-source fallback.
+
+`osal::stop_callback(token, function, argument)` installs a nonmovable,
+caller-owned callback with signature `void(void*) noexcept`. Check `status()`:
+a null function reports `invalid_argument`; exceeding the source's
+`OSAL_STOP_SOURCE_MAX_CALLBACKS` (default 16) reports `overflow`. An empty
+token succeeds without registering. Registration after stop runs the callback
+synchronously before returning.
+
+Request, register and unregister serialize on an existing OSAL mutex. Where the
+backend accepts an explicit priority-inheritance protocol, the source requests
+it; otherwise it uses the backend's native default. Contended acquisition blocks
+the task on native OS kernels rather than spinning or relying on yield to
+let a lower-priority holder run. Bare-metal retains its existing cooperative
+mutex/condition-variable emulation; it does not provide preemptive
+fixed-priority thread scheduling or native event-driven waiting. Callbacks
+run outside it, synchronously on the requester (or late-registering thread).
+Unregister removes the callback and, if execution is in flight, waits on the
+source's condition variable. That wait atomically releases the source mutex
+while blocked and re-acquires it to check completion, preventing callback
+argument use-after-free without monopolizing a single-core fixed-priority CPU.
+Completion state, list links and registration counts are all mutex-protected.
+Only the sticky stop flag and sticky primitive-error status use atomic loads.
+Callbacks must be short and nonblocking: do not destroy an executing callback
+(including itself), wait for the requester, or form cycles of callback
+completion dependencies. Concurrent repeat requests may return before the
+first request finishes its callbacks; join/synchronize all source users before
+destroying the source. Stop requests, token callback registration/destruction
+and cancellable waits are **thread-context only**, not ISR-safe.
+
+The checked `request_stop(first_request)` overload returns a `result` and reports
+the first request separately through its output argument; the compatibility
+boolean overload returns false on error, which is distinguishable from a repeat
+request via `status()`. Tokens expose the same source `status()`, and callback
+registration preserves initialization/locking failures. Primitive faults are
+sticky for new requests/registrations, but unregister may retry cleanup.
+`stop_callback::close(timeout)` is checked: a timeout or primitive error leaves
+the callback alive for retry. Never destroy its argument until close succeeds.
+Serialize close/destruction of the same registration in caller code; distinct
+registrations may unregister concurrently. Completion uses condition-variable
+broadcast and each waiter rechecks its own node, not a shared semaphore permit
+that one waiter could consume on another's behalf.
+The compatibility destructor waits for safe unregistering; on primitive
+failure it retries with a blocking delay, never abandoning a referenced node.
+A persistent backend fault can therefore prevent destruction from completing:
+use checked close with a finite timeout and external recovery where required.
+
+## Event-Driven Portable Object Waiting
+
+The legacy `object_wait_set::wait(ids, count, timeout)` overloads retain their
+polling semantics. The opt-in overload
+`wait(signal, ids, count, timeout, token)` uses a caller-owned `osal::wait_signal`
+and a genuinely blocking native binary semaphore; it never creates a polling
+worker and never sleeps periodically to check readiness. Pointer/capacity and
+`std::span<int>` forms are available. A signal permits **one concurrent waiting
+consumer** (`already_exists` otherwise), but any number of producers.
+
+**Explicit notification contract:** after successfully mutating an observed
+object so its readiness may change, every producer must call `signal.notify()`.
+Object registration does not automatically subscribe to native events. Raw
+C APIs, backend producers, timers and ISR producers do not notify this channel
+unless the application explicitly wires them to do so. Omitting notifications
+can leave an indefinite waiter blocked even when an object is ready.
+The signal, objects, wait set and callback state must outlive every operation;
+do not mutate wait-set registrations concurrently with waiting.
+Before destroying a signal, quiesce all waiting consumers and notifying producers.
+Its raw native semaphore participates in the global semaphore diagnostics:
+creation attempts are recorded, successful creation acquires one live resource,
+and only successful native destruction releases it. Destruction is best-effort;
+a destroy failure leaves the diagnostic live count outstanding. Notification,
+including ISR notification, does not update these ownership counters.
+
+```cpp
+osal::queue<int, 4> inbox;
+osal::wait_signal changed;
+osal::stop_source stopping;       // Outlives the worker and its token.
+osal::object_wait_set objects;
+// Check inbox.valid(), changed.status() and every result in production code.
+(void)objects.add(inbox, 7);
+
+// Producer:
+if (inbox.send(42).ok()) {
+    (void)changed.notify();        // Always after the successful mutation.
+}
+
+// Consumer:
+int ids[4];
+std::size_t count = 0;
+auto status = objects.wait(changed, ids, 4, count,
+                           osal::milliseconds{-1}, stopping.get_token());
+// Another thread can call stopping.request_stop(); blocked wait returns cancelled.
+```
+
+`wait_until_ready(signal, noexcept_predicate, timeout, token)` provides the same
+protocol for other application readiness conditions. The predicate must be
+nonblocking and safely synchronized with producers. It observes readiness;
+it does not make a subsequent queue receive or lock acquisition cancellable.
+Cancellation is checked before readiness on each loop and returns
+`error_code::cancelled`; a stop arriving after that check can race with successful
+readiness. Callbacks register **before the first probe**. Each loop samples a
+generation before probing, rechecks it before blocking, and probes again after
+a wake. The binary permit covers the check-to-block race and notifications
+coalesce rather than accumulate unbounded permits. Generation is a 32-bit
+wrapping hint, not an event count: producers still must use the actual object
+state as the readiness source. Even generation wrap retains the semaphore wake.
+
+Finite waits use one absolute monotonic deadline, with remaining duration passed
+to the semaphore; unrelated notifications cannot restart the timeout. Negative
+durations mean forever, zero means a readiness check only. Readiness results and
+output truncation (including zero-capacity output success) match the legacy
+overloads. No observed queue/buffer data is consumed; existing opt-in
+clear-on-exit rules remain unchanged.
+
+`wait_signal::is_supported` and `require_support()` require a native blocking
+semaphore as well as timed semaphore backend support. The bare-metal backend is
+explicitly excluded, including hosted self-tick/scheduler test configurations:
+its timed semaphore waits spin rather than block a native thread. Timed
+semaphore support alone does not imply event-driven waiting support. Standalone
+stop-source/token/callback operations remain available on bare-metal, in thread
+context. Unsupported signal construction reports `not_supported`, not polling
+fallback. `status()` preserves semaphore creation failures; wait and notification
+errors are returned explicitly. Binary `overflow` is treated as a coalesced
+notification because a wake permit already exists; other give failures poison
+the channel and subsequent calls return the failure. A failed backend give
+cannot guarantee waking an already-blocked native waiter: it is a backend fault,
+not successful cancellation. There is no promise of an infinite cancellation
+wake after such a failure. Applications that must remain bounded under backend
+notification failure should provide a finite wait timeout or an independent
+external recovery mechanism; a finite wait returns the sticky failure when its
+native timeout wakes it.
+
+ISR notification is a separate capability:
+`wait_signal::isr_notification_supported` requires the backend's ISR semaphore
+support and lock-free generation/error atomics. Only then may an ISR mutate
+ISR-safe observed state and call `notify_from_isr()`; unsupported configurations
+return `not_supported`. An ISR cannot request stop or wait. These helper APIs
+add no native object subscription hooks and do not alter existing object or
+backend handle layouts.

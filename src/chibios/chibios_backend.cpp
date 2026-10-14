@@ -24,6 +24,7 @@
 
 #include <ch.h>  ///< ChibiOS/RT header
 #include <cassert>
+#include <atomic>
 #include <cstdint>
 #include <cstring>
 
@@ -46,16 +47,17 @@
 namespace
 {
 
-mutex_t     ch_mutexes[OSAL_CH_MAX_MUTEXES];
-bool        ch_mutex_used[OSAL_CH_MAX_MUTEXES];
-semaphore_t ch_sems[OSAL_CH_MAX_SEMS];
-bool        ch_sem_used[OSAL_CH_MAX_SEMS];
+mutex_t           ch_mutexes[OSAL_CH_MAX_MUTEXES];
+std::atomic<bool> ch_mutex_used[OSAL_CH_MAX_MUTEXES];
+semaphore_t       ch_sems[OSAL_CH_MAX_SEMS];
+unsigned          ch_sem_max[OSAL_CH_MAX_SEMS];
+std::atomic<bool> ch_sem_used[OSAL_CH_MAX_SEMS];
 
 // ChibiOS thread descriptors
 struct ch_thread_slot
 {
-    thread_t* tp   = nullptr;
-    bool      used = false;
+    thread_t*         tp = nullptr;
+    std::atomic<bool> used{false};
 };
 ch_thread_slot ch_threads[OSAL_CH_MAX_THREADS];
 
@@ -63,14 +65,14 @@ ch_thread_slot ch_threads[OSAL_CH_MAX_THREADS];
 // mailboxes transport free/ready buffer indices rather than payload bytes.
 struct ch_mailbox_slot
 {
-    mailbox_t     ready{};
-    mailbox_t     free{};
-    msg_t         ready_buffer[OSAL_CH_MAILBOX_DEPTH]{};
-    msg_t         free_buffer[OSAL_CH_MAILBOX_DEPTH]{};
-    std::uint8_t* storage   = nullptr;
-    std::size_t   item_size = 0U;
-    std::size_t   capacity  = 0U;
-    bool          used      = false;
+    mailbox_t         ready{};
+    mailbox_t         free{};
+    msg_t             ready_buffer[OSAL_CH_MAILBOX_DEPTH]{};
+    msg_t             free_buffer[OSAL_CH_MAILBOX_DEPTH]{};
+    std::uint8_t*     storage   = nullptr;
+    std::size_t       item_size = 0U;
+    std::size_t       capacity  = 0U;
+    std::atomic<bool> used{false};
 };
 ch_mailbox_slot ch_mailboxes[OSAL_CH_MAX_QUEUES];
 
@@ -82,18 +84,28 @@ struct ch_vt_slot
     void*                 arg         = nullptr;
     sysinterval_t         period      = 0;
     bool                  auto_reload = false;
-    bool                  used        = false;
+    std::atomic<bool>     used{false};
+    std::atomic<bool>     callback_gate{false};
+    std::atomic<bool>     ever_started{false};
+    std::atomic<bool>     active{false};
 };
 ch_vt_slot ch_timers[OSAL_CH_MAX_TIMERS];
 
 // ChibiOS event source slots (for event flags)
 struct ch_event_slot
 {
-    event_source_t src{};
-    eventflags_t   flags = 0U;  // shadow register for get
-    bool           used  = false;
+    event_source_t    src{};
+    eventflags_t      flags = 0U;  // shadow register for get
+    std::atomic<bool> used{false};
 };
 ch_event_slot ch_events[OSAL_CH_MAX_FLAGS];
+static_assert(std::atomic<bool>::is_always_lock_free);
+
+struct ch_irq_guard
+{
+    syssts_t state = chSysGetStatusAndLockX();
+    ~ch_irq_guard() { chSysRestoreStatusX(state); }
+};
 
 // ---------------------------------------------------------------------------
 // Generic pool helpers
@@ -103,9 +115,8 @@ T* pool_acquire_by_used(T (&pool)[N]) noexcept
 {
     for (std::size_t i = 0; i < N; ++i)
     {
-        if (!pool[i].used)
+        if (!pool[i].used.exchange(true, std::memory_order_acquire))
         {
-            pool[i].used = true;
             return &pool[i];
         }
     }
@@ -119,20 +130,19 @@ void pool_release_by_used(T (&pool)[N], T* p) noexcept
     {
         if (&pool[i] == p)
         {
-            pool[i].used = false;
+            pool[i].used.store(false, std::memory_order_release);
             return;
         }
     }
 }
 
 template<typename T, std::size_t N>
-T* pool_simple_acquire(T (&pool)[N], bool (&used)[N]) noexcept
+T* pool_simple_acquire(T (&pool)[N], std::atomic<bool> (&used)[N]) noexcept
 {
     for (std::size_t i = 0; i < N; ++i)
     {
-        if (!used[i])
+        if (!used[i].exchange(true, std::memory_order_acquire))
         {
-            used[i] = true;
             return &pool[i];
         }
     }
@@ -140,13 +150,13 @@ T* pool_simple_acquire(T (&pool)[N], bool (&used)[N]) noexcept
 }
 
 template<typename T, std::size_t N>
-void pool_simple_release(T (&pool)[N], bool (&used)[N], T* p) noexcept
+void pool_simple_release(T (&pool)[N], std::atomic<bool> (&used)[N], T* p) noexcept
 {
     for (std::size_t i = 0; i < N; ++i)
     {
         if (&pool[i] == p)
         {
-            used[i] = false;
+            used[i].store(false, std::memory_order_release);
             return;
         }
     }
@@ -184,16 +194,66 @@ constexpr sysinterval_t to_ch_ticks(osal::tick_t t) noexcept
 void ch_vt_callback(virtual_timer_t* vtp, void* arg) noexcept
 {
     auto* slot = static_cast<ch_vt_slot*>(arg);
-    if (slot != nullptr && slot->fn != nullptr)
+    if (slot == nullptr || slot->callback_gate.exchange(true, std::memory_order_acquire))
     {
+        return;
+    }
+    if (slot->active && slot->fn != nullptr)
+    {
+        slot->active = slot->auto_reload;
         slot->fn(slot->arg);
     }
-    // Auto-reload: re-arm from ISR context
-    if (slot != nullptr && slot->auto_reload)
+    // Retain the lifetime gate through rearm: callback-side destroy must fail.
+    if (slot->active && slot->auto_reload)
     {
         chSysLockFromISR();
         chVTSetI(vtp, slot->period, ch_vt_callback, arg);
         chSysUnlockFromISR();
+    }
+    slot->callback_gate.store(false, std::memory_order_release);
+}
+
+osal::result ch_event_wait_impl(osal::active_traits::event_flags_handle_t* handle, osal::event_bits_t bits,
+                                osal::event_bits_t* actual, bool clear_on_exit, bool all, osal::tick_t timeout) noexcept
+{
+    if (handle == nullptr || handle->native == nullptr)
+    {
+        return osal::error_code::not_initialized;
+    }
+    if (bits == 0U)
+    {
+        return osal::error_code::invalid_argument;
+    }
+    auto*           slot   = static_cast<ch_event_slot*>(handle->native);
+    const auto      target = static_cast<eventflags_t>(bits);
+    const systime_t start  = chVTGetSystemTimeX();
+    for (;;)
+    {
+        {
+            ch_irq_guard       guard;
+            const eventflags_t got = slot->flags & target;
+            if (all ? got == target : got != 0U)
+            {
+                if (actual != nullptr)
+                {
+                    *actual = static_cast<osal::event_bits_t>(slot->flags);
+                }
+                if (clear_on_exit)
+                {
+                    slot->flags &= ~got;
+                }
+                return osal::ok();
+            }
+        }
+        if (timeout == osal::NO_WAIT)
+        {
+            return osal::error_code::would_block;
+        }
+        if (timeout != osal::WAIT_FOREVER && static_cast<systime_t>(chVTGetSystemTimeX() - start) >= timeout)
+        {
+            return osal::error_code::timeout;
+        }
+        chThdSleep(1);
     }
 }
 
@@ -209,7 +269,7 @@ extern "C"
     /// @return Milliseconds elapsed since kernel start.
     std::int64_t osal_clock_monotonic_ms() noexcept
     {
-        return static_cast<std::int64_t>(TIME_I2MS(chVTGetSystemTimeX()));
+        return static_cast<std::int64_t>(chVTGetSystemTimeX()) * 1000LL / CH_CFG_ST_FREQUENCY;
     }
 
     /// @brief Return wall-clock time in milliseconds (aliased to monotonic — no wall clock on ChibiOS).
@@ -250,6 +310,14 @@ extern "C"
                                     osal::priority_t priority, osal::affinity_t /*affinity*/, void* stack,
                                     osal::stack_size_t stack_bytes, const char* name) noexcept
     {
+        if (handle == nullptr || entry == nullptr || stack == nullptr || stack_bytes == 0U)
+        {
+            return osal::error_code::invalid_argument;
+        }
+        if (handle->native != nullptr)
+        {
+            return osal::error_code::already_exists;
+        }
         auto* slot = pool_acquire_by_used(ch_threads);
         if (slot == nullptr)
         {
@@ -310,8 +378,8 @@ extern "C"
         return osal::ok();
     }
 
-    /// @brief Change the calling thread's priority via chThdSetPriority().
-    /// @param[in] handle    Thread handle (used to verify validity; ChibiOS sets current thread's priority).
+    /// @brief Change priority only when the handle identifies the calling thread.
+    /// @param[in] handle    Thread handle; other targets return not_supported.
     /// @param[in] priority  New OSAL priority mapped to tprio_t.
     /// @retval osal::ok()                         On success.
     /// @retval osal::error_code::not_initialized  If the handle is null.
@@ -323,8 +391,11 @@ extern "C"
             return osal::error_code::not_initialized;
         }
         auto* slot = static_cast<ch_thread_slot*>(handle->native);
+        if (slot->tp != chThdGetSelfX())
+        {
+            return osal::error_code::not_supported;
+        }
         chThdSetPriority(osal_to_ch_priority(priority));
-        (void)slot;
         return osal::ok();
     }
 
@@ -464,15 +535,21 @@ extern "C"
     /// @retval osal::ok()                          On success.
     /// @retval osal::error_code::out_of_resources  If the pool is full.
     osal::result osal_semaphore_create(osal::active_traits::semaphore_handle_t* handle, unsigned initial_count,
-                                       unsigned /*max_count*/) noexcept
+                                       unsigned max_count) noexcept
     {
+        if (handle == nullptr || max_count == 0U || initial_count > max_count ||
+            max_count > static_cast<unsigned>(std::numeric_limits<cnt_t>::max()))
+        {
+            return osal::error_code::invalid_argument;
+        }
         semaphore_t* s = pool_simple_acquire(ch_sems, ch_sem_used);
         if (s == nullptr)
         {
             return osal::error_code::out_of_resources;
         }
         chSemObjectInit(s, static_cast<cnt_t>(initial_count));
-        handle->native = static_cast<void*>(s);
+        ch_sem_max[s - ch_sems] = max_count;
+        handle->native          = static_cast<void*>(s);
         return osal::ok();
     }
 
@@ -502,7 +579,16 @@ extern "C"
         {
             return osal::error_code::not_initialized;
         }
-        chSemSignal(static_cast<semaphore_t*>(handle->native));
+        auto* s = static_cast<semaphore_t*>(handle->native);
+        chSysLock();
+        if (chSemGetCounterI(s) >= static_cast<cnt_t>(ch_sem_max[s - ch_sems]))
+        {
+            chSysUnlock();
+            return osal::error_code::overflow;
+        }
+        chSemSignalI(s);
+        chSchRescheduleS();
+        chSysUnlock();
         return osal::ok();
     }
 
@@ -517,7 +603,13 @@ extern "C"
             return osal::error_code::not_initialized;
         }
         chSysLockFromISR();
-        chSemSignalI(static_cast<semaphore_t*>(handle->native));
+        auto* s = static_cast<semaphore_t*>(handle->native);
+        if (chSemGetCounterI(s) >= static_cast<cnt_t>(ch_sem_max[s - ch_sems]))
+        {
+            chSysUnlockFromISR();
+            return osal::error_code::overflow;
+        }
+        chSemSignalI(s);
         chSysUnlockFromISR();
         return osal::ok();
     }
@@ -826,7 +918,15 @@ extern "C"
                                    osal_timer_callback_t callback, void* arg, osal::tick_t period_ticks,
                                    bool auto_reload) noexcept
     {
-        assert(handle != nullptr && callback != nullptr);
+        if (handle == nullptr || callback == nullptr || period_ticks == 0U || period_ticks == osal::WAIT_FOREVER ||
+            period_ticks > std::numeric_limits<sysinterval_t>::max())
+        {
+            return osal::error_code::invalid_argument;
+        }
+        if (handle->native != nullptr)
+        {
+            return osal::error_code::already_exists;
+        }
         auto* slot = pool_acquire_by_used(ch_timers);
         if (slot == nullptr)
         {
@@ -837,13 +937,17 @@ extern "C"
         slot->arg         = arg;
         slot->period      = static_cast<sysinterval_t>(period_ticks);
         slot->auto_reload = auto_reload;
-        handle->native    = static_cast<void*>(slot);
+        slot->callback_gate.store(false, std::memory_order_release);
+        slot->ever_started.store(false, std::memory_order_relaxed);
+        slot->active.store(false, std::memory_order_relaxed);
+        handle->native = static_cast<void*>(slot);
         return osal::ok();
     }
 
     /// @brief Cancel the virtual timer via chVTReset() and release the slot.
     /// @param[in,out] handle  Timer handle; no-op if null or already destroyed.
-    /// @retval osal::ok()  Always.
+    /// @retval osal::ok()  On destruction.
+    /// @retval osal::error_code::not_supported  During callback dispatch/rearm; ownership is unchanged.
     osal::result osal_timer_destroy(osal::active_traits::timer_handle_t* handle) noexcept
     {
         if (handle == nullptr || handle->native == nullptr)
@@ -851,8 +955,19 @@ extern "C"
             return osal::ok();
         }
         auto* slot = static_cast<ch_vt_slot*>(handle->native);
+        // Reset does not establish a portable barrier for already-dispatched callbacks.
+        if (slot->ever_started.load(std::memory_order_acquire))
+        {
+            return osal::error_code::not_supported;
+        }
+        if (slot->callback_gate.exchange(true, std::memory_order_acquire))
+        {
+            return osal::error_code::not_supported;
+        }
         chVTReset(&slot->vt);
-        slot->fn = nullptr;
+        slot->fn          = nullptr;
+        slot->auto_reload = false;
+        // Keep the gate closed until a subsequent create initializes this slot.
         pool_release_by_used(ch_timers, slot);
         handle->native = nullptr;
         return osal::ok();
@@ -869,6 +984,11 @@ extern "C"
             return osal::error_code::not_initialized;
         }
         auto* slot = static_cast<ch_vt_slot*>(handle->native);
+        if (slot->ever_started.exchange(true, std::memory_order_acq_rel))
+        {
+            return osal::error_code::not_supported;
+        }
+        slot->active = true;
         chVTSet(&slot->vt, slot->period, ch_vt_callback, slot);
         return osal::ok();
     }
@@ -883,7 +1003,14 @@ extern "C"
         {
             return osal::error_code::not_initialized;
         }
-        chVTReset(&static_cast<ch_vt_slot*>(handle->native)->vt);
+        auto* slot = static_cast<ch_vt_slot*>(handle->native);
+        if (slot->callback_gate.exchange(true, std::memory_order_acquire))
+        {
+            return osal::error_code::not_supported;
+        }
+        slot->active = false;
+        chVTReset(&slot->vt);
+        slot->callback_gate.store(false, std::memory_order_release);
         return osal::ok();
     }
 
@@ -892,7 +1019,11 @@ extern "C"
     /// @return osal::ok() on success; forwarded error from osal_timer_start().
     osal::result osal_timer_reset(osal::active_traits::timer_handle_t* handle) noexcept
     {
-        osal_timer_stop(handle);
+        const auto stopped = osal_timer_stop(handle);
+        if (!stopped.ok())
+        {
+            return stopped;
+        }
         return osal_timer_start(handle);
     }
 
@@ -908,7 +1039,22 @@ extern "C"
         {
             return osal::error_code::not_initialized;
         }
-        static_cast<ch_vt_slot*>(handle->native)->period = static_cast<sysinterval_t>(new_period_ticks);
+        auto* slot = static_cast<ch_vt_slot*>(handle->native);
+        if (slot->active.load(std::memory_order_acquire))
+        {
+            return osal::error_code::not_supported;
+        }
+        if (new_period_ticks == 0U || new_period_ticks == osal::WAIT_FOREVER ||
+            new_period_ticks > std::numeric_limits<sysinterval_t>::max())
+        {
+            return osal::error_code::invalid_argument;
+        }
+        if (slot->callback_gate.exchange(true, std::memory_order_acquire))
+        {
+            return osal::error_code::not_supported;
+        }
+        slot->period = static_cast<sysinterval_t>(new_period_ticks);
+        slot->callback_gate.store(false, std::memory_order_release);
         return osal::ok();
     }
 
@@ -976,9 +1122,10 @@ extern "C"
         {
             return osal::error_code::not_initialized;
         }
-        auto* slot = static_cast<ch_event_slot*>(handle->native);
+        auto*        slot = static_cast<ch_event_slot*>(handle->native);
+        ch_irq_guard guard;
         slot->flags |= static_cast<eventflags_t>(bits);
-        chEvtBroadcastFlags(&slot->src, static_cast<eventflags_t>(bits));
+        chEvtBroadcastFlagsI(&slot->src, static_cast<eventflags_t>(bits));
         return osal::ok();
     }
 
@@ -995,7 +1142,8 @@ extern "C"
         {
             return osal::error_code::not_initialized;
         }
-        auto* slot = static_cast<ch_event_slot*>(handle->native);
+        auto*        slot = static_cast<ch_event_slot*>(handle->native);
+        ch_irq_guard guard;
         slot->flags &= ~static_cast<eventflags_t>(bits);
         return osal::ok();
     }
@@ -1009,10 +1157,11 @@ extern "C"
         {
             return 0U;
         }
+        ch_irq_guard guard;
         return static_cast<osal::event_bits_t>(static_cast<const ch_event_slot*>(handle->native)->flags);
     }
 
-    /// @brief Register a listener on the event source and wait for any of @p bits via chEvtWaitAnyTimeout().
+    /// @brief Wait for any matching bit in the persistent flags register.
     /// @param[in] handle         Event-flags handle.
     /// @param[in] bits           Bitmask of flags to watch.
     /// @param[out] actual        Output for the flags that woke the caller; may be null.
@@ -1024,41 +1173,10 @@ extern "C"
                                            osal::event_bits_t* actual, bool clear_on_exit,
                                            osal::tick_t timeout) noexcept
     {
-        if (handle == nullptr || handle->native == nullptr)
-        {
-            return osal::error_code::not_initialized;
-        }
-        auto* slot = static_cast<ch_event_slot*>(handle->native);
-
-        // Register listener on slot's event source
-        event_listener_t el;
-        chEvtRegisterMask(&slot->src, &el, EVENT_MASK(0));
-
-        eventmask_t evt = chEvtWaitAnyTimeout(EVENT_MASK(0), to_ch_ticks(timeout));
-        if (evt == 0U)
-        {
-            chEvtUnregister(&slot->src, &el);
-            return osal::error_code::timeout;
-        }
-        eventflags_t got = chEvtGetAndClearFlags(&el);
-        chEvtUnregister(&slot->src, &el);
-
-        if ((got & static_cast<eventflags_t>(bits)) == 0U)
-        {
-            return osal::error_code::timeout;
-        }
-        if (actual != nullptr)
-        {
-            *actual = static_cast<osal::event_bits_t>(got & static_cast<eventflags_t>(bits));
-        }
-        if (clear_on_exit)
-        {
-            slot->flags &= ~(got & static_cast<eventflags_t>(bits));
-        }
-        return osal::ok();
+        return ch_event_wait_impl(handle, bits, actual, clear_on_exit, false, timeout);
     }
 
-    /// @brief Register a listener and spin until all bits in @p bits are collected.
+    /// @brief Wait for all requested bits to be set simultaneously.
     /// @param[in] handle         Event-flags handle.
     /// @param[in] bits           Bitmask of flags that must all be received.
     /// @param[out] actual        Output for the collected flags; may be null.
@@ -1070,63 +1188,7 @@ extern "C"
                                            osal::event_bits_t* actual, bool clear_on_exit,
                                            osal::tick_t timeout) noexcept
     {
-        if (handle == nullptr || handle->native == nullptr)
-        {
-            return osal::error_code::not_initialized;
-        }
-        auto*            slot = static_cast<ch_event_slot*>(handle->native);
-        event_listener_t el;
-        chEvtRegisterMask(&slot->src, &el, EVENT_MASK(0));
-
-        const eventflags_t target    = static_cast<eventflags_t>(bits);
-        eventflags_t       collected = 0U;
-        const systime_t    deadline  = chVTGetSystemTimeX() + to_ch_ticks(timeout);
-
-        while ((collected & target) != target)
-        {
-            sysinterval_t remaining = TIME_IMMEDIATE;
-            if (timeout == osal::WAIT_FOREVER)
-            {
-                remaining = TIME_INFINITE;
-            }
-            else if (timeout != osal::NO_WAIT)
-            {
-                systime_t now = chVTGetSystemTimeX();
-                if (chVTIsSystemTimeWithin(chVTGetSystemTimeX(), deadline))
-                {
-                    remaining = static_cast<sysinterval_t>(deadline - now);
-                }
-                else
-                {
-                    break;
-                }
-            }
-            eventmask_t evt = chEvtWaitAnyTimeout(EVENT_MASK(0), remaining);
-            if (evt == 0U)
-            {
-                break;
-            }
-            collected |= chEvtGetAndClearFlags(&el);
-            if (timeout == osal::NO_WAIT)
-            {
-                break;
-            }
-        }
-        chEvtUnregister(&slot->src, &el);
-
-        if ((collected & target) == target)
-        {
-            if (actual != nullptr)
-            {
-                *actual = static_cast<osal::event_bits_t>(collected & target);
-            }
-            if (clear_on_exit)
-            {
-                slot->flags &= ~target;
-            }
-            return osal::ok();
-        }
-        return osal::error_code::timeout;
+        return ch_event_wait_impl(handle, bits, actual, clear_on_exit, true, timeout);
     }
 
     /// @brief Set flags from ISR context via chEvtBroadcastFlagsI() (syscall locked).
@@ -1142,8 +1204,8 @@ extern "C"
             return osal::error_code::not_initialized;
         }
         auto* slot = static_cast<ch_event_slot*>(handle->native);
-        slot->flags |= static_cast<eventflags_t>(bits);
         chSysLockFromISR();
+        slot->flags |= static_cast<eventflags_t>(bits);
         chEvtBroadcastFlagsI(&slot->src, static_cast<eventflags_t>(bits));
         chSysUnlockFromISR();
         return osal::ok();
@@ -1161,7 +1223,7 @@ extern "C"
     struct ch_condvar_slot
     {
         condition_variable_t cv{};
-        bool                 used = false;
+        std::atomic<bool>    used{false};
     };
     ch_condvar_slot ch_condvars[OSAL_CH_MAX_CONDVARS];
 

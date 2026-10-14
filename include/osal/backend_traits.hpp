@@ -296,6 +296,10 @@ struct backend_traits<backend_threadx>
     {
         void* native;
     };
+    struct wait_set_handle_t
+    {
+        void* native;
+    };
     struct work_queue_handle_t
     {
         void* native;

@@ -131,7 +131,9 @@ k_timeout_t to_zephyr_timeout(osal::tick_t t) noexcept
     {
         return K_NO_WAIT;
     }
-    return K_MSEC(static_cast<int64_t>(t));  // osal tick is ms on Zephyr backend
+    const auto ticks   = static_cast<std::uint64_t>(t);
+    const auto maximum = static_cast<std::uint64_t>(std::numeric_limits<k_ticks_t>::max());
+    return K_TICKS(static_cast<k_ticks_t>(ticks > maximum ? maximum : ticks));
 }
 
 }  // namespace
@@ -367,12 +369,21 @@ extern "C"
     /// @param[in] stack_bytes  Size of @p stack in bytes.
     /// @param[in] name         Optional thread name (may be @c nullptr).
     /// @retval osal::ok()                    On success.
+    /// @retval error_code::invalid_argument  If the entry, handle or stack is invalid.
+    /// @retval error_code::already_exists    If the handle already owns a thread.
     /// @retval error_code::out_of_resources  If the pool is exhausted.
     osal::result osal_thread_create(osal::active_traits::thread_handle_t* handle, void (*entry)(void*), void* arg,
                                     osal::priority_t priority, osal::affinity_t affinity, void* stack,
                                     osal::stack_size_t stack_bytes, const char* name) noexcept
     {
-        assert(handle != nullptr && entry != nullptr && stack != nullptr);
+        if (handle == nullptr || entry == nullptr || stack == nullptr || stack_bytes == 0U)
+        {
+            return osal::error_code::invalid_argument;
+        }
+        if (handle->native != nullptr)
+        {
+            return osal::error_code::already_exists;
+        }
         struct k_thread* t = acquire_from_pool(zephyr_threads, zephyr_thread_used);
         if (t == nullptr)
         {
@@ -445,11 +456,10 @@ extern "C"
     }
 
     /// @brief Detaches a thread so its resources are released automatically on exit.
-    /// @details Zephyr has no native @c k_thread_detach API.  This implementation
-    ///          simply releases the pool slot and clears the handle, preventing a
-    ///          subsequent @c osal_thread_join().
+    /// @details Zephyr has no native detach/reclaim operation for caller-owned TCBs.
+    ///          Keep the handle joinable rather than reusing a live pool slot.
     /// @param[in,out] handle  Handle of the thread to detach.
-    /// @retval osal::ok()                   On success,.
+    /// @retval error_code::not_supported    Automatic reclamation is unavailable.
     /// @retval error_code::not_initialized  If @p handle is invalid.
     osal::result osal_thread_detach(osal::active_traits::thread_handle_t* handle) noexcept
     {
@@ -457,11 +467,7 @@ extern "C"
         {
             return osal::error_code::not_initialized;
         }
-        // Zephyr does not have a native k_thread_detach API — simply release
-        // the pool slot and clear the handle so join() sees detached state.
-        release_to_pool(zephyr_threads, zephyr_thread_used, ZK_THREAD(handle));
-        handle->native = nullptr;
-        return osal::ok();
+        return osal::error_code::not_supported;
     }
 
     /// @brief Adjusts the scheduling priority of a running thread.
@@ -1082,25 +1088,12 @@ extern "C"
             return osal::error_code::out_of_resources;
         }
 
-        // Find a ctx slot.
-        zephyr_timer_ctx* ctx = nullptr;
-        for (auto& c : timer_ctx)
-        {
-            if (c.fn == nullptr)
-            {
-                ctx = &c;
-                break;
-            }
-        }
-        if (ctx == nullptr)
-        {
-            release_to_pool(zephyr_timers, zephyr_timer_used, t);
-            return osal::error_code::out_of_resources;
-        }
-        ctx->fn           = callback;
-        ctx->arg          = arg;
-        ctx->period_ticks = period_ticks;
-        ctx->auto_reload  = auto_reload;
+        // The timer's reserved pool index also owns its callback context.
+        zephyr_timer_ctx* ctx = &timer_ctx[t - zephyr_timers];
+        ctx->fn               = callback;
+        ctx->arg              = arg;
+        ctx->period_ticks     = period_ticks;
+        ctx->auto_reload      = auto_reload;
 
         auto expiry = [](struct k_timer* tmr) noexcept
         {
@@ -1130,6 +1123,15 @@ extern "C"
         {
             return osal::ok();
         }
+#if defined(CONFIG_SMP)
+        // k_timer_stop does not fence an expiry already dispatched on another CPU.
+        return osal::error_code::not_supported;
+#else
+        if (k_is_in_isr())
+        {
+            return osal::error_code::not_supported;
+        }
+        const unsigned int key = irq_lock();
         k_timer_stop(ZK_TIMER(handle));
         auto* ctx = static_cast<zephyr_timer_ctx*>(k_timer_user_data_get(ZK_TIMER(handle)));
         if (ctx != nullptr)
@@ -1138,7 +1140,9 @@ extern "C"
         }
         release_to_pool(zephyr_timers, zephyr_timer_used, ZK_TIMER(handle));
         handle->native = nullptr;
+        irq_unlock(key);
         return osal::ok();
+#endif
     }
 
     /// @brief Starts or restarts the timer.
@@ -1154,7 +1158,7 @@ extern "C"
             return osal::error_code::not_initialized;
         }
         auto*             ctx      = static_cast<zephyr_timer_ctx*>(k_timer_user_data_get(ZK_TIMER(handle)));
-        const k_timeout_t duration = K_TICKS(static_cast<k_ticks_t>(ctx->period_ticks));
+        const k_timeout_t duration = to_zephyr_timeout(ctx->period_ticks);
         const k_timeout_t period   = ctx->auto_reload ? duration : K_NO_WAIT;
         k_timer_start(ZK_TIMER(handle), duration, period);
         return osal::ok();
@@ -1186,9 +1190,7 @@ extern "C"
         return osal_timer_start(handle);
     }
 
-    /// @brief Changes the timer period and immediately restarts it.
-    /// @details Calls @c k_timer_start() with both the initial duration and the repeat period
-    ///          set to @p new_period_ticks.  The old auto-reload state is superseded.
+    /// @brief Changes the period, preserving stopped state and timer mode.
     /// @param[in] handle            Handle of the timer.
     /// @param[in] new_period_ticks  New period expressed in kernel ticks.
     /// @retval osal::ok()                   On success,.
@@ -1200,9 +1202,17 @@ extern "C"
         {
             return osal::error_code::not_initialized;
         }
-        k_timer_start(ZK_TIMER(handle), K_TICKS(static_cast<k_ticks_t>(new_period_ticks)),
-                      K_TICKS(static_cast<k_ticks_t>(new_period_ticks)));
-        return osal::ok();
+        if (new_period_ticks == 0U)
+        {
+            return osal::error_code::invalid_argument;
+        }
+        const unsigned int key    = irq_lock();
+        const bool         active = k_timer_remaining_ticks(ZK_TIMER(handle)) > 0U;
+        auto*              ctx    = static_cast<zephyr_timer_ctx*>(k_timer_user_data_get(ZK_TIMER(handle)));
+        ctx->period_ticks         = new_period_ticks;
+        const osal::result status = active ? osal_timer_start(handle) : osal::ok();
+        irq_unlock(key);
+        return status;
     }
 
     /// @brief Checks whether the timer is currently running.
@@ -1241,16 +1251,7 @@ extern "C"
         {
             return osal::error_code::invalid_argument;
         }
-        struct k_event* ev = nullptr;
-        for (std::size_t i = 0U; i < OSAL_ZEPHYR_MAX_EVENTS; ++i)
-        {
-            if (!zephyr_event_used[i])
-            {
-                zephyr_event_used[i] = true;
-                ev                   = &zephyr_events[i];
-                break;
-            }
-        }
+        struct k_event* ev = acquire_from_pool(zephyr_events, zephyr_event_used);
         if (ev == nullptr)
         {
             return osal::error_code::out_of_resources;
@@ -1270,14 +1271,7 @@ extern "C"
             return osal::ok();
         }
         auto* ev = static_cast<struct k_event*>(handle->native);
-        for (std::size_t i = 0U; i < OSAL_ZEPHYR_MAX_EVENTS; ++i)
-        {
-            if (&zephyr_events[i] == ev)
-            {
-                zephyr_event_used[i] = false;
-                break;
-            }
-        }
+        release_to_pool(zephyr_events, zephyr_event_used, ev);
         handle->native = nullptr;
         return osal::ok();
     }
@@ -1487,24 +1481,16 @@ extern "C"
     struct zephyr_condvar_obj
     {
         struct k_condvar cv;
-        bool             valid{};
     };
 
     namespace
     {
     zephyr_condvar_obj condvar_pool[OSAL_ZEPHYR_MAX_CONDVARS];
+    bool               condvar_used[OSAL_ZEPHYR_MAX_CONDVARS];
 
     zephyr_condvar_obj* condvar_alloc() noexcept
     {
-        for (auto& c : condvar_pool)
-        {
-            if (!c.valid)
-            {
-                c.valid = true;
-                return &c;
-            }
-        }
-        return nullptr;
+        return acquire_from_pool(condvar_pool, condvar_used);
     }
     }  // namespace
 
@@ -1539,8 +1525,8 @@ extern "C"
         {
             return osal::ok();
         }
-        auto* obj      = static_cast<zephyr_condvar_obj*>(handle->native);
-        obj->valid     = false;
+        auto* obj = static_cast<zephyr_condvar_obj*>(handle->native);
+        release_to_pool(condvar_pool, condvar_used, obj);
         handle->native = nullptr;
         return osal::ok();
     }
@@ -1615,19 +1601,34 @@ extern "C"
 
     struct zephyr_wq_entry
     {
-        struct k_work           work;
+        struct k_work work
+        {
+        };
         osal_work_func_t        func{};
         void*                   arg{};
         struct zephyr_wq_obj_s* parent{};
         std::atomic_bool        in_use{false};
+        std::uint64_t           marker{};
     };
 
     struct zephyr_wq_obj_s
     {
-        struct k_work_q workq;
+        struct k_work_q workq
+        {
+        };
         zephyr_wq_entry entries[OSAL_ZEPHYR_WQ_MAX_DEPTH];
         std::size_t     capacity{};
-        struct k_sem    flush_sem;
+        struct k_sem flush_sem
+        {
+        };
+        struct k_mutex flush_mutex
+        {
+        };
+        struct k_spinlock lock
+        {
+        };
+        std::uint64_t next_marker{};
+        std::uint64_t completed_marker{};
     };
 
     namespace
@@ -1637,42 +1638,35 @@ extern "C"
 
     zephyr_wq_obj_s* zephyr_wq_acquire() noexcept
     {
-        for (std::size_t i = 0U; i < OSAL_ZEPHYR_MAX_WORK_QUEUES; ++i)
-        {
-            if (!zephyr_wq_used[i])
-            {
-                zephyr_wq_used[i] = true;
-                return &zephyr_wq_pool[i];
-            }
-        }
-        return nullptr;
+        return acquire_from_pool(zephyr_wq_pool, zephyr_wq_used);
     }
 
     void zephyr_wq_release(zephyr_wq_obj_s* p) noexcept
     {
-        for (std::size_t i = 0U; i < OSAL_ZEPHYR_MAX_WORK_QUEUES; ++i)
-        {
-            if (&zephyr_wq_pool[i] == p)
-            {
-                zephyr_wq_used[i] = false;
-                return;
-            }
-        }
+        release_to_pool(zephyr_wq_pool, zephyr_wq_used, p);
     }
 
     void zephyr_wq_handler(struct k_work* work) noexcept
     {
-        auto* e = CONTAINER_OF(work, zephyr_wq_entry, work);
-        if (e->func != nullptr)
+        auto*            e      = CONTAINER_OF(work, zephyr_wq_entry, work);
+        auto*            wq     = e->parent;
+        k_spinlock_key_t key    = k_spin_lock(&wq->lock);
+        const auto       func   = e->func;
+        void* const      arg    = e->arg;
+        const auto       marker = e->marker;
+        k_spin_unlock(&wq->lock, key);
+        if (func != nullptr)
         {
-            e->func(e->arg);
+            func(arg);
         }
-        else
+        key = k_spin_lock(&wq->lock);
+        if (marker != 0U)
         {
-            // Sentinel — flush complete.
-            k_sem_give(&e->parent->flush_sem);
+            wq->completed_marker = marker;
+            k_sem_give(&wq->flush_sem);
         }
         e->in_use.store(false, std::memory_order_release);
+        k_spin_unlock(&wq->lock, key);
     }
     }  // namespace
 
@@ -1705,7 +1699,9 @@ extern "C"
             zephyr_wq_release(wq);
             return osal::error_code::invalid_argument;
         }
-        wq->capacity = depth;
+        wq->capacity         = depth;
+        wq->next_marker      = 0U;
+        wq->completed_marker = 0U;
         for (std::size_t i = 0U; i < depth; ++i)
         {
             k_work_init(&wq->entries[i].work, zephyr_wq_handler);
@@ -1713,6 +1709,7 @@ extern "C"
             wq->entries[i].in_use.store(false, std::memory_order_relaxed);
         }
         k_sem_init(&wq->flush_sem, 0, 1);
+        k_mutex_init(&wq->flush_mutex);
         k_work_queue_start(&wq->workq, static_cast<k_thread_stack_t*>(stack), stack_bytes,
                            CONFIG_NUM_PREEMPT_PRIORITIES - 1, nullptr);
         handle->native = static_cast<void*>(wq);
@@ -1733,6 +1730,10 @@ extern "C"
             return osal::ok();
         }
         auto* wq = static_cast<zephyr_wq_obj_s*>(handle->native);
+        if (k_is_in_isr() || k_current_get() == &wq->workq.thread)
+        {
+            return osal::error_code::not_supported;
+        }
         // Drain pending work, plug to stop new submissions.
         (void)k_work_queue_drain(&wq->workq, true);
         // Abort the work queue's internal thread so the pool entry can be reused.
@@ -1760,19 +1761,27 @@ extern "C"
         {
             return osal::error_code::invalid_argument;
         }
-        auto* wq = static_cast<zephyr_wq_obj_s*>(handle->native);
+        auto*                  wq  = static_cast<zephyr_wq_obj_s*>(handle->native);
+        const k_spinlock_key_t key = k_spin_lock(&wq->lock);
         for (std::size_t i = 0U; i < wq->capacity; ++i)
         {
             bool expected = false;
             if (wq->entries[i].in_use.compare_exchange_strong(expected, true, std::memory_order_acq_rel,
                                                               std::memory_order_relaxed))
             {
-                wq->entries[i].func = func;
-                wq->entries[i].arg  = arg;
-                k_work_submit_to_queue(&wq->workq, &wq->entries[i].work);
-                return osal::ok();
+                wq->entries[i].func   = func;
+                wq->entries[i].arg    = arg;
+                wq->entries[i].marker = 0U;
+                const int rc          = k_work_submit_to_queue(&wq->workq, &wq->entries[i].work);
+                if (rc < 0)
+                {
+                    wq->entries[i].in_use.store(false, std::memory_order_release);
+                }
+                k_spin_unlock(&wq->lock, key);
+                return (rc < 0) ? osal::result{osal::error_code::unknown} : osal::ok();
             }
         }
+        k_spin_unlock(&wq->lock, key);
         return osal::error_code::overflow;
     }
 
@@ -1792,9 +1801,8 @@ extern "C"
     }
 
     /// @brief Waits until all currently queued work items have been executed.
-    /// @details Submits a sentinel entry (func == nullptr) whose handler calls
-    ///          @c k_sem_give() on the queue's flush semaphore, then waits on that
-    ///          semaphore with the given timeout.
+    /// @details Serializes flush calls and waits for a uniquely numbered sentinel.
+    ///          Semaphore signals from earlier timed-out calls cannot complete a later flush.
     /// @param[in] handle   Handle of the work queue.
     /// @param[in] timeout  Maximum wait time in ticks.
     /// @retval osal::ok()                   When the flush sentinel is executed.
@@ -1808,26 +1816,65 @@ extern "C"
             return osal::error_code::not_initialized;
         }
         auto* wq = static_cast<zephyr_wq_obj_s*>(handle->native);
-        // Submit a sentinel item and wait on the semaphore.
+        if (k_is_in_isr() || k_current_get() == &wq->workq.thread)
+        {
+            return osal::error_code::not_supported;
+        }
+        const auto deadline = sys_timepoint_calc(to_zephyr_timeout(timeout));
+        if (k_mutex_lock(&wq->flush_mutex, sys_timepoint_timeout(deadline)) != 0)
+        {
+            return osal::error_code::timeout;
+        }
+        std::uint64_t    marker = 0U;
+        k_spinlock_key_t key    = k_spin_lock(&wq->lock);
         for (std::size_t i = 0U; i < wq->capacity; ++i)
         {
             bool expected = false;
             if (wq->entries[i].in_use.compare_exchange_strong(expected, true, std::memory_order_acq_rel,
                                                               std::memory_order_relaxed))
             {
-                wq->entries[i].func = nullptr;
-                wq->entries[i].arg  = nullptr;
-                k_work_submit_to_queue(&wq->workq, &wq->entries[i].work);
-                int rc =
-                    k_sem_take(&wq->flush_sem, to_zephyr_timeout(timeout));  // NOLINT(cppcoreguidelines-init-variables)
-                return (rc == 0) ? osal::ok() : osal::result{osal::error_code::timeout};
+                wq->entries[i].func   = nullptr;
+                wq->entries[i].arg    = nullptr;
+                marker                = ++wq->next_marker;
+                wq->entries[i].marker = marker;
+                if (k_work_submit_to_queue(&wq->workq, &wq->entries[i].work) < 0)
+                {
+                    wq->entries[i].in_use.store(false, std::memory_order_release);
+                    k_spin_unlock(&wq->lock, key);
+                    k_mutex_unlock(&wq->flush_mutex);
+                    return osal::error_code::unknown;
+                }
+                break;
             }
         }
-        return osal::error_code::overflow;
+        k_spin_unlock(&wq->lock, key);
+        if (marker == 0U)
+        {
+            k_mutex_unlock(&wq->flush_mutex);
+            return osal::error_code::overflow;
+        }
+        osal::result result = osal::error_code::timeout;
+        for (;;)
+        {
+            key                  = k_spin_lock(&wq->lock);
+            const bool completed = wq->completed_marker >= marker;
+            k_spin_unlock(&wq->lock, key);
+            if (completed)
+            {
+                result = osal::ok();
+                break;
+            }
+            if (k_sem_take(&wq->flush_sem, sys_timepoint_timeout(deadline)) != 0)
+            {
+                break;
+            }
+        }
+        k_mutex_unlock(&wq->flush_mutex);
+        return result;
     }
 
     /// @brief Cancels all pending work items in the queue.
-    /// @details Calls @c k_work_cancel() on every in-use entry and clears the in-use flag.
+    /// @details Calls @c k_work_cancel() on every in-use entry, releasing only idle items.
     ///          Items that are already executing cannot be cancelled.
     /// @param[in] handle  Handle of the work queue.
     /// @retval osal::ok()                   On success,.
@@ -1838,15 +1885,19 @@ extern "C"
         {
             return osal::error_code::not_initialized;
         }
-        auto* wq = static_cast<zephyr_wq_obj_s*>(handle->native);
+        auto*                  wq  = static_cast<zephyr_wq_obj_s*>(handle->native);
+        const k_spinlock_key_t key = k_spin_lock(&wq->lock);
         for (std::size_t i = 0U; i < wq->capacity; ++i)
         {
-            if (wq->entries[i].in_use.load(std::memory_order_acquire))
+            if (wq->entries[i].in_use.load(std::memory_order_acquire) && wq->entries[i].marker == 0U)
             {
-                k_work_cancel(&wq->entries[i].work);
-                wq->entries[i].in_use.store(false, std::memory_order_release);
+                if (k_work_cancel(&wq->entries[i].work) == 0)
+                {
+                    wq->entries[i].in_use.store(false, std::memory_order_release);
+                }
             }
         }
+        k_spin_unlock(&wq->lock, key);
         return osal::ok();
     }
 

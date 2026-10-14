@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: Apache-2.0
+@PACKAGE_INIT@
+
+include(CMakeFindDependencyMacro)
+if(@MICROSAL_NEEDS_THREADS@)
+    find_dependency(Threads)
+endif()
+
+include("${CMAKE_CURRENT_LIST_DIR}/microsal-targets.cmake")
+
+# Preserve the target exported by releases before the canonical OSAL name.
+if(NOT TARGET MicrOSAL::microsal)
+    add_library(MicrOSAL::microsal INTERFACE IMPORTED)
+    set_target_properties(MicrOSAL::microsal PROPERTIES
+        INTERFACE_LINK_LIBRARIES MicrOSAL::OSAL)
+endif()
+check_required_components(microsal)

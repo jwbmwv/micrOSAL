@@ -79,13 +79,18 @@ static std::atomic_bool emu_wq_used[OSAL_EMULATED_WQ_POOL_SIZE];
 
 static emulated_wq_obj* emu_wq_acquire() noexcept
 {
+    auto& diagnostics = osal::diagnostics(osal::diagnostic_resource::emulated_work_queue);
+    diagnostics.set_capacity(OSAL_EMULATED_WQ_POOL_SIZE);
     for (std::size_t i = 0U; i < OSAL_EMULATED_WQ_POOL_SIZE; ++i)
     {
         if (!emu_wq_used[i].exchange(true, std::memory_order_acq_rel))
         {
+            diagnostics.attempt(osal::ok());
+            diagnostics.acquire();
             return &emu_wq_pool[i];
         }
     }
+    diagnostics.attempt(osal::error_code::out_of_resources);
     return nullptr;
 }
 
@@ -95,6 +100,7 @@ static void emu_wq_release(emulated_wq_obj* p) noexcept
     {
         if (&emu_wq_pool[i] == p)
         {
+            osal::diagnostics(osal::diagnostic_resource::emulated_work_queue).release();
             emu_wq_used[i].store(false, std::memory_order_release);
             return;
         }
@@ -284,9 +290,8 @@ osal::result osal_work_queue_submit(osal::active_traits::work_queue_handle_t* ha
     wq->ring[wq->tail]         = emulated_wq_entry{func, arg, sequence};
     wq->tail                   = emu_wq_advance_index(wq->tail, wq->capacity);
     ++wq->count;
-    osal_mutex_unlock(&wq->mtx);
-
     osal_semaphore_give(&wq->not_empty);
+    osal_mutex_unlock(&wq->mtx);
     return osal::ok();
 }
 
@@ -383,12 +388,11 @@ osal::result osal_work_queue_cancel_all(osal::active_traits::work_queue_handle_t
     wq->head                  = 0U;
     wq->tail                  = 0U;
     wq->count                 = 0U;
-    osal_mutex_unlock(&wq->mtx);
-
     for (std::size_t i = 0U; i < drained; ++i)
     {
         osal_semaphore_try_take(&wq->not_empty);
     }
+    osal_mutex_unlock(&wq->mtx);
 
     return osal::ok();
 }

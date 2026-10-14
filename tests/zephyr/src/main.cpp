@@ -185,6 +185,16 @@ ZTEST(osal_semaphore, test_binary_construction)
     zassert_true(s.valid(), "binary semaphore construction should succeed");
 }
 
+ZTEST(osal_semaphore, test_finite_timeout_uses_kernel_ticks)
+{
+    osal::semaphore s{osal::semaphore_type::binary, 0U};
+    const auto      before = k_uptime_get();
+    zassert_false(s.take_for(osal::milliseconds{80}), "empty semaphore must time out");
+    const auto elapsed = k_uptime_get() - before;
+    zassert_true(elapsed >= 70, "timeout must not reinterpret kernel ticks as milliseconds");
+    zassert_true(elapsed < 500, "finite timeout must remain bounded");
+}
+
 ZTEST(osal_semaphore, test_binary_give_take)
 {
     osal::semaphore s{osal::semaphore_type::binary, 0U};
@@ -517,6 +527,19 @@ ZTEST(osal_thread, test_yield_no_crash)
     zassert_true(true, "yield should not crash");
 }
 
+ZTEST(osal_thread, test_detach_preserves_joinable_handle)
+{
+    osal::thread        t;
+    osal::thread_config cfg{};
+    cfg.entry       = [](void*) { k_sleep(K_MSEC(80)); };
+    cfg.stack       = z_test_stack;
+    cfg.stack_bytes = K_THREAD_STACK_SIZEOF(z_test_stack);
+    zassert_true(t.create(cfg).ok(), NULL);
+    zassert_equal(t.detach().code(), osal::error_code::not_supported, NULL);
+    zassert_true(t.valid(), "unsupported detach must retain TCB ownership");
+    zassert_true(t.join().ok(), NULL);
+}
+
 ZTEST(osal_thread, test_sleep_for)
 {
     auto t1 = osal::monotonic_clock::now();
@@ -704,6 +727,34 @@ ZTEST(osal_timer, test_config_construction)
     zassert_equal(g_timer_count.load(std::memory_order_relaxed), 1U, NULL);
 }
 
+ZTEST(osal_timer, test_set_period_preserves_one_shot_and_restart_period)
+{
+    g_timer_count.store(0U, std::memory_order_relaxed);
+    osal::timer t{timer_callback_ztest, nullptr, osal::milliseconds{5000}, osal::timer_mode::one_shot};
+    zassert_true(t.valid(), NULL);
+    zassert_true(t.set_period(osal::milliseconds{20}).ok(), NULL);
+    k_sleep(K_MSEC(160));
+    zassert_equal(g_timer_count.load(std::memory_order_relaxed), 0U, "period change must not start an inactive timer");
+    zassert_true(t.start().ok(), NULL);
+    k_sleep(K_MSEC(160));
+    zassert_equal(g_timer_count.load(std::memory_order_relaxed), 1U, "start must use the updated one-shot period");
+    zassert_true(t.start().ok(), NULL);
+    k_sleep(K_MSEC(160));
+    zassert_equal(g_timer_count.load(std::memory_order_relaxed), 2U, "restart must use the updated period");
+}
+
+ZTEST(osal_timer, test_active_period_change_preserves_one_shot)
+{
+    g_timer_count.store(0U, std::memory_order_relaxed);
+    osal::timer t{timer_callback_ztest, nullptr, osal::milliseconds{5000}, osal::timer_mode::one_shot};
+    zassert_true(t.valid(), NULL);
+    zassert_true(t.start().ok(), NULL);
+    zassert_true(t.set_period(osal::milliseconds{20}).ok(), NULL);
+    k_sleep(K_MSEC(160));
+    zassert_equal(g_timer_count.load(std::memory_order_relaxed), 1U,
+                  "active period change must preserve one-shot mode");
+}
+
 ZTEST_SUITE(osal_timer, NULL, NULL, NULL, NULL, NULL);
 
 // =========================================================================
@@ -874,7 +925,141 @@ ZTEST(osal_work_queue, test_config_construction)
     zassert_true(g_wq_executed.load(std::memory_order_acquire), NULL);
 }
 
+struct blocking_work_context
+{
+    struct k_sem entered;
+    struct k_sem release;
+};
+
+static void blocking_work(void* arg)
+{
+    auto* ctx = static_cast<blocking_work_context*>(arg);
+    k_sem_give(&ctx->entered);
+    (void)k_sem_take(&ctx->release, K_FOREVER);
+}
+
+ZTEST(osal_work_queue, test_cancel_keeps_running_slot_owned)
+{
+    osal::work_queue      wq{z_wq_stack, K_THREAD_STACK_SIZEOF(z_wq_stack), 1, "z_cancel"};
+    blocking_work_context ctx{};
+    k_sem_init(&ctx.entered, 0, 1);
+    k_sem_init(&ctx.release, 0, 1);
+    zassert_true(wq.submit(blocking_work, &ctx).ok(), NULL);
+    zassert_equal(k_sem_take(&ctx.entered, K_SECONDS(1)), 0, NULL);
+    const auto cancelled = wq.cancel_all();
+    const auto pending   = wq.pending();
+    const auto submitted = wq.submit([](void*) {});
+    k_sem_give(&ctx.release);
+    zassert_true(cancelled.ok(), NULL);
+    zassert_equal(pending, 1U, "running work must retain its slot");
+    zassert_equal(submitted.code(), osal::error_code::overflow, "running slot must not be reused");
+}
+
+ZTEST(osal_work_queue, test_timed_out_flush_does_not_complete_later_flush)
+{
+    osal::work_queue      wq{z_wq_stack, K_THREAD_STACK_SIZEOF(z_wq_stack), 4, "z_flush"};
+    blocking_work_context ctx{};
+    k_sem_init(&ctx.entered, 0, 1);
+    k_sem_init(&ctx.release, 0, 1);
+    zassert_true(wq.submit(blocking_work, &ctx).ok(), NULL);
+    zassert_equal(k_sem_take(&ctx.entered, K_SECONDS(1)), 0, NULL);
+    zassert_equal(wq.flush(osal::milliseconds{20}).code(), osal::error_code::timeout, NULL);
+    k_sem_give(&ctx.release);
+    // Leave the first flush's completion signal unread.
+    k_sleep(K_MSEC(100));
+    zassert_true(wq.submit(blocking_work, &ctx).ok(), NULL);
+    zassert_equal(k_sem_take(&ctx.entered, K_SECONDS(1)), 0, NULL);
+    const auto second = wq.flush(osal::milliseconds{20});
+    k_sem_give(&ctx.release);
+    zassert_equal(second.code(), osal::error_code::timeout, "stale flush signal must not report completion");
+    zassert_true(wq.flush(osal::milliseconds{1000}).ok(), NULL);
+}
+
+ZTEST(osal_work_queue, test_old_marker_during_later_flush_is_not_completion)
+{
+    osal::work_queue      wq{z_wq_stack, K_THREAD_STACK_SIZEOF(z_wq_stack), 4, "z_marker"};
+    blocking_work_context first{};
+    blocking_work_context second{};
+    k_sem_init(&first.entered, 0, 1);
+    k_sem_init(&first.release, 0, 1);
+    k_sem_init(&second.entered, 0, 1);
+    k_sem_init(&second.release, 0, 1);
+    zassert_true(wq.submit(blocking_work, &first).ok(), NULL);
+    zassert_equal(k_sem_take(&first.entered, K_SECONDS(1)), 0, NULL);
+    zassert_equal(wq.flush(osal::milliseconds{20}).code(), osal::error_code::timeout, NULL);
+    zassert_true(wq.submit(blocking_work, &second).ok(), NULL);
+    osal::timer release_first{[](void* arg) { k_sem_give(static_cast<struct k_sem*>(arg)); }, &first.release,
+                              osal::milliseconds{20}, osal::timer_mode::one_shot};
+    zassert_true(release_first.start().ok(), NULL);
+    const auto result = wq.flush(osal::milliseconds{100});
+    k_sem_give(&first.release);
+    k_sem_give(&second.release);
+    zassert_equal(result.code(), osal::error_code::timeout, "earlier marker cannot satisfy a newer flush");
+    zassert_true(wq.flush(osal::milliseconds{1000}).ok(), NULL);
+}
+
 ZTEST_SUITE(osal_work_queue, NULL, NULL, NULL, NULL, NULL);
+
+struct pool_creation_context
+{
+    struct k_sem*                             ready;
+    struct k_sem*                             release;
+    osal::active_traits::event_flags_handle_t event{};
+    osal::active_traits::condvar_handle_t     condvar{};
+    osal::active_traits::timer_handle_t       timer{};
+    bool                                      valid{};
+};
+
+static void pool_creation_worker(void* arg)
+{
+    auto*      ctx = static_cast<pool_creation_context*>(arg);
+    const auto ev  = osal_event_flags_create(&ctx->event);
+    const auto cv  = osal_condvar_create(&ctx->condvar);
+    const auto tm  = osal_timer_create(&ctx->timer, nullptr, [](void*) {}, ctx, 1U, false);
+    ctx->valid     = ev.ok() && cv.ok() && tm.ok();
+    k_sem_give(ctx->ready);
+    (void)k_sem_take(ctx->release, K_FOREVER);
+    (void)osal_timer_destroy(&ctx->timer);
+    (void)osal_condvar_destroy(&ctx->condvar);
+    (void)osal_event_flags_destroy(&ctx->event);
+}
+
+ZTEST(osal_pools, test_concurrent_creation_reserves_distinct_slots)
+{
+    struct k_sem ready
+    {
+    };
+    struct k_sem release
+    {
+    };
+    k_sem_init(&ready, 0, 2);
+    k_sem_init(&release, 0, 2);
+    pool_creation_context first{&ready, &release};
+    pool_creation_context second{&ready, &release};
+    osal::thread          a;
+    osal::thread          b;
+    osal::thread_config   cfg{};
+    cfg.entry       = pool_creation_worker;
+    cfg.arg         = &first;
+    cfg.stack       = z_test_stack;
+    cfg.stack_bytes = K_THREAD_STACK_SIZEOF(z_test_stack);
+    zassert_true(a.create(cfg).ok(), NULL);
+    cfg.arg         = &second;
+    cfg.stack       = z_xthread_stack;
+    cfg.stack_bytes = K_THREAD_STACK_SIZEOF(z_xthread_stack);
+    zassert_true(b.create(cfg).ok(), NULL);
+    zassert_equal(k_sem_take(&ready, K_SECONDS(1)), 0, NULL);
+    zassert_equal(k_sem_take(&ready, K_SECONDS(1)), 0, NULL);
+    const bool distinct = first.valid && second.valid && first.event.native != second.event.native &&
+                          first.condvar.native != second.condvar.native && first.timer.native != second.timer.native;
+    k_sem_give(&release);
+    k_sem_give(&release);
+    zassert_true(a.join().ok(), NULL);
+    zassert_true(b.join().ok(), NULL);
+    zassert_true(distinct, "concurrent creations must own distinct pool slots");
+}
+
+ZTEST_SUITE(osal_pools, NULL, NULL, NULL, NULL, NULL);
 
 // =========================================================================
 // Delayable Work
@@ -1167,7 +1352,7 @@ ZTEST_SUITE(osal_message_buffer, NULL, NULL, NULL, NULL, NULL);
 
 ZTEST(osal_c_api, test_mutex_round_trip)
 {
-    osal_mutex_handle mtx;
+    osal_mutex_handle mtx{};
     zassert_equal(osal_c_mutex_create(&mtx, 0), OSAL_OK, NULL);
     zassert_equal(osal_c_mutex_lock(&mtx, OSAL_WAIT_FOREVER), OSAL_OK, NULL);
     zassert_equal(osal_c_mutex_unlock(&mtx), OSAL_OK, NULL);
@@ -1176,7 +1361,7 @@ ZTEST(osal_c_api, test_mutex_round_trip)
 
 ZTEST(osal_c_api, test_semaphore_round_trip)
 {
-    osal_semaphore_handle sem;
+    osal_semaphore_handle sem{};
     zassert_equal(osal_c_semaphore_create(&sem, 1, 5), OSAL_OK, NULL);
     zassert_equal(osal_c_semaphore_take(&sem, OSAL_NO_WAIT), OSAL_OK, NULL);
     zassert_equal(osal_c_semaphore_give(&sem), OSAL_OK, NULL);
@@ -1186,7 +1371,7 @@ ZTEST(osal_c_api, test_semaphore_round_trip)
 ZTEST(osal_c_api, test_create_with_cfg)
 {
     const osal_mutex_config cfg = {0};
-    osal_mutex_handle       mtx;
+    osal_mutex_handle       mtx{};
     zassert_equal(osal_c_mutex_create_with_cfg(&mtx, &cfg), OSAL_OK, NULL);
     zassert_equal(osal_c_mutex_lock(&mtx, OSAL_WAIT_FOREVER), OSAL_OK, NULL);
     osal_c_mutex_unlock(&mtx);
@@ -1197,7 +1382,7 @@ ZTEST(osal_c_api, test_stream_buffer_round_trip)
 {
     // Backing storage must be capacity+1 bytes (SPSC sentinel byte).
     static std::uint8_t       sbuf[33];
-    osal_stream_buffer_handle sb;
+    osal_stream_buffer_handle sb{};
     zassert_equal(osal_c_stream_buffer_create(&sb, sbuf, 32, 1), OSAL_OK, NULL);
 
     const std::uint8_t tx[4] = {0xAA, 0xBB, 0xCC, 0xDD};
@@ -1214,7 +1399,7 @@ ZTEST(osal_c_api, test_message_buffer_round_trip)
 {
     // Backing storage must be capacity+1 bytes.
     static std::uint8_t        mbuf[65];
-    osal_message_buffer_handle mb;
+    osal_message_buffer_handle mb{};
     zassert_equal(osal_c_message_buffer_create(&mb, mbuf, 64), OSAL_OK, NULL);
 
     const std::uint8_t msg[4] = {1, 2, 3, 4};
@@ -1231,7 +1416,7 @@ ZTEST(osal_c_api, test_notification_round_trip)
 {
     std::uint32_t            values[2]{};
     std::uint8_t             pending[2]{};
-    osal_notification_handle note;
+    osal_notification_handle note{};
     zassert_equal(osal_c_notification_create(&note, values, pending, 2U), OSAL_OK, NULL);
     zassert_equal(osal_c_notification_notify(&note, 0xBEEFU, OSAL_NOTIFICATION_OVERWRITE, 1U), OSAL_OK, NULL);
     zassert_equal(osal_c_notification_pending(&note, 1U), 1, NULL);
@@ -1249,16 +1434,17 @@ ZTEST(osal_c_api, test_delayable_work_round_trip)
         ztest_test_skip();
     }
 
-    osal_work_queue_handle wq;
+    osal_work_queue_handle wq{};
     zassert_equal(osal_c_work_queue_create(&wq, z_wq_stack, K_THREAD_STACK_SIZEOF(z_wq_stack), 8U, "z_c_dw_wq"),
                   OSAL_OK, NULL);
 
     g_z_c_delayable_count = 0;
-    osal_delayable_work_handle work;
+    osal_delayable_work_handle work{};
     zassert_equal(osal_c_delayable_work_create(&work, &wq, zephyr_c_delayable_cb, &g_z_c_delayable_count, "z_c_dw"),
                   OSAL_OK, NULL);
     zassert_equal(osal_c_delayable_work_schedule(&work, 10U), OSAL_OK, NULL);
-    zassert_equal(osal_c_delayable_work_flush(&work, OSAL_WAIT_FOREVER), OSAL_OK, NULL);
+    zassert_equal(osal_c_delayable_work_flush(&work, osal::clock_utils::ms_to_ticks(osal::milliseconds{1000})), OSAL_OK,
+                  NULL);
     zassert_equal(g_z_c_delayable_count, 1, NULL);
     zassert_equal(osal_c_delayable_work_destroy(&work), OSAL_OK, NULL);
     osal_c_work_queue_destroy(&wq);

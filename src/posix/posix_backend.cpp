@@ -24,6 +24,8 @@
 #endif
 #include <osal/osal.hpp>
 #include "../common/backend_timeout_adapter.hpp"
+#include "../common/posix/posix_mutex_policy.hpp"
+#include "../common/posix/posix_thread_attributes.hpp"
 
 #include <pthread.h>
 #include <semaphore.h>
@@ -352,7 +354,14 @@ extern "C"
                                     osal::priority_t priority, osal::affinity_t affinity, void* stack,
                                     osal::stack_size_t stack_bytes, const char* /*name*/) noexcept
     {
-        assert((handle != nullptr) && (entry != nullptr));
+        if (handle == nullptr || entry == nullptr)
+        {
+            return osal::error_code::invalid_argument;
+        }
+        if (handle->native != nullptr)
+        {
+            return osal::error_code::already_exists;
+        }
 
         auto* ctx = new (std::nothrow) posix_thread_ctx{entry, arg};
         if (ctx == nullptr)
@@ -368,59 +377,27 @@ extern "C"
         }
 
         pthread_attr_t attr{};
-        pthread_attr_init(&attr);
-        pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_JOINABLE);
-
-        if ((stack != nullptr) && (stack_bytes > 0U))
+        const int      initialized = pthread_attr_init(&attr);
+        int            rc          = initialized;
+        if (rc == 0)
         {
-            pthread_attr_setstack(&attr, stack, stack_bytes);
+            rc = osal::detail::configure_pthread_thread_attributes(&attr, priority, affinity, stack, stack_bytes);
         }
-
-        // Set FIFO scheduling if priority != default.
-        if (priority != osal::PRIORITY_NORMAL)
+        if (rc == 0)
         {
-            struct sched_param sp
-            {
-            };
-            const int policy = SCHED_FIFO;
-            const int max_p  = sched_get_priority_max(policy);
-            const int min_p  = sched_get_priority_min(policy);
-            sp.sched_priority =
-                min_p +
-                static_cast<int>((static_cast<std::uint32_t>(priority) * static_cast<std::uint32_t>(max_p - min_p)) /
-                                 static_cast<std::uint32_t>(osal::PRIORITY_HIGHEST));
-            pthread_attr_setschedpolicy(&attr, policy);
-            pthread_attr_setschedparam(&attr, &sp);
-            pthread_attr_setinheritsched(&attr, PTHREAD_EXPLICIT_SCHED);
+            rc = pthread_create(thread_id, &attr, posix_thread_entry, ctx);
         }
-
-        const int rc = pthread_create(thread_id, &attr, posix_thread_entry, ctx);
-        pthread_attr_destroy(&attr);
+        if (initialized == 0)
+        {
+            (void)pthread_attr_destroy(&attr);
+        }
 
         if (rc != 0)
         {
             delete ctx;
             delete thread_id;
-            return osal::error_code::out_of_resources;
+            return osal::detail::pthread_mutex_status(rc);
         }
-
-#if defined(__linux__)
-        if (affinity != osal::AFFINITY_ANY)
-        {
-            cpu_set_t cpuset{};
-            CPU_ZERO(&cpuset);
-            for (int cpu = 0; cpu < kPosixMaxAffinityCpus; ++cpu)
-            {
-                if ((affinity & (1U << static_cast<unsigned>(cpu))) != 0U)
-                {
-                    CPU_SET(cpu, &cpuset);
-                }
-            }
-            pthread_setaffinity_np(*thread_id, sizeof(cpuset), &cpuset);
-        }
-#else
-        (void)affinity;
-#endif
 
         handle->native = thread_id;
         return osal::ok();
@@ -670,7 +647,7 @@ extern "C"
         CPU_ZERO(&cpuset);
         for (int cpu = 0; cpu < kPosixMaxAffinityCpus; ++cpu)
         {
-            if ((affinity & (1U << static_cast<unsigned>(cpu))) != 0U)
+            if (affinity == osal::AFFINITY_ANY || (cpu < 32 && (affinity & (1U << static_cast<unsigned>(cpu))) != 0U))
             {
                 CPU_SET(cpu, &cpuset);
             }
@@ -730,25 +707,8 @@ extern "C"
     /// @retval osal::error_code::out_of_resources Native mutex allocation or initialization failed.
     osal::result osal_mutex_create(osal::active_traits::mutex_handle_t* handle, bool recursive) noexcept
     {
-        auto* m = new (std::nothrow) pthread_mutex_t;
-        if (m == nullptr)
-        {
-            return osal::error_code::out_of_resources;
-        }
-
-        pthread_mutexattr_t attr{};
-        pthread_mutexattr_init(&attr);
-        pthread_mutexattr_settype(&attr, recursive ? PTHREAD_MUTEX_RECURSIVE : PTHREAD_MUTEX_ERRORCHECK);
-        const int rc = pthread_mutex_init(m, &attr);
-        pthread_mutexattr_destroy(&attr);
-
-        if (rc != 0)
-        {
-            delete m;
-            return osal::error_code::out_of_resources;
-        }
-        handle->native = static_cast<void*>(m);
-        return osal::ok();
+        return osal::detail::create_pthread_mutex(handle,
+                                                  {recursive ? osal::mutex_type::recursive : osal::mutex_type::normal});
     }
 
     /// @brief Destroy the pthread_mutex_t and free heap storage.
@@ -760,8 +720,12 @@ extern "C"
         {
             return osal::ok();
         }
-        auto* m = static_cast<pthread_mutex_t*>(handle->native);
-        pthread_mutex_destroy(m);
+        auto*     m      = static_cast<pthread_mutex_t*>(handle->native);
+        const int status = pthread_mutex_destroy(m);
+        if (status != 0)
+        {
+            return osal::detail::pthread_mutex_status(status);
+        }
         delete m;
         handle->native = nullptr;
         return osal::ok();
@@ -784,24 +748,15 @@ extern "C"
         auto* m = static_cast<pthread_mutex_t*>(handle->native);
         if (timeout_ticks == osal::WAIT_FOREVER)
         {
-            return (pthread_mutex_lock(m) == 0) ? osal::ok() : osal::error_code::unknown;
+            return osal::detail::pthread_mutex_status(pthread_mutex_lock(m));
         }
         if (timeout_ticks == osal::NO_WAIT)
         {
             const int rc = pthread_mutex_trylock(m);
-            return (rc == 0) ? osal::ok() : osal::error_code::would_block;
+            return osal::detail::pthread_mutex_status(rc);
         }
         const struct timespec abs = ms_to_abs_timespec_realtime(timeout_ticks);
-        const int             rc  = pthread_mutex_timedlock(m, &abs);
-        if (rc == 0)
-        {
-            return osal::ok();
-        }
-        if (rc == ETIMEDOUT)
-        {
-            return osal::error_code::timeout;
-        }
-        return osal::error_code::unknown;
+        return osal::detail::pthread_mutex_status(pthread_mutex_timedlock(m, &abs));
     }
 
     /// @brief Try to acquire the mutex without blocking.
@@ -833,24 +788,33 @@ extern "C"
     // Semaphore (unnamed POSIX sem_t)
     // ---------------------------------------------------------------------------
 
-    /// @brief Allocate and initialise an unnamed POSIX sem_t via sem_init().
+#include "../common/posix/posix_bounded_semaphore.inl"
+
+    /// @brief Allocate and initialise a bounded POSIX sem_t via sem_init().
     /// @param[out] handle        Output handle that owns a heap-allocated sem_t.
     /// @param[in] initial_count  Starting token count.
+    /// @param[in] max_count      Maximum token count; excess gives return overflow.
     /// @retval osal::ok()                         Semaphore created successfully.
     /// @retval osal::error_code::out_of_resources Native semaphore allocation or initialization failed.
     osal::result osal_semaphore_create(osal::active_traits::semaphore_handle_t* handle, unsigned initial_count,
-                                       unsigned /*max_count*/) noexcept
+                                       unsigned max_count) noexcept
     {
-        auto* s = new (std::nothrow) sem_t;
+        if (handle == nullptr || max_count == 0U || initial_count > max_count)
+        {
+            return osal::error_code::invalid_argument;
+        }
+        auto* s = new (std::nothrow) posix_bounded_semaphore;
         if (s == nullptr)
         {
             return osal::error_code::out_of_resources;
         }
-        if (sem_init(s, 0, initial_count) != 0)
+        if (sem_init(&s->sem, 0, initial_count) != 0)
         {
             delete s;
             return osal::error_code::out_of_resources;
         }
+        s->count.store(initial_count, std::memory_order_relaxed);
+        s->maximum     = max_count;
         handle->native = static_cast<void*>(s);
         return osal::ok();
     }
@@ -864,8 +828,8 @@ extern "C"
         {
             return osal::ok();
         }
-        sem_destroy(static_cast<sem_t*>(handle->native));
-        delete static_cast<sem_t*>(handle->native);
+        sem_destroy(&static_cast<posix_bounded_semaphore*>(handle->native)->sem);
+        delete static_cast<posix_bounded_semaphore*>(handle->native);
         handle->native = nullptr;
         return osal::ok();
     }
@@ -881,7 +845,7 @@ extern "C"
         {
             return osal::error_code::not_initialized;
         }
-        return (sem_post(static_cast<sem_t*>(handle->native)) == 0) ? osal::ok() : osal::error_code::unknown;
+        return bounded_sem_post(static_cast<posix_bounded_semaphore*>(handle->native));
     }
 
     /// @brief Increment the semaphore from ISR context (sem_post is async-signal-safe on POSIX).
@@ -911,23 +875,27 @@ extern "C"
         {
             return osal::error_code::not_initialized;
         }
-        auto* s = static_cast<sem_t*>(handle->native);
+        auto* s = static_cast<posix_bounded_semaphore*>(handle->native);
         if (timeout_ticks == osal::WAIT_FOREVER)
         {
             int rc = 0;
             do
             {
-                rc = sem_wait(s);
+                rc = bounded_sem_complete(s, sem_wait(&s->sem));
             } while (rc == -1 && errno == EINTR);
             return (rc == 0) ? osal::ok() : osal::error_code::unknown;
         }
         if (timeout_ticks == osal::NO_WAIT)
         {
-            const int rc = sem_trywait(s);
+            const int rc = bounded_sem_complete(s, sem_trywait(&s->sem));
             return (rc == 0) ? osal::ok() : osal::error_code::would_block;
         }
         const struct timespec abs = ms_to_abs_timespec_realtime(timeout_ticks);
-        const int             rc  = sem_timedwait(s, &abs);
+        int                   rc{0};
+        do
+        {
+            rc = bounded_sem_complete(s, sem_timedwait(&s->sem, &abs));
+        } while (rc == -1 && errno == EINTR);
         if (rc == 0)
         {
             return osal::ok();
@@ -1201,7 +1169,14 @@ extern "C"
                                    osal_timer_callback_t cb, void* arg, osal::tick_t period_ticks,
                                    bool auto_reload) noexcept
     {
-        assert((handle != nullptr) && (cb != nullptr));
+        if (handle == nullptr || cb == nullptr || period_ticks == 0U)
+        {
+            return osal::error_code::invalid_argument;
+        }
+        if (handle->native != nullptr)
+        {
+            return osal::error_code::already_exists;
+        }
         auto* ctx = new (std::nothrow) posix_timer_ctx{};
         if (ctx == nullptr)
         {
@@ -1322,7 +1297,7 @@ extern "C"
         return result;
     }
 
-    /// @brief Update the timer period and immediately arm it.
+    /// @brief Update the period, preserving stopped state and timer mode.
     /// @param[in] handle  Timer handle.
     /// @param[in] p       New period in OSAL ticks (milliseconds).
     /// @retval osal::ok()                         Period updated and timer armed successfully.
@@ -1341,8 +1316,13 @@ extern "C"
             pthread_mutex_unlock(&ctx->mutex);
             return osal::error_code::not_initialized;
         }
+        if (p == 0U)
+        {
+            pthread_mutex_unlock(&ctx->mutex);
+            return osal::error_code::invalid_argument;
+        }
         ctx->period_ticks         = p;
-        const osal::result result = posix_timer_arm_locked(ctx);
+        const osal::result result = ctx->active ? posix_timer_arm_locked(ctx) : osal::ok();
         pthread_mutex_unlock(&ctx->mutex);
         return result;
     }

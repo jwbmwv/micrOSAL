@@ -46,6 +46,7 @@ if(CONFIG_TESTING_MICROSAL_TEST)
         PRIORITY    ${CONFIG_TESTING_MICROSAL_TEST_PRIORITY}
         SRCS
             src/main.cpp
+            src/osal_c_impl.cpp
             ${MICROSAL_NUTTX_SRC}
         INCLUDE_DIRECTORIES
             ${MICROSAL_INCLUDE_DIR}

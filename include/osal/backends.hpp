@@ -271,6 +271,7 @@ enum class support_requirement
     high_resolution_clock,
     current_cpu_query,
     irq_mask_guard,
+    thread,
 };
 
 namespace detail
@@ -278,6 +279,12 @@ namespace detail
 
 template<support_requirement Requirement, typename Backend>
 struct support_requirement_value;
+
+template<typename Backend>
+struct support_requirement_value<support_requirement::thread, Backend>
+{
+    static constexpr bool value = thread_backend<Backend>;
+};
 
 template<typename Backend>
 struct support_requirement_value<support_requirement::timer, Backend>

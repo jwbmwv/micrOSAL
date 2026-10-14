@@ -5,7 +5,7 @@
 ///          - thread   → OS_TASK_CreateEx / OS_TASK_Terminate
 ///          - mutex    → OS_MUTEX_Create / OS_MUTEX_LockTimed / OS_MUTEX_Unlock
 ///          - semaphore→ OS_SEMAPHORE_Create / OS_SEMAPHORE_TakeTimed / OS_SEMAPHORE_Give
-///          - queue    → OS_QUEUE_Create / OS_QUEUE_Put / OS_QUEUE_GetTimed
+///          - queue    → fixed-size values in caller-owned storage
 ///          - timer    → OS_TIMER_CreateEx / OS_TIMER_Start / OS_TIMER_Stop
 ///          - event_flags→ OS_EVENT_Set / OS_EVENT_GetMaskTimed / OS_EVENT_Reset
 ///
@@ -23,6 +23,8 @@
 #include <osal/osal.hpp>
 
 #include <RTOS.h>  ///< SEGGER embOS header
+#include <atomic>
+#include <limits>
 #include <cassert>
 #include <cstring>
 
@@ -35,26 +37,49 @@
 #define OSAL_EMBOS_MAX_QUEUES 8
 #define OSAL_EMBOS_MAX_TIMERS 8
 #define OSAL_EMBOS_MAX_EVENTS 8
-#define OSAL_EMBOS_QUEUE_BUF_SIZE 1024  // per-queue internal buffer size
 
 // ---------------------------------------------------------------------------
 // Static pools
 // ---------------------------------------------------------------------------
 namespace
 {
+struct bounded_sem_count
+{
+    std::atomic<unsigned> count{};
+    unsigned              maximum{};
 
-OS_TASK      eos_tasks[OSAL_EMBOS_MAX_THREADS];
-bool         eos_task_used[OSAL_EMBOS_MAX_THREADS];
-OS_MUTEX     eos_mutexes[OSAL_EMBOS_MAX_MUTEXES];
-bool         eos_mutex_used[OSAL_EMBOS_MAX_MUTEXES];
-OS_SEMAPHORE eos_sems[OSAL_EMBOS_MAX_SEMS];
-bool         eos_sem_used[OSAL_EMBOS_MAX_SEMS];
+    osal::result reserve() noexcept
+    {
+        unsigned value = count.load(std::memory_order_relaxed);
+        for (unsigned attempt = 0; attempt < 32U; ++attempt)
+        {
+            if (value >= maximum)
+            {
+                return osal::error_code::overflow;
+            }
+            if (count.compare_exchange_weak(value, value + 1U, std::memory_order_relaxed))
+            {
+                return osal::ok();
+            }
+        }
+        return osal::error_code::would_block;
+    }
+};
+static_assert(std::atomic<unsigned>::is_always_lock_free);
+bounded_sem_count eos_sem_counts[OSAL_EMBOS_MAX_SEMS];
+
+OS_TASK           eos_tasks[OSAL_EMBOS_MAX_THREADS];
+std::atomic<bool> eos_task_used[OSAL_EMBOS_MAX_THREADS];
+OS_MUTEX          eos_mutexes[OSAL_EMBOS_MAX_MUTEXES];
+std::atomic<bool> eos_mutex_used[OSAL_EMBOS_MAX_MUTEXES];
+OS_SEMAPHORE      eos_sems[OSAL_EMBOS_MAX_SEMS];
+std::atomic<bool> eos_sem_used[OSAL_EMBOS_MAX_SEMS];
 
 struct eos_queue_slot
 {
-    OS_QUEUE q{};
-    char     buf[OSAL_EMBOS_QUEUE_BUF_SIZE]{};
-    bool     used = false;
+    std::uint8_t*     storage{};
+    std::size_t       item_size{}, capacity{}, head{}, tail{}, count{};
+    std::atomic<bool> used{false};
 };
 eos_queue_slot eos_queues[OSAL_EMBOS_MAX_QUEUES];
 
@@ -65,24 +90,33 @@ struct eos_timer_slot
     void*                 arg         = nullptr;
     OS_TIME               period      = 0;
     bool                  auto_reload = false;
-    bool                  used        = false;
+    std::atomic<bool>     used{false};
+    std::atomic<bool>     callback_gate{false};
+    std::atomic<bool>     ever_started{false};
+    std::atomic<bool>     active{false};
 };
 eos_timer_slot eos_timers[OSAL_EMBOS_MAX_TIMERS];
 
-OS_EVENT eos_events[OSAL_EMBOS_MAX_EVENTS];
-bool     eos_event_used[OSAL_EMBOS_MAX_EVENTS];
+OS_EVENT          eos_events[OSAL_EMBOS_MAX_EVENTS];
+std::atomic<bool> eos_event_used[OSAL_EMBOS_MAX_EVENTS];
+static_assert(std::atomic<bool>::is_always_lock_free);
+
+struct eos_irq_guard
+{
+    eos_irq_guard() { OS_IncDI(); }
+    ~eos_irq_guard() { OS_DecRI(); }
+};
 
 // ---------------------------------------------------------------------------
 // Pool helpers
 // ---------------------------------------------------------------------------
 template<typename T, std::size_t N>
-T* pool_acquire(T (&pool)[N], bool (&used)[N]) noexcept
+T* pool_acquire(T (&pool)[N], std::atomic<bool> (&used)[N]) noexcept
 {
     for (std::size_t i = 0; i < N; ++i)
     {
-        if (!used[i])
+        if (!used[i].exchange(true, std::memory_order_acquire))
         {
-            used[i] = true;
             return &pool[i];
         }
     }
@@ -90,13 +124,13 @@ T* pool_acquire(T (&pool)[N], bool (&used)[N]) noexcept
 }
 
 template<typename T, std::size_t N>
-void pool_release(T (&pool)[N], bool (&used)[N], T* p) noexcept
+void pool_release(T (&pool)[N], std::atomic<bool> (&used)[N], T* p) noexcept
 {
     for (std::size_t i = 0; i < N; ++i)
     {
         if (&pool[i] == p)
         {
-            used[i] = false;
+            used[i].store(false, std::memory_order_release);
             return;
         }
     }
@@ -107,9 +141,8 @@ T* pool_acquire_by_used(T (&pool)[N]) noexcept
 {
     for (std::size_t i = 0; i < N; ++i)
     {
-        if (!pool[i].used)
+        if (!pool[i].used.exchange(true, std::memory_order_acquire))
         {
-            pool[i].used = true;
             return &pool[i];
         }
     }
@@ -123,7 +156,7 @@ void pool_release_by_used(T (&pool)[N], T* p) noexcept
     {
         if (&pool[i] == p)
         {
-            pool[i].used = false;
+            pool[i].used.store(false, std::memory_order_release);
             return;
         }
     }
@@ -164,15 +197,21 @@ constexpr OS_TIME to_embos_ticks(osal::tick_t t) noexcept
 void eos_timer_callback(void* p_arg) noexcept
 {
     auto* slot = static_cast<eos_timer_slot*>(p_arg);
-    if (slot != nullptr && slot->fn != nullptr)
+    if (slot == nullptr || slot->callback_gate.exchange(true, std::memory_order_acquire))
     {
+        return;
+    }
+    if (slot->active && slot->fn != nullptr)
+    {
+        slot->active = slot->auto_reload;
         slot->fn(slot->arg);
     }
-    // Auto-reload: restart the timer
-    if (slot != nullptr && slot->auto_reload)
+    // Retain the lifetime gate through rearm: callback-side destroy must fail.
+    if (slot->active && slot->auto_reload)
     {
         OS_TIMER_StartEx(&slot->tmr);
     }
+    slot->callback_gate.store(false, std::memory_order_release);
 }
 
 }  // namespace
@@ -230,7 +269,14 @@ extern "C"
                                     osal::priority_t priority, osal::affinity_t /*affinity*/, void* stack,
                                     osal::stack_size_t stack_bytes, const char* name) noexcept
     {
-        assert(handle != nullptr && entry != nullptr && stack != nullptr);
+        if (handle == nullptr || entry == nullptr || stack == nullptr || stack_bytes == 0U)
+        {
+            return osal::error_code::invalid_argument;
+        }
+        if (handle->native != nullptr)
+        {
+            return osal::error_code::already_exists;
+        }
         OS_TASK* t = pool_acquire(eos_tasks, eos_task_used);
         if (t == nullptr)
         {
@@ -260,7 +306,7 @@ extern "C"
         return osal::ok();
     }
 
-    /// @brief Detach a task, releasing its pool slot without waiting.
+    /// @brief Detach is unsupported; retain ownership of the live task.
     /// @param[in,out] handle  Task handle to detach.
     /// @retval osal::ok()                         On success.
     /// @retval osal::error_code::not_initialized  If the handle is null.
@@ -270,9 +316,7 @@ extern "C"
         {
             return osal::error_code::not_initialized;
         }
-        pool_release(eos_tasks, eos_task_used, static_cast<OS_TASK*>(handle->native));
-        handle->native = nullptr;
-        return osal::ok();
+        return osal::error_code::not_supported;
     }
 
     /// @brief Change the priority of a running task.
@@ -426,15 +470,22 @@ extern "C"
     /// @retval osal::ok()                          On success.
     /// @retval osal::error_code::out_of_resources  If the pool is exhausted.
     osal::result osal_semaphore_create(osal::active_traits::semaphore_handle_t* handle, unsigned initial_count,
-                                       unsigned /*max_count*/) noexcept
+                                       unsigned max_count) noexcept
     {
+        if (handle == nullptr || max_count == 0U || initial_count > max_count ||
+            max_count > std::numeric_limits<OS_UINT>::max())
+        {
+            return osal::error_code::invalid_argument;
+        }
         OS_SEMAPHORE* s = pool_acquire(eos_sems, eos_sem_used);
         if (s == nullptr)
         {
             return osal::error_code::out_of_resources;
         }
         OS_SEMAPHORE_Create(s, static_cast<OS_UINT>(initial_count));
-        handle->native = static_cast<void*>(s);
+        handle->native                       = static_cast<void*>(s);
+        eos_sem_counts[s - eos_sems].maximum = max_count;
+        eos_sem_counts[s - eos_sems].count.store(initial_count, std::memory_order_relaxed);
         return osal::ok();
     }
 
@@ -463,6 +514,12 @@ extern "C"
         if (handle == nullptr || handle->native == nullptr)
         {
             return osal::error_code::not_initialized;
+        }
+        auto&      count    = eos_sem_counts[static_cast<OS_SEMAPHORE*>(handle->native) - eos_sems];
+        const auto reserved = count.reserve();
+        if (!reserved.ok())
+        {
+            return reserved;
         }
         OS_SEMAPHORE_Give(static_cast<OS_SEMAPHORE*>(handle->native));
         return osal::ok();
@@ -495,15 +552,24 @@ extern "C"
         if (timeout_ticks == osal::WAIT_FOREVER)
         {
             OS_SEMAPHORE_Take(s);
+            eos_sem_counts[s - eos_sems].count.fetch_sub(1U, std::memory_order_relaxed);
             return osal::ok();
         }
         if (timeout_ticks == osal::NO_WAIT)
         {
             const int r = OS_SEMAPHORE_TakeTimed(s, 1U);
+            if (r != 0)
+            {
+                eos_sem_counts[s - eos_sems].count.fetch_sub(1U, std::memory_order_relaxed);
+            }
             return (r != 0) ? osal::ok() : osal::error_code::would_block;
         }
         const int r =
             OS_SEMAPHORE_TakeTimed(s, to_embos_ticks(timeout_ticks));  // NOLINT(cppcoreguidelines-init-variables)
+        if (r != 0)
+        {
+            eos_sem_counts[s - eos_sems].count.fetch_sub(1U, std::memory_order_relaxed);
+        }
         return (r != 0) ? osal::ok() : osal::error_code::timeout;
     }
 
@@ -517,25 +583,32 @@ extern "C"
     }
 
     // ---------------------------------------------------------------------------
-    // Queue (OS_QUEUE — embOS message queue)
+    // Queue (fixed-size values in caller-owned storage)
     // ---------------------------------------------------------------------------
 
     /// @brief Create an embOS message queue backed by an internal static buffer.
     /// @param[out] handle    Output handle populated with the eos_queue_slot pointer.
-    /// @param[in] item_size  Size in bytes of each message (informational; internal buffer is fixed).
+    /// @param[in] item_size  Exact size in bytes of each message.
     /// @retval osal::ok()                          On success.
     /// @retval osal::error_code::out_of_resources  If the pool is exhausted.
-    osal::result osal_queue_create(osal::active_traits::queue_handle_t* handle, void* /*buffer*/, std::size_t item_size,
-                                   std::size_t /*capacity*/) noexcept
+    osal::result osal_queue_create(osal::active_traits::queue_handle_t* handle, void* buffer, std::size_t item_size,
+                                   std::size_t capacity) noexcept
     {
-        (void)item_size;
+        if (handle == nullptr || buffer == nullptr || item_size == 0U || capacity == 0U ||
+            capacity > std::numeric_limits<std::size_t>::max() / item_size)
+        {
+            return osal::error_code::invalid_argument;
+        }
         auto* slot = pool_acquire_by_used(eos_queues);
         if (slot == nullptr)
         {
             return osal::error_code::out_of_resources;
         }
-        OS_QUEUE_Create(&slot->q, slot->buf, static_cast<OS_UINT>(sizeof(slot->buf)));
-        handle->native = static_cast<void*>(slot);
+        slot->storage   = static_cast<std::uint8_t*>(buffer);
+        slot->item_size = item_size;
+        slot->capacity  = capacity;
+        slot->head = slot->tail = slot->count = 0U;
+        handle->native                        = static_cast<void*>(slot);
         return osal::ok();
     }
 
@@ -549,30 +622,54 @@ extern "C"
             return osal::ok();
         }
         auto* slot = static_cast<eos_queue_slot*>(handle->native);
-        OS_QUEUE_Delete(&slot->q);
         pool_release_by_used(eos_queues, slot);
         handle->native = nullptr;
         return osal::ok();
     }
 
-    /// @brief Send a message to a queue via OS_QUEUE_Put() (non-blocking).
+    /// @brief Copy a value into the queue, waiting for room when requested.
     /// @param[in] handle         Queue handle.
     /// @param[in] item           Pointer to the message data to enqueue.
-    /// @param[in] timeout_ticks  Timeout argument (currently unused; embOS Put is non-blocking).
+    /// @param[in] timeout_ticks  Maximum wait in OSAL ticks.
     /// @retval osal::ok()                     On success.
     /// @retval osal::error_code::would_block  If the queue is full.
     osal::result osal_queue_send(osal::active_traits::queue_handle_t* handle, const void* item,
                                  osal::tick_t timeout_ticks) noexcept
     {
-        (void)timeout_ticks;
         if (handle == nullptr || handle->native == nullptr)
         {
             return osal::error_code::not_initialized;
         }
-        auto* slot = static_cast<eos_queue_slot*>(handle->native);
-        // embOS OS_QUEUE_Put sends a sized message
-        const int r = OS_QUEUE_Put(&slot->q, item, static_cast<OS_UINT>(sizeof(void*)));
-        return (r == 0) ? osal::ok() : osal::error_code::would_block;
+        if (item == nullptr)
+        {
+            return osal::error_code::invalid_argument;
+        }
+        auto*      slot  = static_cast<eos_queue_slot*>(handle->native);
+        const auto start = OS_TIME_Get();
+        for (;;)
+        {
+            {
+                eos_irq_guard guard;
+                if (slot->count < slot->capacity)
+                {
+                    std::memcpy(slot->storage + slot->tail * slot->item_size, item, slot->item_size);
+                    slot->tail = (slot->tail + 1U) % slot->capacity;
+                    ++slot->count;
+                    return osal::ok();
+                }
+            }
+            if (timeout_ticks == osal::NO_WAIT)
+            {
+                return osal::error_code::would_block;
+            }
+            if (timeout_ticks != osal::WAIT_FOREVER &&
+                static_cast<osal::tick_t>(static_cast<OS_U32>(OS_TIME_Get()) - static_cast<OS_U32>(start)) >=
+                    timeout_ticks)
+            {
+                return osal::error_code::timeout;
+            }
+            OS_TASK_Delay(1);
+        }
     }
 
     /// @brief Send a message from an ISR context (delegates to osal_queue_send with NO_WAIT).
@@ -599,20 +696,36 @@ extern "C"
         {
             return osal::error_code::not_initialized;
         }
-        auto* slot = static_cast<eos_queue_slot*>(handle->native);
-
-        if (timeout_ticks == osal::WAIT_FOREVER)
+        if (item == nullptr)
         {
-            OS_QUEUE_GetPtr(&slot->q, nullptr);  // blocks until message available
-            return osal::ok();
+            return osal::error_code::invalid_argument;
         }
-        const int r =  // NOLINT(cppcoreguidelines-init-variables)
-            OS_QUEUE_GetTimed(&slot->q, item, static_cast<OS_UINT>(sizeof(void*)), to_embos_ticks(timeout_ticks));
-        if (r != 0)
+        auto*      slot  = static_cast<eos_queue_slot*>(handle->native);
+        const auto start = OS_TIME_Get();
+        for (;;)
         {
-            return osal::ok();
+            {
+                eos_irq_guard guard;
+                if (slot->count != 0U)
+                {
+                    std::memcpy(item, slot->storage + slot->head * slot->item_size, slot->item_size);
+                    slot->head = (slot->head + 1U) % slot->capacity;
+                    --slot->count;
+                    return osal::ok();
+                }
+            }
+            if (timeout_ticks == osal::NO_WAIT)
+            {
+                return osal::error_code::would_block;
+            }
+            if (timeout_ticks != osal::WAIT_FOREVER &&
+                static_cast<osal::tick_t>(static_cast<OS_U32>(OS_TIME_Get()) - static_cast<OS_U32>(start)) >=
+                    timeout_ticks)
+            {
+                return osal::error_code::timeout;
+            }
+            OS_TASK_Delay(1);
         }
-        return (timeout_ticks == osal::NO_WAIT) ? osal::error_code::would_block : osal::error_code::timeout;
     }
 
     /// @brief Receive a message from an ISR context (delegates to osal_queue_receive with NO_WAIT).
@@ -642,16 +755,21 @@ extern "C"
         {
             return 0U;
         }
-        const auto* slot = static_cast<const eos_queue_slot*>(handle->native);
-        return static_cast<std::size_t>(OS_QUEUE_GetMessageCnt(&slot->q));
+        eos_irq_guard guard;
+        const auto*   slot = static_cast<const eos_queue_slot*>(handle->native);
+        return slot->count;
     }
 
-    /// @brief Return the number of free slots in the queue (not exposed by embOS).
-    /// @return Always 0; embOS does not provide a free-count API.
-    std::size_t osal_queue_free(const osal::active_traits::queue_handle_t* /*handle*/) noexcept
+    /// @brief Return the number of free slots in the value queue.
+    std::size_t osal_queue_free(const osal::active_traits::queue_handle_t* handle) noexcept
     {
-        // embOS does not expose a free-count API directly
-        return 0U;
+        if (handle == nullptr || handle->native == nullptr)
+        {
+            return 0U;
+        }
+        eos_irq_guard guard;
+        const auto*   slot = static_cast<const eos_queue_slot*>(handle->native);
+        return slot->capacity - slot->count;
     }
 
     // ---------------------------------------------------------------------------
@@ -670,7 +788,15 @@ extern "C"
                                    osal_timer_callback_t callback, void* arg, osal::tick_t period_ticks,
                                    bool auto_reload) noexcept
     {
-        assert(handle != nullptr && callback != nullptr);
+        if (handle == nullptr || callback == nullptr || period_ticks == 0U || period_ticks == osal::WAIT_FOREVER ||
+            period_ticks > static_cast<osal::tick_t>(std::numeric_limits<OS_TIME>::max()))
+        {
+            return osal::error_code::invalid_argument;
+        }
+        if (handle->native != nullptr)
+        {
+            return osal::error_code::already_exists;
+        }
         auto* slot = pool_acquire_by_used(eos_timers);
         if (slot == nullptr)
         {
@@ -680,6 +806,9 @@ extern "C"
         slot->arg         = arg;
         slot->period      = static_cast<OS_TIME>(period_ticks);
         slot->auto_reload = auto_reload;
+        slot->callback_gate.store(false, std::memory_order_release);
+        slot->ever_started.store(false, std::memory_order_relaxed);
+        slot->active.store(false, std::memory_order_relaxed);
 
         OS_TIMER_CreateEx(&slot->tmr, eos_timer_callback, slot->period, slot);
         handle->native = static_cast<void*>(slot);
@@ -688,7 +817,8 @@ extern "C"
 
     /// @brief Destroy a timer and release its pool slot.
     /// @param[in,out] handle  Timer handle; no-op if null or already destroyed.
-    /// @retval osal::ok()  Always.
+    /// @retval osal::ok()  On destruction.
+    /// @retval osal::error_code::not_supported  During callback dispatch/rearm; ownership is unchanged.
     osal::result osal_timer_destroy(osal::active_traits::timer_handle_t* handle) noexcept
     {
         if (handle == nullptr || handle->native == nullptr)
@@ -696,8 +826,19 @@ extern "C"
             return osal::ok();
         }
         auto* slot = static_cast<eos_timer_slot*>(handle->native);
+        // Native deletion is not a verified callback-dispatch barrier.
+        if (slot->ever_started.load(std::memory_order_acquire))
+        {
+            return osal::error_code::not_supported;
+        }
+        if (slot->callback_gate.exchange(true, std::memory_order_acquire))
+        {
+            return osal::error_code::not_supported;
+        }
         OS_TIMER_DeleteEx(&slot->tmr);
-        slot->fn = nullptr;
+        slot->fn          = nullptr;
+        slot->auto_reload = false;
+        // Keep the gate closed until a subsequent create initializes this slot.
         pool_release_by_used(eos_timers, slot);
         handle->native = nullptr;
         return osal::ok();
@@ -713,7 +854,14 @@ extern "C"
         {
             return osal::error_code::not_initialized;
         }
-        OS_TIMER_StartEx(&static_cast<eos_timer_slot*>(handle->native)->tmr);
+        auto* slot = static_cast<eos_timer_slot*>(handle->native);
+        if (slot->ever_started.exchange(true, std::memory_order_acq_rel))
+        {
+            return osal::error_code::not_supported;
+        }
+        slot->active = true;
+        OS_TIMER_SetPeriodEx(&slot->tmr, slot->period);
+        OS_TIMER_StartEx(&slot->tmr);
         return osal::ok();
     }
 
@@ -727,7 +875,14 @@ extern "C"
         {
             return osal::error_code::not_initialized;
         }
-        OS_TIMER_StopEx(&static_cast<eos_timer_slot*>(handle->native)->tmr);
+        auto* slot = static_cast<eos_timer_slot*>(handle->native);
+        if (slot->callback_gate.exchange(true, std::memory_order_acquire))
+        {
+            return osal::error_code::not_supported;
+        }
+        slot->active = false;
+        OS_TIMER_StopEx(&slot->tmr);
+        slot->callback_gate.store(false, std::memory_order_release);
         return osal::ok();
     }
 
@@ -736,7 +891,11 @@ extern "C"
     /// @return osal::ok() on success; forwarded error from osal_timer_start().
     osal::result osal_timer_reset(osal::active_traits::timer_handle_t* handle) noexcept
     {
-        osal_timer_stop(handle);
+        const auto stopped = osal_timer_stop(handle);
+        if (!stopped.ok())
+        {
+            return stopped;
+        }
         return osal_timer_start(handle);
     }
 
@@ -752,9 +911,22 @@ extern "C"
         {
             return osal::error_code::not_initialized;
         }
-        auto* slot   = static_cast<eos_timer_slot*>(handle->native);
+        auto* slot = static_cast<eos_timer_slot*>(handle->native);
+        if (slot->active.load(std::memory_order_acquire))
+        {
+            return osal::error_code::not_supported;
+        }
+        if (new_period_ticks == 0U || new_period_ticks == osal::WAIT_FOREVER ||
+            new_period_ticks > static_cast<osal::tick_t>(std::numeric_limits<OS_TIME>::max()))
+        {
+            return osal::error_code::invalid_argument;
+        }
+        if (slot->callback_gate.exchange(true, std::memory_order_acquire))
+        {
+            return osal::error_code::not_supported;
+        }
         slot->period = static_cast<OS_TIME>(new_period_ticks);
-        OS_TIMER_SetPeriodEx(&slot->tmr, slot->period);
+        slot->callback_gate.store(false, std::memory_order_release);
         return osal::ok();
     }
 
@@ -835,13 +1007,7 @@ extern "C"
         {
             return osal::error_code::not_initialized;
         }
-        OS_EVENT_Reset(static_cast<OS_EVENT*>(handle->native));
-        (void)bits;
-        // There's no selective clear in embOS; Reset clears all.
-        // We re-set the bits that shouldn't be cleared.
-        OS_EVENT_MASK current = OS_EVENT_Get(static_cast<OS_EVENT*>(handle->native));
-        (void)current;
-        // Note: embOS Reset clears all flags. Best-effort: set remaining bits.
+        OS_EVENT_ResetMask(static_cast<OS_EVENT*>(handle->native), static_cast<OS_EVENT_MASK>(bits));
         return osal::ok();
     }
 

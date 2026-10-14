@@ -8,7 +8,8 @@
 ///          - Circular-buffer queue protected by critical sections
 ///          - Software timer driven by a user-supplied `SysTick` handler
 ///          - Event flags using atomic bit operations
-///          - Static cooperative thread "tasks" with setjmp/longjmp
+///          - Hosted test-only cooperative tasks with caller-owned ucontext stacks
+///          - Production stackful task creation is unsupported without platform context support
 ///          - No wait_set
 ///
 /// @par Critical section macros (override before including this file):
@@ -48,7 +49,6 @@
 
 #include <cstring>
 #include <cassert>
-#include <csetjmp>
 #include <cstdint>
 #include <atomic>
 #if defined(OSAL_BM_TEST_SELF_TICK)
@@ -113,6 +113,16 @@ inline void bm_exit_critical() noexcept
 // ---------------------------------------------------------------------------
 namespace
 {
+struct bm_pool_guard
+{
+    bm_pool_guard() noexcept { OSAL_BM_ENTER_CRITICAL(); }
+    ~bm_pool_guard() noexcept { OSAL_BM_EXIT_CRITICAL(); }
+    bm_pool_guard(const bm_pool_guard&)            = delete;
+    bm_pool_guard& operator=(const bm_pool_guard&) = delete;
+    bm_pool_guard(bm_pool_guard&&)                 = delete;
+    bm_pool_guard& operator=(bm_pool_guard&&)      = delete;
+};
+
 std::atomic<std::uint64_t> g_ticks{0U};
 
 inline std::uint64_t bm_ticks_now() noexcept
@@ -190,7 +200,7 @@ extern "C"
     }
 
     // ---------------------------------------------------------------------------
-    // Thread — cooperative tasks using setjmp/longjmp
+    // Thread — hosted cooperative tasks; no portable production stack switching
     // ---------------------------------------------------------------------------
     /// @note Bare-metal "threads" are cooperative: thread_yield() switches to the
     ///       next ready task.  There is no pre-emption.
@@ -209,8 +219,6 @@ extern "C"
     {
 #if defined(OSAL_BM_TEST_SELF_TICK)
         ucontext_t ctx;
-#else
-        jmp_buf ctx;
 #endif
         std::uint8_t flags;  ///< BM_TASK_* bitmask — replaces five separate bool fields
         void (*entry)(void*);
@@ -222,17 +230,12 @@ extern "C"
     namespace
     {
     bm_task bm_tasks[OSAL_BM_MAX_TASKS];
-    int     bm_current         = -1;  ///< Index of currently running task; -1 = caller/scheduler context.
-    int     bm_last_scheduled  = -1;
-    bool    bm_sched_ctx_valid = false;
+    int     bm_current = -1;  ///< Index of currently running task; -1 = caller/scheduler context.
 #if defined(OSAL_BM_TEST_SELF_TICK)
+    int        bm_last_scheduled  = -1;
+    bool       bm_sched_ctx_valid = false;
     ucontext_t bm_sched_ctx;  ///< Caller context returned to when no peer task can run.
-#else
-    jmp_buf bm_sched_ctx;  ///< Caller context returned to when no peer task can run.
-#endif
-
-#if defined(OSAL_BM_TEST_SELF_TICK)
-    int bm_find_next_ready_task(int current, bool include_waiting) noexcept
+    int        bm_find_next_ready_task(int current, bool include_waiting) noexcept
     {
         const int anchor = (current < 0) ? bm_last_scheduled : current;
         const int start  = (anchor < 0) ? 0 : ((anchor + 1) % OSAL_BM_MAX_TASKS);
@@ -316,46 +319,6 @@ extern "C"
             bm_current = previous;
         }
     }
-#else
-
-    /// @brief Internal cooperative scheduler — invoked by yield and sleep.
-    void bm_schedule() noexcept
-    {
-        const int current = bm_current;
-        const int start   = (current < 0) ? 0 : ((current + 1) % OSAL_BM_MAX_TASKS);
-
-        for (int i = 0; i < OSAL_BM_MAX_TASKS; ++i)
-        {
-            const int idx = (start + i) % OSAL_BM_MAX_TASKS;
-            if (idx == current)
-            {
-                continue;
-            }
-            if ((bm_tasks[idx].flags & BM_TASK_VALID) != 0U && (bm_tasks[idx].flags & BM_TASK_FINISHED) == 0U)
-            {
-                bm_current = idx;
-                if ((bm_tasks[idx].flags & BM_TASK_STARTED) == 0U)
-                {
-                    bm_tasks[idx].flags |= BM_TASK_STARTED;
-                    // Call entry directly (no stack switching here — user provides stack via config).
-                    bm_tasks[idx].entry(bm_tasks[idx].arg);
-                    bm_tasks[idx].flags |= BM_TASK_FINISHED;
-                    bm_current = current;
-                }
-                else
-                {
-                    longjmp(bm_tasks[idx].ctx, 1);
-                }
-                return;
-            }
-        }
-
-        if (current >= 0 && bm_sched_ctx_valid)
-        {
-            bm_current = -1;
-            longjmp(bm_sched_ctx, 1);
-        }
-    }
 #endif
     }  // namespace
 
@@ -363,15 +326,25 @@ extern "C"
     /// @param[out] handle      Output handle; `handle->native` points to the `bm_task` slot.
     /// @param[in] entry        Task entry function.
     /// @param[in] arg          Argument passed to @p entry at first call.
-    /// @param[in] stack        Caller-supplied stack buffer (stored but not mapped).
+    /// @param[in] stack        Caller-supplied stack buffer, used only by hosted ucontext tests.
     /// @param[in] stack_bytes  Stack buffer size in bytes.
     /// @retval osal::ok()                    On success.
     /// @retval error_code::out_of_resources  If `OSAL_BM_MAX_TASKS` is full.
+    /// @retval error_code::not_supported     Production builds have no platform stack-switch context.
     osal::result osal_thread_create(osal::active_traits::thread_handle_t* handle, void (*entry)(void*), void* arg,
                                     osal::priority_t /*priority*/, osal::affinity_t /*affinity*/, void*       stack,
                                     osal::stack_size_t stack_bytes, const char* /*name*/) noexcept
     {
         assert(handle != nullptr && entry != nullptr);
+#if !defined(OSAL_BM_TEST_SELF_TICK)
+        (void)arg;
+        (void)stack;
+        (void)stack_bytes;
+        handle->native = nullptr;
+        // setjmp cannot resume an unwound shared stack. No production context port is provided.
+        return osal::error_code::not_supported;
+#else
+        const bm_pool_guard guard;
         for (auto& task : bm_tasks)
         {
             if ((task.flags & BM_TASK_VALID) == 0U)
@@ -397,6 +370,7 @@ extern "C"
             }
         }
         return osal::error_code::out_of_resources;
+#endif
     }
 
     /// @brief Yield until the target task finishes, with optional tick deadline.
@@ -470,7 +444,7 @@ extern "C"
         return osal::error_code::not_supported;
     }
 
-    /// @brief Cooperatively yield to the next ready task via `setjmp`/`bm_schedule()`.
+    /// @brief Yield hosted test tasks; production has no stackful scheduler.
     void osal_thread_yield() noexcept
     {
         bm_maybe_self_tick();
@@ -486,23 +460,6 @@ extern "C"
         }
 
         bm_schedule();
-#else
-        if (bm_current < 0)
-        {
-            const bool previous_sched_ctx_valid = bm_sched_ctx_valid;
-            bm_sched_ctx_valid                  = true;
-            if (setjmp(bm_sched_ctx) == 0)
-            {
-                bm_schedule();
-            }
-            bm_sched_ctx_valid = previous_sched_ctx_valid;
-            return;
-        }
-
-        if (setjmp(bm_tasks[bm_current].ctx) == 0)
-        {
-            bm_schedule();
-        }
 #endif
     }
 
@@ -566,6 +523,7 @@ extern "C"
     /// @retval error_code::out_of_resources  If `OSAL_BM_MAX_MUTEXES` is full.
     osal::result osal_mutex_create(osal::active_traits::mutex_handle_t* handle, bool /*recursive*/) noexcept
     {
+        const bm_pool_guard guard;
         for (int i = 0; i < OSAL_BM_MAX_MUTEXES; ++i)
         {
             if ((bm_mutex_used_bits[i / 8] & static_cast<std::uint8_t>(1U << (i % 8))) == 0U)
@@ -588,6 +546,7 @@ extern "C"
         {
             return osal::ok();
         }
+        const bm_pool_guard guard;
         for (int i = 0; i < OSAL_BM_MAX_MUTEXES; ++i)
         {
             if (&bm_mutex_pool[i] == handle->native)
@@ -683,6 +642,7 @@ extern "C"
         {
             return osal::error_code::invalid_argument;
         }
+        const bm_pool_guard guard;
         for (int i = 0; i < OSAL_BM_MAX_SEMS; ++i)
         {
             if ((bm_sem_used_bits[i / 8] & static_cast<std::uint8_t>(1U << (i % 8))) == 0U)
@@ -706,6 +666,7 @@ extern "C"
         {
             return osal::ok();
         }
+        const bm_pool_guard guard;
         for (int i = 0; i < OSAL_BM_MAX_SEMS; ++i)
         {
             if (&bm_sem_pool[i] == handle->native)
@@ -776,6 +737,10 @@ extern "C"
             }
             else
             {
+                if (timeout == osal::NO_WAIT)
+                {
+                    return osal::error_code::would_block;
+                }
                 if (bm_ticks_now() >= deadline)
                 {
                     return osal::error_code::timeout;
@@ -788,7 +753,7 @@ extern "C"
     /// @brief Try to decrement the semaphore without blocking.
     /// @param[in] handle  Semaphore handle.
     /// @retval osal::ok()           If decremented.
-    /// @retval error_code::timeout  Otherwise.
+    /// @retval error_code::would_block  If no permit is available.
     osal::result osal_semaphore_try_take(osal::active_traits::semaphore_handle_t* handle) noexcept
     {
         return osal_semaphore_take(handle, osal::NO_WAIT);
@@ -822,6 +787,7 @@ extern "C"
     osal::result osal_queue_create(osal::active_traits::queue_handle_t* handle, void* buf, std::size_t item_size,
                                    std::size_t capacity) noexcept
     {
+        const bm_pool_guard guard;
         for (int i = 0; i < OSAL_BM_MAX_QUEUES; ++i)
         {
             if ((bm_queue_used_bits[i / 8] & static_cast<std::uint8_t>(1U << (i % 8))) == 0U)
@@ -844,6 +810,7 @@ extern "C"
         {
             return osal::ok();
         }
+        const bm_pool_guard guard;
         for (int i = 0; i < OSAL_BM_MAX_QUEUES; ++i)
         {
             if (&bm_queue_pool[i] == handle->native)
@@ -1076,6 +1043,7 @@ extern "C"
                                    osal_timer_callback_t cb, void* arg, osal::tick_t period, bool auto_reload) noexcept
     {
         assert(handle != nullptr && cb != nullptr);
+        const bm_pool_guard guard;
         for (auto& timer : bm_timer_pool)
         {
             if (!timer.valid)
@@ -1097,6 +1065,7 @@ extern "C"
         {
             return osal::ok();
         }
+        const bm_pool_guard guard;
         static_cast<bm_timer*>(handle->native)->valid = false;
         handle->native                                = nullptr;
         return osal::ok();

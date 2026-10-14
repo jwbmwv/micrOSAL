@@ -62,13 +62,18 @@ static std::atomic_bool  emu_mpool_used[OSAL_EMULATED_MPOOL_POOL_SIZE];
 
 static emulated_pool_obj* emu_mpool_acquire() noexcept
 {
+    auto& diagnostics = osal::diagnostics(osal::diagnostic_resource::emulated_memory_pool);
+    diagnostics.set_capacity(OSAL_EMULATED_MPOOL_POOL_SIZE);
     for (std::size_t i = 0U; i < OSAL_EMULATED_MPOOL_POOL_SIZE; ++i)
     {
         if (!emu_mpool_used[i].exchange(true, std::memory_order_acq_rel))
         {
+            diagnostics.attempt(osal::ok());
+            diagnostics.acquire();
             return &emu_mpool_pool[i];
         }
     }
+    diagnostics.attempt(osal::error_code::out_of_resources);
     return nullptr;
 }
 
@@ -78,6 +83,7 @@ static void emu_mpool_release(emulated_pool_obj* p) noexcept
     {
         if (&emu_mpool_pool[i] == p)
         {
+            osal::diagnostics(osal::diagnostic_resource::emulated_memory_pool).release();
             emu_mpool_used[i].store(false, std::memory_order_release);
             return;
         }
