@@ -883,8 +883,7 @@ extern "C"
         }
         if (osTimerIsRunning(slot->id) != 0U)
         {
-            if (osTimerStop(slot->id) != osOK ||
-                osTimerStart(slot->id, static_cast<uint32_t>(new_period_ticks)) != osOK)
+            if (osTimerStart(slot->id, static_cast<uint32_t>(new_period_ticks)) != osOK)
             {
                 return osal::error_code::unknown;
             }
