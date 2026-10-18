@@ -314,7 +314,7 @@ toolchain and core support them.
 | Bare-metal | CTest / doctest | Native process with hosted self-tick/context helper | ✅ hosted regression only; production threads unsupported |
 | RTEMS | CTest / doctest | Native process | ✅ hosted binaries configured in CI |
 | INTEGRITY | CTest / doctest | Native process | ✅ hosted binaries configured in CI |
-| FreeRTOS v11 | CTest / doctest | POSIX sim | ⚠️ static/dynamic suites available; intermittent static pool-stress hang remains unresolved |
+| FreeRTOS v11 | CTest / doctest | POSIX sim | ✅ static/dynamic suites; 64 cases / 1378 assertions and 10 repeated full-suite passes each |
 | NuttX (`sim/nsh`) | printf framework | NuttX sim on x86-64 Linux | ✅ 30/30 last recorded rerun |
 | Zephyr (`native_sim`) | west twister / ztest | Native process | ✅ 194/194 locally rerun across 2 configs |
 | Zephyr (`nrf52840dk`) | west twister / ztest | Renode v1.15.3 | ⚠️ 79/79 last recorded rerun on the pre-thread-introspection suite |
