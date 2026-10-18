@@ -51,8 +51,15 @@ public:
     using value_type  = T;
     using observer_fn = void (*)(const T&) noexcept;
 
+    [[nodiscard]] bool valid() const noexcept { return mutex_.valid(); }
+
     [[nodiscard]] bool subscribe(subscriber_id& out_id) noexcept
     {
+        if (!valid())
+        {
+            out_id = invalid_subscriber_id;
+            return false;
+        }
         scoped_lock lk{mutex_};
         for (std::size_t i = 0U; i < MaxSubscribers; ++i)
         {
@@ -77,6 +84,10 @@ public:
 
     [[nodiscard]] bool unsubscribe(subscriber_id id) noexcept
     {
+        if (!valid())
+        {
+            return false;
+        }
         scoped_lock       lk{mutex_};
         const std::size_t slot_index = slot_index_from_id_(id);
         if (slot_index >= MaxSubscribers || !subscriber_id_matches_slot_(id, slot_index))
@@ -84,6 +95,10 @@ public:
             return false;
         }
 
+        if (slots_[slot_index].receivers_ != 0U)
+        {
+            return false;
+        }
         slots_[slot_index].in_use_ = false;
         advance_subscriber_generation_(slot_index);
         --subscriber_count_;
@@ -92,6 +107,10 @@ public:
 
     [[nodiscard]] bool publish(const T& msg) noexcept
     {
+        if (!valid())
+        {
+            return false;
+        }
         scoped_lock lk{mutex_};
         bool        any = false;
         for (auto& slot : slots_)
@@ -106,6 +125,11 @@ public:
 
     [[nodiscard]] bool try_receive(subscriber_id id, T& out) noexcept
     {
+        if (!valid())
+        {
+            return false;
+        }
+        scoped_lock       lk{mutex_};
         const std::size_t slot_index = slot_index_from_id_(id);
         if (slot_index >= MaxSubscribers || !subscriber_id_matches_slot_(id, slot_index))
         {
@@ -117,18 +141,30 @@ public:
 
     [[nodiscard]] bool receive(subscriber_id id, T& out, tick_t timeout = WAIT_FOREVER) noexcept
     {
-        const std::size_t slot_index = slot_index_from_id_(id);
-        if (slot_index >= MaxSubscribers || !subscriber_id_matches_slot_(id, slot_index))
+        if (!valid())
         {
             return false;
         }
-
-        return slots_[slot_index].queue_.receive(out, timeout);
+        const std::size_t slot_index = slot_index_from_id_(id);
+        {
+            scoped_lock lk{mutex_};
+            if (slot_index >= MaxSubscribers || !subscriber_id_matches_slot_(id, slot_index))
+            {
+                return false;
+            }
+            ++slots_[slot_index].receivers_;
+        }
+        const bool received = slots_[slot_index].queue_.receive(out, timeout);
+        {
+            scoped_lock lk{mutex_};
+            --slots_[slot_index].receivers_;
+        }
+        return received;
     }
 
     [[nodiscard]] bool native_subscribe_observer(observer_fn fn) noexcept
     {
-        if (fn == nullptr)
+        if ((fn == nullptr) || !valid())
         {
             return false;
         }
@@ -145,7 +181,7 @@ public:
 
     [[nodiscard]] bool native_unsubscribe_observer(observer_fn fn) noexcept
     {
-        if (fn == nullptr)
+        if ((fn == nullptr) || !valid())
         {
             return false;
         }
@@ -164,10 +200,22 @@ public:
         return false;
     }
 
-    [[nodiscard]] std::size_t native_observer_count() const noexcept { return observer_count_; }
+    [[nodiscard]] std::size_t native_observer_count() const noexcept
+    {
+        if (!valid())
+        {
+            return 0U;
+        }
+        scoped_lock lk{mutex_};
+        return observer_count_;
+    }
 
     [[nodiscard]] bool native_publish_observers(const T& msg) noexcept
     {
+        if (!valid())
+        {
+            return false;
+        }
         detail::bounded_vector<observer_fn, MaxSubscribers> snapshot;
 
         {
@@ -190,7 +238,15 @@ public:
         return any;
     }
 
-    [[nodiscard]] std::size_t subscriber_count() const noexcept { return subscriber_count_; }
+    [[nodiscard]] std::size_t subscriber_count() const noexcept
+    {
+        if (!valid())
+        {
+            return 0U;
+        }
+        scoped_lock lk{mutex_};
+        return subscriber_count_;
+    }
 
     static constexpr std::size_t max_subscribers() noexcept { return MaxSubscribers; }
 
@@ -210,6 +266,7 @@ private:
     {
         subscriber_generation_t                         generation_{0U};
         bool                                            in_use_{false};
+        std::size_t                                     receivers_{0U};
         osal_bus<T, PerSubCapacity, bus_backend_zephyr> queue_{};
     };
 
@@ -316,7 +373,7 @@ private:
 
     std::array<subscriber_slot, MaxSubscribers> slots_{};
     std::array<observer_fn, MaxSubscribers>     observers_{};
-    mutex                                       mutex_{};
+    mutable mutex                               mutex_{};
     std::size_t                                 observer_count_{0U};
     std::size_t                                 subscriber_count_{0U};
 };

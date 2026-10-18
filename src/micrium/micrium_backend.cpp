@@ -5,7 +5,7 @@
 ///          - thread   → OSTaskCreate / OSTaskDel
 ///          - mutex    → OSMutexCreate / OSMutexPend / OSMutexPost
 ///          - semaphore→ OSSemCreate / OSSemPend / OSSemPost
-///          - queue    → OSQCreate / OSQPend / OSQPost
+///          - queue    → fixed-size values in caller-owned storage
 ///          - timer    → OSTmrCreate / OSTmrStart / OSTmrStop
 ///          - event_flags → OSFlagCreate / OSFlagPend / OSFlagPost
 ///
@@ -23,11 +23,36 @@
 #include <osal/osal.hpp>
 
 #include <os.h>  ///< µC/OS-III master header
+#include <atomic>
+#include <limits>
 #include <cassert>
 #include <cstring>
 
 namespace
 {
+struct bounded_sem_count
+{
+    std::atomic<unsigned> count{};
+    unsigned              maximum{};
+
+    osal::result reserve() noexcept
+    {
+        unsigned value = count.load(std::memory_order_relaxed);
+        for (unsigned attempt = 0; attempt < 32U; ++attempt)
+        {
+            if (value >= maximum)
+            {
+                return osal::error_code::overflow;
+            }
+            if (count.compare_exchange_weak(value, value + 1U, std::memory_order_relaxed))
+            {
+                return osal::ok();
+            }
+        }
+        return osal::error_code::would_block;
+    }
+};
+static_assert(std::atomic<unsigned>::is_always_lock_free);
 
 // ---------------------------------------------------------------------------
 // Pool sizes
@@ -38,31 +63,43 @@ namespace
 #define OSAL_UC_MAX_QUEUES 8
 #define OSAL_UC_MAX_TIMERS 8
 #define OSAL_UC_MAX_FLAGS 8
+bounded_sem_count uc_sem_counts[OSAL_UC_MAX_SEMS];
 
 // ---------------------------------------------------------------------------
 // Static object pools
 // ---------------------------------------------------------------------------
-OS_TCB      uc_tcbs[OSAL_UC_MAX_THREADS];
-bool        uc_tcb_used[OSAL_UC_MAX_THREADS];
-OS_MUTEX    uc_mutexes[OSAL_UC_MAX_MUTEXES];
-bool        uc_mutex_used[OSAL_UC_MAX_MUTEXES];
-OS_SEM      uc_sems[OSAL_UC_MAX_SEMS];
-bool        uc_sem_used[OSAL_UC_MAX_SEMS];
-OS_Q        uc_queues[OSAL_UC_MAX_QUEUES];
-bool        uc_queue_used[OSAL_UC_MAX_QUEUES];
-OS_TMR      uc_timers[OSAL_UC_MAX_TIMERS];
-bool        uc_timer_used[OSAL_UC_MAX_TIMERS];
-OS_FLAG_GRP uc_flags[OSAL_UC_MAX_FLAGS];
-bool        uc_flag_used[OSAL_UC_MAX_FLAGS];
+OS_TCB            uc_tcbs[OSAL_UC_MAX_THREADS];
+std::atomic<bool> uc_tcb_used[OSAL_UC_MAX_THREADS];
+OS_MUTEX          uc_mutexes[OSAL_UC_MAX_MUTEXES];
+std::atomic<bool> uc_mutex_used[OSAL_UC_MAX_MUTEXES];
+OS_SEM            uc_sems[OSAL_UC_MAX_SEMS];
+std::atomic<bool> uc_sem_used[OSAL_UC_MAX_SEMS];
+struct uc_queue_slot
+{
+    std::uint8_t* storage{};
+    std::size_t   item_size{}, capacity{}, head{}, tail{}, count{};
+};
+uc_queue_slot     uc_queues[OSAL_UC_MAX_QUEUES];
+std::atomic<bool> uc_queue_used[OSAL_UC_MAX_QUEUES];
+OS_TMR            uc_timers[OSAL_UC_MAX_TIMERS];
+std::atomic<bool> uc_timer_used[OSAL_UC_MAX_TIMERS];
+OS_FLAG_GRP       uc_flags[OSAL_UC_MAX_FLAGS];
+std::atomic<bool> uc_flag_used[OSAL_UC_MAX_FLAGS];
+static_assert(std::atomic<bool>::is_always_lock_free);
+
+struct uc_irq_guard
+{
+    CPU_SR state = CPU_SR_Save();
+    ~uc_irq_guard() { CPU_SR_Restore(state); }
+};
 
 template<typename T, std::size_t N>
-T* pool_acquire(T (&pool)[N], bool (&used)[N]) noexcept
+T* pool_acquire(T (&pool)[N], std::atomic<bool> (&used)[N]) noexcept
 {
     for (std::size_t i = 0; i < N; ++i)
     {
-        if (!used[i])
+        if (!used[i].exchange(true, std::memory_order_acquire))
         {
-            used[i] = true;
             return &pool[i];
         }
     }
@@ -70,13 +107,13 @@ T* pool_acquire(T (&pool)[N], bool (&used)[N]) noexcept
 }
 
 template<typename T, std::size_t N>
-void pool_release(T (&pool)[N], bool (&used)[N], T* p) noexcept
+void pool_release(T (&pool)[N], std::atomic<bool> (&used)[N], T* p) noexcept
 {
     for (std::size_t i = 0; i < N; ++i)
     {
         if (&pool[i] == p)
         {
-            used[i] = false;
+            used[i].store(false, std::memory_order_release);
             return;
         }
     }
@@ -122,6 +159,8 @@ struct uc_timer_ctx
     osal_timer_callback_t fn{};
     void*                 arg{};
     OS_TMR*               tmr{};
+    std::atomic<bool>     ever_started{};
+    bool                  auto_reload{};
 };
 uc_timer_ctx uc_timer_ctxs[OSAL_UC_MAX_TIMERS];
 
@@ -187,7 +226,7 @@ extern "C"
     {
         OS_ERR        err;
         const OS_TICK ticks = OSTimeGet(&err);
-        return static_cast<std::int64_t>(ticks) * static_cast<std::int64_t>(1000 / OSCfg_TickRate_Hz);
+        return static_cast<std::int64_t>(ticks) * 1000LL / OSCfg_TickRate_Hz;
     }
 
     /// @brief Return wall-clock time in milliseconds (aliased to monotonic; µC/OS-III has no wall clock).
@@ -230,7 +269,14 @@ extern "C"
                                     osal::priority_t priority, osal::affinity_t /*affinity*/, void* stack,
                                     osal::stack_size_t stack_bytes, const char* name) noexcept
     {
-        assert(handle != nullptr && entry != nullptr && stack != nullptr);
+        if (handle == nullptr || entry == nullptr || stack == nullptr || stack_bytes == 0U)
+        {
+            return osal::error_code::invalid_argument;
+        }
+        if (handle->native != nullptr)
+        {
+            return osal::error_code::already_exists;
+        }
         OS_TCB* tcb = pool_acquire(uc_tcbs, uc_tcb_used);
         if (tcb == nullptr)
         {
@@ -273,12 +319,16 @@ extern "C"
         OS_ERR err;
         auto*  tcb = static_cast<OS_TCB*>(handle->native);
         OSTaskDel(tcb, &err);
+        if (err != OS_ERR_NONE && err != OS_ERR_TASK_NOT_EXIST)
+        {
+            return osal::error_code::unknown;
+        }
         pool_release(uc_tcbs, uc_tcb_used, tcb);
         handle->native = nullptr;
-        return (err == OS_ERR_NONE || err == OS_ERR_TASK_NOT_EXIST) ? osal::ok() : osal::error_code::unknown;
+        return osal::ok();
     }
 
-    /// @brief Detach a task, releasing its TCB pool slot without waiting.
+    /// @brief Detach is unsupported; retain ownership of the live TCB.
     /// @param[in,out] handle  Task handle to detach.
     /// @retval osal::ok()                         On success.
     /// @retval osal::error_code::not_initialized  If the handle is null.
@@ -288,9 +338,7 @@ extern "C"
         {
             return osal::error_code::not_initialized;
         }
-        pool_release(uc_tcbs, uc_tcb_used, static_cast<OS_TCB*>(handle->native));
-        handle->native = nullptr;
-        return osal::ok();
+        return osal::error_code::not_supported;
     }
 
     /// @brief Change the priority of a running task via OSTaskChangePrio().
@@ -456,8 +504,13 @@ extern "C"
     /// @retval osal::ok()                          On success.
     /// @retval osal::error_code::out_of_resources  On failure.
     osal::result osal_semaphore_create(osal::active_traits::semaphore_handle_t* handle, unsigned initial_count,
-                                       unsigned /*max_count*/) noexcept
+                                       unsigned max_count) noexcept
     {
+        if (handle == nullptr || max_count == 0U || initial_count > max_count ||
+            max_count > std::numeric_limits<OS_SEM_CTR>::max())
+        {
+            return osal::error_code::invalid_argument;
+        }
         OS_SEM* s = pool_acquire(uc_sems, uc_sem_used);
         if (s == nullptr)
         {
@@ -470,7 +523,9 @@ extern "C"
             pool_release(uc_sems, uc_sem_used, s);
             return osal::error_code::out_of_resources;
         }
-        handle->native = static_cast<void*>(s);
+        handle->native                     = static_cast<void*>(s);
+        uc_sem_counts[s - uc_sems].maximum = max_count;
+        uc_sem_counts[s - uc_sems].count.store(initial_count, std::memory_order_relaxed);
         return osal::ok();
     }
 
@@ -486,6 +541,10 @@ extern "C"
         OS_ERR err;
         auto*  s = static_cast<OS_SEM*>(handle->native);
         OSSemDel(s, OS_OPT_DEL_ALWAYS, &err);
+        if (err != OS_ERR_NONE)
+        {
+            return osal::error_code::unknown;
+        }
         pool_release(uc_sems, uc_sem_used, s);
         handle->native = nullptr;
         return osal::ok();
@@ -501,8 +560,18 @@ extern "C"
         {
             return osal::error_code::not_initialized;
         }
-        OS_ERR err;
+        OS_ERR     err;
+        auto&      count    = uc_sem_counts[static_cast<OS_SEM*>(handle->native) - uc_sems];
+        const auto reserved = count.reserve();
+        if (!reserved.ok())
+        {
+            return reserved;
+        }
         OSSemPost(static_cast<OS_SEM*>(handle->native), OS_OPT_POST_1, &err);
+        if (err != OS_ERR_NONE)
+        {
+            count.count.fetch_sub(1U, std::memory_order_relaxed);
+        }
         return (err == OS_ERR_NONE) ? osal::ok() : osal::error_code::overflow;
     }
 
@@ -535,6 +604,8 @@ extern "C"
                   &err);
         if (err == OS_ERR_NONE)
         {
+            uc_sem_counts[static_cast<OS_SEM*>(handle->native) - uc_sems].count.fetch_sub(1U,
+                                                                                          std::memory_order_relaxed);
             return osal::ok();
         }
         if (err == OS_ERR_TIMEOUT || err == OS_ERR_PEND_WOULD_BLOCK)
@@ -554,34 +625,33 @@ extern "C"
     }
 
     // ---------------------------------------------------------------------------
-    // Queue (OS_Q — µC/OS-III native message queue)
+    // Queue (fixed-size values in caller-owned storage)
     // ---------------------------------------------------------------------------
 
-    /// @brief Create a µC/OS-III native message queue via OSQCreate().
-    /// @param[out] handle   Output handle populated with the new OS_Q pointer.
+    /// @brief Create a fixed-size value queue in caller-supplied storage.
+    /// @param[out] handle   Output handle populated with the value-queue slot.
     /// @param[in] capacity  Maximum number of messages the queue can hold.
     /// @retval osal::ok()                          On success.
     /// @retval osal::error_code::out_of_resources  On failure.
-    osal::result osal_queue_create(osal::active_traits::queue_handle_t* handle, void* /*buffer*/,
-                                   std::size_t /*item_size*/, std::size_t capacity) noexcept
+    osal::result osal_queue_create(osal::active_traits::queue_handle_t* handle, void* buffer, std::size_t item_size,
+                                   std::size_t capacity) noexcept
     {
-        OS_Q* q = pool_acquire(uc_queues, uc_queue_used);
+        if (handle == nullptr || buffer == nullptr || item_size == 0U || capacity == 0U ||
+            capacity > std::numeric_limits<std::size_t>::max() / item_size)
+        {
+            return osal::error_code::invalid_argument;
+        }
+        auto* q = pool_acquire(uc_queues, uc_queue_used);
         if (q == nullptr)
         {
             return osal::error_code::out_of_resources;
         }
-        OS_ERR err;
-        OSQCreate(q, const_cast<CPU_CHAR*>("q"), static_cast<OS_MSG_QTY>(capacity), &err);
-        if (err != OS_ERR_NONE)
-        {
-            pool_release(uc_queues, uc_queue_used, q);
-            return osal::error_code::out_of_resources;
-        }
+        *q             = {static_cast<std::uint8_t*>(buffer), item_size, capacity, 0U, 0U, 0U};
         handle->native = static_cast<void*>(q);
         return osal::ok();
     }
 
-    /// @brief Destroy a queue via OSQDel() and release its pool slot.
+    /// @brief Release a value queue's pool slot.
     /// @param[in,out] handle  Queue handle; no-op if null or already destroyed.
     /// @retval osal::ok()  Always.
     osal::result osal_queue_destroy(osal::active_traits::queue_handle_t* handle) noexcept
@@ -590,19 +660,16 @@ extern "C"
         {
             return osal::ok();
         }
-        OS_ERR err;
-        auto*  q = static_cast<OS_Q*>(handle->native);
-        OSQDel(q, OS_OPT_DEL_ALWAYS, &err);
+        auto* q = static_cast<uc_queue_slot*>(handle->native);
         pool_release(uc_queues, uc_queue_used, q);
         handle->native = nullptr;
         return osal::ok();
     }
 
-    /// @brief Send a message to a queue via OSQPost().
-    /// @details µC/OS-III sends pointer-sized messages; @p item is treated as a pointer.
+    /// @brief Copy a value into the queue, waiting for room when requested.
     /// @param[in] handle         Queue handle.
     /// @param[in] item           Pointer to the message data.
-    /// @param[in] timeout_ticks  Maximum wait in OSAL ticks (currently non-blocking on post).
+    /// @param[in] timeout_ticks  Maximum wait in OSAL ticks.
     /// @retval osal::ok()                     On success.
     /// @retval osal::error_code::would_block  If the queue is full.
     osal::result osal_queue_send(osal::active_traits::queue_handle_t* handle, const void* item,
@@ -612,16 +679,39 @@ extern "C"
         {
             return osal::error_code::not_initialized;
         }
-        OS_ERR err;
-        // µC/OS-III queue sends a pointer + size.  We treat item as a pointer-sized message.
-        OSQPost(static_cast<OS_Q*>(handle->native), const_cast<void*>(item), sizeof(void*),
-                OS_OPT_POST_FIFO | ((timeout_ticks == osal::NO_WAIT) ? static_cast<OS_OPT>(0) : static_cast<OS_OPT>(0)),
-                &err);
-        if (err == OS_ERR_NONE)
+        if (item == nullptr)
         {
-            return osal::ok();
+            return osal::error_code::invalid_argument;
         }
-        return (err == OS_ERR_Q_MAX) ? osal::error_code::would_block : osal::error_code::timeout;
+        auto*         q = static_cast<uc_queue_slot*>(handle->native);
+        OS_ERR        err;
+        const OS_TICK start = timeout_ticks == osal::NO_WAIT ? 0U : OSTimeGet(&err);
+        for (;;)
+        {
+            {
+                uc_irq_guard guard;
+                if (q->count < q->capacity)
+                {
+                    std::memcpy(q->storage + q->tail * q->item_size, item, q->item_size);
+                    q->tail = (q->tail + 1U) % q->capacity;
+                    ++q->count;
+                    return osal::ok();
+                }
+            }
+            if (timeout_ticks == osal::NO_WAIT)
+            {
+                return osal::error_code::would_block;
+            }
+            if (timeout_ticks != osal::WAIT_FOREVER && static_cast<OS_TICK>(OSTimeGet(&err) - start) >= timeout_ticks)
+            {
+                return osal::error_code::timeout;
+            }
+            OSTimeDly(1U, OS_OPT_TIME_DLY, &err);
+            if (err != OS_ERR_NONE)
+            {
+                return osal::error_code::unknown;
+            }
+        }
     }
 
     /// @brief Send a message from an ISR context (delegates to osal_queue_send with NO_WAIT).
@@ -634,7 +724,7 @@ extern "C"
         return osal_queue_send(handle, item, osal::NO_WAIT);
     }
 
-    /// @brief Receive a message from a queue via OSQPend(), blocking up to @p timeout_ticks ticks.
+    /// @brief Copy the next queued value, waiting for data when requested.
     /// @param[in] handle         Queue handle.
     /// @param[in] item           Buffer to receive the dequeued message into.
     /// @param[in] timeout_ticks  Maximum wait in OSAL ticks.
@@ -649,23 +739,39 @@ extern "C"
         {
             return osal::error_code::not_initialized;
         }
-        OS_ERR      err;
-        OS_MSG_SIZE msg_size = 0;
-        CPU_TS      ts;
-        void*       msg = OSQPend(static_cast<OS_Q*>(handle->native), to_uc_ticks(timeout_ticks),
-                                  uc_pend_opt(timeout_ticks),  // NOLINT(cppcoreguidelines-init-variables)
-                                  &msg_size, &ts, &err);
-        if (err == OS_ERR_NONE && msg != nullptr)
+        if (item == nullptr)
         {
-            std::memcpy(item, static_cast<const void*>(&msg),
-                        sizeof(void*));  // NOLINT(bugprone-multi-level-implicit-pointer-conversion)
-            return osal::ok();
+            return osal::error_code::invalid_argument;
         }
-        if (err == OS_ERR_TIMEOUT || err == OS_ERR_PEND_WOULD_BLOCK)
+        auto*         q = static_cast<uc_queue_slot*>(handle->native);
+        OS_ERR        err;
+        const OS_TICK start = timeout_ticks == osal::NO_WAIT ? 0U : OSTimeGet(&err);
+        for (;;)
         {
-            return (timeout_ticks == osal::NO_WAIT) ? osal::error_code::would_block : osal::error_code::timeout;
+            {
+                uc_irq_guard guard;
+                if (q->count != 0U)
+                {
+                    std::memcpy(item, q->storage + q->head * q->item_size, q->item_size);
+                    q->head = (q->head + 1U) % q->capacity;
+                    --q->count;
+                    return osal::ok();
+                }
+            }
+            if (timeout_ticks == osal::NO_WAIT)
+            {
+                return osal::error_code::would_block;
+            }
+            if (timeout_ticks != osal::WAIT_FOREVER && static_cast<OS_TICK>(OSTimeGet(&err) - start) >= timeout_ticks)
+            {
+                return osal::error_code::timeout;
+            }
+            OSTimeDly(1U, OS_OPT_TIME_DLY, &err);
+            if (err != OS_ERR_NONE)
+            {
+                return osal::error_code::unknown;
+            }
         }
-        return osal::error_code::unknown;
     }
 
     /// @brief Receive a message from an ISR context (delegates to osal_queue_receive with NO_WAIT).
@@ -695,8 +801,9 @@ extern "C"
         {
             return 0U;
         }
-        auto* q = static_cast<const OS_Q*>(handle->native);
-        return static_cast<std::size_t>(q->MsgQ.NbrEntries);
+        uc_irq_guard guard;
+        auto*        q = static_cast<const uc_queue_slot*>(handle->native);
+        return q->count;
     }
 
     /// @brief Return the number of free slots remaining in the queue.
@@ -708,8 +815,9 @@ extern "C"
         {
             return 0U;
         }
-        auto* q = static_cast<const OS_Q*>(handle->native);
-        return static_cast<std::size_t>(q->MsgQ.NbrEntriesSize - q->MsgQ.NbrEntries);
+        uc_irq_guard guard;
+        auto*        q = static_cast<const uc_queue_slot*>(handle->native);
+        return q->capacity - q->count;
     }
 
     // ---------------------------------------------------------------------------
@@ -729,31 +837,27 @@ extern "C"
                                    osal_timer_callback_t callback, void* arg, osal::tick_t period_ticks,
                                    bool auto_reload) noexcept
     {
-        assert(handle != nullptr && callback != nullptr);
+        if (handle == nullptr || callback == nullptr || period_ticks == 0U || period_ticks == osal::WAIT_FOREVER ||
+            period_ticks > std::numeric_limits<OS_TICK>::max())
+        {
+            return osal::error_code::invalid_argument;
+        }
+        if (handle->native != nullptr)
+        {
+            return osal::error_code::already_exists;
+        }
         OS_TMR* t = pool_acquire(uc_timers, uc_timer_used);
         if (t == nullptr)
         {
             return osal::error_code::out_of_resources;
         }
 
-        // Find a context slot.
-        uc_timer_ctx* ctx = nullptr;
-        for (auto& slot : uc_timer_ctxs)
-        {
-            if (slot.fn == nullptr)
-            {
-                ctx = &slot;
-                break;
-            }
-        }
-        if (ctx == nullptr)
-        {
-            pool_release(uc_timers, uc_timer_used, t);
-            return osal::error_code::out_of_resources;
-        }
-        ctx->fn  = callback;
-        ctx->arg = arg;
-        ctx->tmr = t;
+        auto* ctx = &uc_timer_ctxs[t - uc_timers];
+        ctx->ever_started.store(false, std::memory_order_relaxed);
+        ctx->auto_reload = auto_reload;
+        ctx->fn          = callback;
+        ctx->arg         = arg;
+        ctx->tmr         = t;
 
         OS_ERR err;
         // µC/OS-III timer ticks are in units of 1/OSTmrTickRate (typically 10 Hz).
@@ -786,7 +890,16 @@ extern "C"
         }
         OS_ERR err;
         auto*  t = static_cast<OS_TMR*>(handle->native);
+        // Native deletion has no verified callback lifetime barrier here.
+        if (uc_timer_ctxs[t - uc_timers].ever_started.load(std::memory_order_acquire))
+        {
+            return osal::error_code::not_supported;
+        }
         OSTmrDel(t, &err);
+        if (err != OS_ERR_NONE)
+        {
+            return osal::error_code::unknown;
+        }
         for (auto& ctx : uc_timer_ctxs)
         {
             if (ctx.tmr == t)
@@ -813,6 +926,8 @@ extern "C"
             return osal::error_code::not_initialized;
         }
         OS_ERR err;
+        uc_timer_ctxs[static_cast<OS_TMR*>(handle->native) - uc_timers].ever_started.store(true,
+                                                                                           std::memory_order_release);
         OSTmrStart(static_cast<OS_TMR*>(handle->native), &err);
         return (err == OS_ERR_NONE) ? osal::ok() : osal::error_code::unknown;
     }
@@ -838,7 +953,11 @@ extern "C"
     /// @return osal::ok() on success; forwarded error from osal_timer_start().
     osal::result osal_timer_reset(osal::active_traits::timer_handle_t* handle) noexcept
     {
-        osal_timer_stop(handle);
+        const auto stopped = osal_timer_stop(handle);
+        if (!stopped.ok())
+        {
+            return stopped;
+        }
         return osal_timer_start(handle);
     }
 
@@ -854,9 +973,19 @@ extern "C"
         {
             return osal::error_code::not_initialized;
         }
-        auto* t   = static_cast<OS_TMR*>(handle->native);
-        t->Period = static_cast<OS_TICK>(new_period_ticks);
-        t->Dly    = static_cast<OS_TICK>(new_period_ticks);
+        auto*       t   = static_cast<OS_TMR*>(handle->native);
+        const auto& ctx = uc_timer_ctxs[t - uc_timers];
+        if (ctx.ever_started.load(std::memory_order_acquire))
+        {
+            return osal::error_code::not_supported;
+        }
+        if (new_period_ticks == 0U || new_period_ticks == osal::WAIT_FOREVER ||
+            new_period_ticks > std::numeric_limits<OS_TICK>::max())
+        {
+            return osal::error_code::invalid_argument;
+        }
+        t->Period = ctx.auto_reload ? static_cast<OS_TICK>(new_period_ticks) : 0U;
+        t->Dly    = ctx.auto_reload ? 0U : static_cast<OS_TICK>(new_period_ticks);
         return osal::ok();
     }
 

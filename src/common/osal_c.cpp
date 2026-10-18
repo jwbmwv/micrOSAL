@@ -20,6 +20,52 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#if defined(OSAL_BACKEND_LINUX) || defined(OSAL_BACKEND_POSIX)
+#include "posix/posix_mutex_policy.hpp"
+#endif
+
+extern "C" osal::result osal_mutex_create_config(osal::active_traits::mutex_handle_t* handle,
+                                                 const osal::mutex_config*            config) noexcept
+{
+    if (handle == nullptr || config == nullptr ||
+        (config->type != osal::mutex_type::normal && config->type != osal::mutex_type::recursive) ||
+        config->protocol > osal::mutex_protocol::priority_ceiling ||
+        config->robustness > osal::mutex_robustness::robust)
+    {
+        return osal::error_code::invalid_argument;
+    }
+    if (handle->native != nullptr)
+    {
+        return osal::error_code::already_exists;
+    }
+#if defined(OSAL_BACKEND_LINUX) || defined(OSAL_BACKEND_POSIX)
+    return osal::detail::create_pthread_mutex(handle, *config);
+#else
+    bool protocol_supported = config->protocol == osal::mutex_protocol::native_default;
+#if defined(OSAL_BACKEND_FREERTOS) || defined(OSAL_BACKEND_ZEPHYR)
+    protocol_supported = protocol_supported || (config->protocol == osal::mutex_protocol::priority_inheritance &&
+                                                osal::active_capabilities::has_priority_inheritance);
+#endif
+    if (!protocol_supported || config->robustness != osal::mutex_robustness::non_robust)
+    {
+        return osal::error_code::not_supported;
+    }
+    return osal_mutex_create(handle, config->type == osal::mutex_type::recursive);
+#endif
+}
+
+extern "C" osal::result osal_mutex_consistent(osal::active_traits::mutex_handle_t* handle) noexcept
+{
+    if (handle == nullptr || handle->native == nullptr)
+    {
+        return osal::error_code::not_initialized;
+    }
+#if (defined(OSAL_BACKEND_LINUX) || defined(OSAL_BACKEND_POSIX)) && defined(__linux__)
+    return osal::detail::pthread_mutex_status(pthread_mutex_consistent(static_cast<pthread_mutex_t*>(handle->native)));
+#else
+    return osal::error_code::not_supported;
+#endif
+}
 
 // ---------------------------------------------------------------------------
 // Handle conversion helpers (layout-compatible: struct { void* native; })
@@ -89,13 +135,40 @@ inline osal_result_t to_c(osal::result r) noexcept
     return static_cast<osal_result_t>(osal::detail::to_underlying(r.code()));
 }
 
+inline osal_result_t record_c_creation(osal::diagnostic_resource resource, osal::result status) noexcept
+{
+    auto& counters = osal::diagnostics(resource);
+    counters.attempt(status);
+    if (status.ok())
+    {
+        counters.acquire();
+    }
+    return to_c(status);
+}
+
+template<typename Handle, typename Destroy>
+osal_result_t record_c_destruction(osal::diagnostic_resource resource, Handle* handle, Destroy destroy) noexcept
+{
+    const bool owned  = handle != nullptr && handle->native != nullptr;
+    const auto status = destroy(handle);
+    if (owned && status.ok())
+    {
+        osal::diagnostics(resource).release();
+    }
+    return to_c(status);
+}
+
 enum class c_delayable_state : std::uint8_t
 {
-    idle    = 0U,
-    armed   = 1U,
-    queued  = 2U,
-    running = 3U,
+    idle     = 0U,
+    armed    = 1U,
+    queued   = 2U,
+    running  = 3U,
+    stopping = 4U,
 };
+
+constexpr std::uint32_t c_delayable_state_mask      = 7U;
+constexpr std::uint32_t c_delayable_generation_step = 8U;
 
 /// @brief Check whether a composite notification handle is initialized.
 /// @param[in] handle  Notification handle to validate.
@@ -132,19 +205,15 @@ void c_delayable_work_work_cb(void* arg) noexcept;
 /// @return `true` when the current state matches @p state.
 [[nodiscard]] bool delayable_state_is(const osal_delayable_work_handle* handle, c_delayable_state state) noexcept
 {
-    return delayable_valid(handle) &&
-           (__atomic_load_n(&handle->state, __ATOMIC_ACQUIRE) == osal::detail::to_underlying(state));
+    return delayable_valid(handle) && ((__atomic_load_n(&handle->state, __ATOMIC_ACQUIRE) & c_delayable_state_mask) ==
+                                       osal::detail::to_underlying(state));
 }
 
 /// @brief Report whether the active backend supports the C delayable helper.
 /// @return `true` when timer expiry can always hand work into the queue safely.
 [[nodiscard]] bool delayable_backend_supported() noexcept
 {
-    if constexpr (osal::active_capabilities::timer_callbacks_may_run_in_isr)
-    {
-        return osal::active_capabilities::has_isr_work_queue_submit;
-    }
-    return true;
+    return osal::delayable_work_backend<osal::active_backend>;
 }
 
 /// @brief Load the composite delayable-work state atomically.
@@ -152,7 +221,7 @@ void c_delayable_work_work_cb(void* arg) noexcept;
 /// @return Current helper state.
 [[nodiscard]] c_delayable_state delayable_state_load(const osal_delayable_work_handle* handle) noexcept
 {
-    return static_cast<c_delayable_state>(__atomic_load_n(&handle->state, __ATOMIC_ACQUIRE));
+    return static_cast<c_delayable_state>(__atomic_load_n(&handle->state, __ATOMIC_ACQUIRE) & c_delayable_state_mask);
 }
 
 /// @brief Store a new composite delayable-work state atomically.
@@ -160,7 +229,9 @@ void c_delayable_work_work_cb(void* arg) noexcept;
 /// @param[in] state   State to publish.
 void delayable_state_store(osal_delayable_work_handle* handle, c_delayable_state state) noexcept
 {
-    __atomic_store_n(&handle->state, osal::detail::to_underlying(state), __ATOMIC_RELEASE);
+    const auto current = __atomic_load_n(&handle->state, __ATOMIC_RELAXED);
+    __atomic_store_n(&handle->state, (current & ~c_delayable_state_mask) | osal::detail::to_underlying(state),
+                     __ATOMIC_RELEASE);
 }
 
 /// @brief Compare-and-swap the composite delayable-work state.
@@ -172,10 +243,17 @@ void delayable_state_store(osal_delayable_work_handle* handle, c_delayable_state
 bool delayable_state_compare_exchange(osal_delayable_work_handle* handle, c_delayable_state* expected,
                                       c_delayable_state desired) noexcept
 {
-    auto       expected_raw = osal::detail::to_underlying(*expected);
-    const bool exchanged    = __atomic_compare_exchange_n(
-        &handle->state, &expected_raw, osal::detail::to_underlying(desired), false, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE);
-    *expected = static_cast<c_delayable_state>(expected_raw);
+    auto       expected_raw = __atomic_load_n(&handle->state, __ATOMIC_ACQUIRE);
+    const auto observed     = static_cast<c_delayable_state>(expected_raw & c_delayable_state_mask);
+    if (observed != *expected)
+    {
+        *expected = observed;
+        return false;
+    }
+    const auto desired_raw = (expected_raw & ~c_delayable_state_mask) | osal::detail::to_underlying(desired);
+    const bool exchanged   = __atomic_compare_exchange_n(&handle->state, &expected_raw, desired_raw, false,
+                                                         __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE);
+    *expected              = static_cast<c_delayable_state>(expected_raw & c_delayable_state_mask);
     return exchanged;
 }
 
@@ -226,8 +304,8 @@ osal_result_t delayable_enqueue_locked(osal_delayable_work_handle* handle) noexc
     const osal_result_t rc = osal_c_work_queue_submit(handle->queue, c_delayable_work_work_cb, handle);
     if (rc != OSAL_OK)
     {
-        delayable_state_store(handle, c_delayable_state::idle);
         delayable_set_dispatch_error(handle, rc);
+        delayable_state_store(handle, c_delayable_state::idle);
     }
     return rc;
 }
@@ -238,13 +316,22 @@ osal_result_t delayable_enqueue_locked(osal_delayable_work_handle* handle) noexc
 /// @return Result of the timer period/start operations.
 osal_result_t delayable_arm_locked(osal_delayable_work_handle* handle, osal_tick_t delay_ticks) noexcept
 {
-    const osal_result_t set_rc = osal_c_timer_set_period(&handle->timer, delay_ticks);
+    const auto          started = static_cast<std::uint64_t>(osal_clock_ticks());
+    const osal_result_t set_rc  = osal_c_timer_set_period(&handle->timer, delay_ticks);
     if (set_rc != OSAL_OK)
     {
         return set_rc;
     }
 
-    delayable_state_store(handle, c_delayable_state::armed);
+    const auto delay = static_cast<std::uint64_t>(delay_ticks);
+    __atomic_store_n(&handle->start_low, static_cast<std::uint32_t>(started), __ATOMIC_RELAXED);
+    __atomic_store_n(&handle->start_high, static_cast<std::uint32_t>(started >> 32U), __ATOMIC_RELAXED);
+    __atomic_store_n(&handle->delay_low, static_cast<std::uint32_t>(delay), __ATOMIC_RELAXED);
+    __atomic_store_n(&handle->delay_high, static_cast<std::uint32_t>(delay >> 32U), __ATOMIC_RELAXED);
+    const auto generation =
+        (__atomic_load_n(&handle->state, __ATOMIC_RELAXED) & ~c_delayable_state_mask) + c_delayable_generation_step;
+    __atomic_store_n(&handle->state, generation | osal::detail::to_underlying(c_delayable_state::armed),
+                     __ATOMIC_RELEASE);
     const osal_result_t start_rc = osal_c_timer_start(&handle->timer);
     if (start_rc != OSAL_OK)
     {
@@ -305,8 +392,22 @@ void c_delayable_work_timer_cb(void* arg) noexcept
         return;
     }
 
-    c_delayable_state expected = c_delayable_state::armed;
-    if (!delayable_state_compare_exchange(handle, &expected, c_delayable_state::queued))
+    auto expected = __atomic_load_n(&handle->state, __ATOMIC_ACQUIRE);
+    if ((expected & c_delayable_state_mask) != osal::detail::to_underlying(c_delayable_state::armed))
+    {
+        return;
+    }
+    const auto started = (static_cast<std::uint64_t>(__atomic_load_n(&handle->start_high, __ATOMIC_RELAXED)) << 32U) |
+                         __atomic_load_n(&handle->start_low, __ATOMIC_RELAXED);
+    const auto delay = (static_cast<std::uint64_t>(__atomic_load_n(&handle->delay_high, __ATOMIC_RELAXED)) << 32U) |
+                       __atomic_load_n(&handle->delay_low, __ATOMIC_RELAXED);
+    const auto elapsed = static_cast<osal::tick_t>(osal_clock_ticks() - static_cast<osal::tick_t>(started));
+    if (static_cast<std::uint64_t>(elapsed) < delay)
+    {
+        return;
+    }
+    const auto queued = (expected & ~c_delayable_state_mask) | osal::detail::to_underlying(c_delayable_state::queued);
+    if (!__atomic_compare_exchange_n(&handle->state, &expected, queued, false, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE))
     {
         return;
     }
@@ -317,8 +418,8 @@ void c_delayable_work_timer_cb(void* arg) noexcept
             : osal_c_work_queue_submit(handle->queue, c_delayable_work_work_cb, handle);
     if (submit_rc != OSAL_OK)
     {
-        delayable_state_store(handle, c_delayable_state::idle);
         delayable_set_dispatch_error(handle, submit_rc);
+        delayable_state_store(handle, c_delayable_state::idle);
     }
 }
 
@@ -409,7 +510,28 @@ extern "C" int osal_c_clock_high_resolution_supported(void)
 /// @retval OSAL_OK  On success.
 extern "C" osal_result_t osal_c_mutex_create(osal_mutex_handle* handle, int recursive)
 {
-    return to_c(osal_mutex_create(OSAL_C_CAST(mtx_h, handle), recursive != 0));
+    if (handle == nullptr)
+    {
+        return OSAL_INVALID_ARGUMENT;
+    }
+    if (handle->native != nullptr)
+    {
+        return OSAL_ALREADY_EXISTS;
+    }
+    return record_c_creation(osal::diagnostic_resource::mutex,
+                             osal_mutex_create(OSAL_C_CAST(mtx_h, handle), recursive != 0));
+}
+
+extern "C" osal_result_t osal_c_diagnostics_read(osal_diagnostic_resource resource, osal_diagnostic_snapshot* snapshot)
+{
+    if (snapshot == nullptr || resource < OSAL_DIAGNOSTIC_MUTEX || resource > OSAL_DIAGNOSTIC_EMULATED_WORK_QUEUE)
+    {
+        return OSAL_INVALID_ARGUMENT;
+    }
+    const auto values = osal::diagnostics(static_cast<osal::diagnostic_resource>(resource)).snapshot();
+    *snapshot         = {values.capacity, values.in_use,     values.high_water, values.attempts, values.successes,
+                         values.failures, values.contention, values.drops,      values.backlog};
+    return OSAL_OK;
 }
 
 /// @brief Create a mutex from a config struct; see `osal_mutex_create()`.
@@ -422,7 +544,26 @@ extern "C" osal_result_t osal_c_mutex_create_with_cfg(osal_mutex_handle* handle,
     {
         return OSAL_INVALID_ARGUMENT;
     }
-    return to_c(osal_mutex_create(OSAL_C_CAST(mtx_h, handle), cfg->recursive != 0));
+    return osal_c_mutex_create(handle, cfg->recursive != 0 ? 1 : 0);
+}
+
+extern "C" osal_result_t osal_c_mutex_create_with_policy(osal_mutex_handle* handle, const osal_mutex_policy_config* cfg)
+{
+    if (cfg == nullptr || cfg->protocol < OSAL_MUTEX_NATIVE_DEFAULT || cfg->protocol > OSAL_MUTEX_PRIORITY_CEILING ||
+        cfg->robustness < OSAL_MUTEX_NON_ROBUST || cfg->robustness > OSAL_MUTEX_ROBUST)
+    {
+        return OSAL_INVALID_ARGUMENT;
+    }
+    const osal::mutex_config config{cfg->recursive != 0 ? osal::mutex_type::recursive : osal::mutex_type::normal,
+                                    static_cast<osal::mutex_protocol>(cfg->protocol),
+                                    static_cast<osal::mutex_robustness>(cfg->robustness), cfg->priority_ceiling};
+    return record_c_creation(osal::diagnostic_resource::mutex,
+                             osal_mutex_create_config(OSAL_C_CAST(mtx_h, handle), &config));
+}
+
+extern "C" osal_result_t osal_c_mutex_consistent(osal_mutex_handle* handle)
+{
+    return to_c(osal_mutex_consistent(OSAL_C_CAST(mtx_h, handle)));
 }
 
 /// @brief Destroy a mutex; see `osal_mutex_destroy()`.
@@ -430,7 +571,7 @@ extern "C" osal_result_t osal_c_mutex_create_with_cfg(osal_mutex_handle* handle,
 /// @retval OSAL_OK  On success.
 extern "C" osal_result_t osal_c_mutex_destroy(osal_mutex_handle* handle)
 {
-    return to_c(osal_mutex_destroy(OSAL_C_CAST(mtx_h, handle)));
+    return record_c_destruction(osal::diagnostic_resource::mutex, OSAL_C_CAST(mtx_h, handle), osal_mutex_destroy);
 }
 
 /// @brief Lock a mutex, blocking up to @p timeout ticks; see `osal_mutex_lock()`.
@@ -472,7 +613,16 @@ extern "C" osal_result_t osal_c_mutex_unlock(osal_mutex_handle* handle)
 extern "C" osal_result_t osal_c_semaphore_create(osal_semaphore_handle* handle, unsigned int initial_count,
                                                  unsigned int max_count)
 {
-    return to_c(osal_semaphore_create(OSAL_C_CAST(sem_h, handle), initial_count, max_count));
+    if (handle == nullptr || max_count == 0U || initial_count > max_count)
+    {
+        return OSAL_INVALID_ARGUMENT;
+    }
+    if (handle->native != nullptr)
+    {
+        return OSAL_ALREADY_EXISTS;
+    }
+    return record_c_creation(osal::diagnostic_resource::semaphore,
+                             osal_semaphore_create(OSAL_C_CAST(sem_h, handle), initial_count, max_count));
 }
 
 /// @brief Create a semaphore from a config struct; see `osal_semaphore_create()`.
@@ -486,7 +636,7 @@ extern "C" osal_result_t osal_c_semaphore_create_with_cfg(osal_semaphore_handle*
     {
         return OSAL_INVALID_ARGUMENT;
     }
-    return to_c(osal_semaphore_create(OSAL_C_CAST(sem_h, handle), cfg->initial_count, cfg->max_count));
+    return osal_c_semaphore_create(handle, cfg->initial_count, cfg->max_count);
 }
 
 /// @brief Destroy a semaphore; see `osal_semaphore_destroy()`.
@@ -494,7 +644,8 @@ extern "C" osal_result_t osal_c_semaphore_create_with_cfg(osal_semaphore_handle*
 /// @retval OSAL_OK  On success.
 extern "C" osal_result_t osal_c_semaphore_destroy(osal_semaphore_handle* handle)
 {
-    return to_c(osal_semaphore_destroy(OSAL_C_CAST(sem_h, handle)));
+    return record_c_destruction(osal::diagnostic_resource::semaphore, OSAL_C_CAST(sem_h, handle),
+                                osal_semaphore_destroy);
 }
 
 /// @brief Give (signal) a semaphore from task context; see `osal_semaphore_give()`.
@@ -544,7 +695,16 @@ extern "C" osal_result_t osal_c_semaphore_try_take(osal_semaphore_handle* handle
 /// @retval OSAL_OK  On success.
 extern "C" osal_result_t osal_c_queue_create(osal_queue_handle* handle, void* buffer, size_t item_size, size_t capacity)
 {
-    return to_c(osal_queue_create(OSAL_C_CAST(que_h, handle), buffer, item_size, capacity));
+    if (handle == nullptr || buffer == nullptr || item_size == 0U || capacity == 0U || capacity > SIZE_MAX / item_size)
+    {
+        return OSAL_INVALID_ARGUMENT;
+    }
+    if (handle->native != nullptr)
+    {
+        return OSAL_ALREADY_EXISTS;
+    }
+    return record_c_creation(osal::diagnostic_resource::queue,
+                             osal_queue_create(OSAL_C_CAST(que_h, handle), buffer, item_size, capacity));
 }
 
 /// @brief Create a queue from a config struct; see `osal_queue_create()`.
@@ -557,7 +717,7 @@ extern "C" osal_result_t osal_c_queue_create_with_cfg(osal_queue_handle* handle,
     {
         return OSAL_INVALID_ARGUMENT;
     }
-    return to_c(osal_queue_create(OSAL_C_CAST(que_h, handle), cfg->buffer, cfg->item_size, cfg->capacity));
+    return osal_c_queue_create(handle, cfg->buffer, cfg->item_size, cfg->capacity);
 }
 
 /// @brief Destroy a queue; see `osal_queue_destroy()`.
@@ -565,7 +725,7 @@ extern "C" osal_result_t osal_c_queue_create_with_cfg(osal_queue_handle* handle,
 /// @retval OSAL_OK  On success.
 extern "C" osal_result_t osal_c_queue_destroy(osal_queue_handle* handle)
 {
-    return to_c(osal_queue_destroy(OSAL_C_CAST(que_h, handle)));
+    return record_c_destruction(osal::diagnostic_resource::queue, OSAL_C_CAST(que_h, handle), osal_queue_destroy);
 }
 
 /// @brief Send a message, blocking up to @p timeout ticks; see `osal_queue_send()`.
@@ -655,7 +815,16 @@ extern "C" osal_result_t osal_c_thread_create(osal_thread_handle* handle, osal_c
                                               osal_priority_t priority, osal_affinity_t affinity, void* stack,
                                               size_t stack_bytes, const char* name)
 {
-    return to_c(
+    if (handle == nullptr || entry == nullptr)
+    {
+        return OSAL_INVALID_ARGUMENT;
+    }
+    if (handle->native != nullptr)
+    {
+        return OSAL_ALREADY_EXISTS;
+    }
+    return record_c_creation(
+        osal::diagnostic_resource::thread,
         osal_thread_create(OSAL_C_CAST(thr_h, handle), entry, arg, priority, affinity, stack, stack_bytes, name));
 }
 
@@ -669,8 +838,8 @@ extern "C" osal_result_t osal_c_thread_create_with_cfg(osal_thread_handle* handl
     {
         return OSAL_INVALID_ARGUMENT;
     }
-    return to_c(osal_thread_create(OSAL_C_CAST(thr_h, handle), cfg->entry, cfg->arg, cfg->priority, cfg->affinity,
-                                   cfg->stack, cfg->stack_bytes, cfg->name));
+    return osal_c_thread_create(handle, cfg->entry, cfg->arg, cfg->priority, cfg->affinity, cfg->stack,
+                                cfg->stack_bytes, cfg->name);
 }
 
 /// @brief Wait for a thread to finish, blocking up to @p timeout ticks; see `osal_thread_join()`.
@@ -680,7 +849,13 @@ extern "C" osal_result_t osal_c_thread_create_with_cfg(osal_thread_handle* handl
 /// @retval OSAL_TIMEOUT  On expiry.
 extern "C" osal_result_t osal_c_thread_join(osal_thread_handle* handle, osal_tick_t timeout)
 {
-    return to_c(osal_thread_join(OSAL_C_CAST(thr_h, handle), timeout));
+    const bool owned  = handle != nullptr && handle->native != nullptr;
+    const auto status = osal_thread_join(OSAL_C_CAST(thr_h, handle), timeout);
+    if (owned && status.ok())
+    {
+        osal::diagnostics(osal::diagnostic_resource::thread).release();
+    }
+    return to_c(status);
 }
 
 /// @brief Detach a thread (fire-and-forget); see `osal_thread_detach()`.
@@ -688,7 +863,7 @@ extern "C" osal_result_t osal_c_thread_join(osal_thread_handle* handle, osal_tic
 /// @retval OSAL_OK  On success.
 extern "C" osal_result_t osal_c_thread_detach(osal_thread_handle* handle)
 {
-    return to_c(osal_thread_detach(OSAL_C_CAST(thr_h, handle)));
+    return record_c_destruction(osal::diagnostic_resource::thread, OSAL_C_CAST(thr_h, handle), osal_thread_detach);
 }
 
 /// @brief Change the priority of a running thread; see `osal_thread_set_priority()`.
@@ -835,7 +1010,17 @@ extern "C" osal_result_t osal_c_timer_create(osal_timer_handle* handle, const ch
                                              osal_c_timer_callback_t callback, void* arg, osal_tick_t period_ticks,
                                              int auto_reload)
 {
-    return to_c(osal_timer_create(OSAL_C_CAST(tmr_h, handle), name, callback, arg, period_ticks, auto_reload != 0));
+    if (handle == nullptr || callback == nullptr || period_ticks == 0U)
+    {
+        return OSAL_INVALID_ARGUMENT;
+    }
+    if (handle->native != nullptr)
+    {
+        return OSAL_ALREADY_EXISTS;
+    }
+    return record_c_creation(
+        osal::diagnostic_resource::timer,
+        osal_timer_create(OSAL_C_CAST(tmr_h, handle), name, callback, arg, period_ticks, auto_reload != 0));
 }
 
 /// @brief Create a timer from a config struct; see `osal_timer_create()`.
@@ -848,8 +1033,7 @@ extern "C" osal_result_t osal_c_timer_create_with_cfg(osal_timer_handle* handle,
     {
         return OSAL_INVALID_ARGUMENT;
     }
-    return to_c(osal_timer_create(OSAL_C_CAST(tmr_h, handle), cfg->name, cfg->callback, cfg->arg, cfg->period_ticks,
-                                  cfg->auto_reload != 0));
+    return osal_c_timer_create(handle, cfg->name, cfg->callback, cfg->arg, cfg->period_ticks, cfg->auto_reload);
 }
 
 /// @brief Destroy a timer; see `osal_timer_destroy()`.
@@ -857,7 +1041,7 @@ extern "C" osal_result_t osal_c_timer_create_with_cfg(osal_timer_handle* handle,
 /// @retval OSAL_OK  On success.
 extern "C" osal_result_t osal_c_timer_destroy(osal_timer_handle* handle)
 {
-    return to_c(osal_timer_destroy(OSAL_C_CAST(tmr_h, handle)));
+    return record_c_destruction(osal::diagnostic_resource::timer, OSAL_C_CAST(tmr_h, handle), osal_timer_destroy);
 }
 
 /// @brief Start (arm) a timer; see `osal_timer_start()`.
@@ -1039,6 +1223,10 @@ extern "C" osal_result_t osal_c_notification_create(osal_notification_handle* ha
     if ((handle == nullptr) || (values == nullptr) || (pending == nullptr) || (slot_count == 0U)) [[unlikely]]
     {
         return OSAL_INVALID_ARGUMENT;
+    }
+    if (handle->valid != 0U)
+    {
+        return OSAL_ALREADY_EXISTS;
     }
 
     std::memset(values, 0, slot_count * sizeof(std::uint32_t));
@@ -1307,7 +1495,16 @@ extern "C" std::uint32_t osal_c_notification_peek(const osal_notification_handle
 extern "C" osal_result_t osal_c_work_queue_create(osal_work_queue_handle* handle, void* stack, size_t stack_bytes,
                                                   size_t depth, const char* name)
 {
-    return to_c(osal_work_queue_create(OSAL_C_CAST(wq_h, handle), stack, stack_bytes, depth, name));
+    if (handle == nullptr || depth == 0U)
+    {
+        return OSAL_INVALID_ARGUMENT;
+    }
+    if (handle->native != nullptr)
+    {
+        return OSAL_ALREADY_EXISTS;
+    }
+    return record_c_creation(osal::diagnostic_resource::work_queue,
+                             osal_work_queue_create(OSAL_C_CAST(wq_h, handle), stack, stack_bytes, depth, name));
 }
 
 /// @brief Create a work queue from a config struct; see `osal_work_queue_create()`.
@@ -1321,7 +1518,7 @@ extern "C" osal_result_t osal_c_work_queue_create_with_cfg(osal_work_queue_handl
     {
         return OSAL_INVALID_ARGUMENT;
     }
-    return to_c(osal_work_queue_create(OSAL_C_CAST(wq_h, handle), cfg->stack, cfg->stack_bytes, cfg->depth, cfg->name));
+    return osal_c_work_queue_create(handle, cfg->stack, cfg->stack_bytes, cfg->depth, cfg->name);
 }
 
 /// @brief Destroy a work queue; see `osal_work_queue_destroy()`.
@@ -1329,7 +1526,8 @@ extern "C" osal_result_t osal_c_work_queue_create_with_cfg(osal_work_queue_handl
 /// @retval OSAL_OK  On success.
 extern "C" osal_result_t osal_c_work_queue_destroy(osal_work_queue_handle* handle)
 {
-    return to_c(osal_work_queue_destroy(OSAL_C_CAST(wq_h, handle)));
+    return record_c_destruction(osal::diagnostic_resource::work_queue, OSAL_C_CAST(wq_h, handle),
+                                osal_work_queue_destroy);
 }
 
 /// @brief Submit a work item from task context; see `osal_work_queue_submit()`.
@@ -1392,6 +1590,10 @@ extern "C" osal_result_t osal_c_delayable_work_create(osal_delayable_work_handle
     {
         return OSAL_INVALID_ARGUMENT;
     }
+    if (handle->valid != 0U)
+    {
+        return OSAL_ALREADY_EXISTS;
+    }
     if (!delayable_backend_supported()) [[unlikely]]
     {
         return OSAL_NOT_SUPPORTED;
@@ -1401,7 +1603,11 @@ extern "C" osal_result_t osal_c_delayable_work_create(osal_delayable_work_handle
     handle->func            = func;
     handle->arg             = arg;
     handle->dispatch_error  = OSAL_OK;
-    handle->state           = static_cast<std::uint8_t>(c_delayable_state::idle);
+    handle->state           = static_cast<std::uint32_t>(c_delayable_state::idle);
+    handle->start_low       = 0U;
+    handle->start_high      = 0U;
+    handle->delay_low       = 0U;
+    handle->delay_high      = 0U;
     handle->dispatch_failed = 0U;
     handle->valid           = 0U;
 
@@ -1526,7 +1732,8 @@ extern "C" osal_result_t osal_c_delayable_work_reschedule(osal_delayable_work_ha
     }
 
     c_delayable_state current = delayable_state_load(handle);
-    if ((current == c_delayable_state::queued) || (current == c_delayable_state::running))
+    if ((current == c_delayable_state::queued) || (current == c_delayable_state::running) ||
+        (current == c_delayable_state::stopping))
     {
         delayable_unlock(handle);
         return OSAL_WOULD_BLOCK;
@@ -1535,18 +1742,19 @@ extern "C" osal_result_t osal_c_delayable_work_reschedule(osal_delayable_work_ha
     if (current == c_delayable_state::armed)
     {
         c_delayable_state expected = c_delayable_state::armed;
-        if (!delayable_state_compare_exchange(handle, &expected, c_delayable_state::idle))
+        if (!delayable_state_compare_exchange(handle, &expected, c_delayable_state::stopping))
         {
-            if ((expected == c_delayable_state::queued) || (expected == c_delayable_state::running))
-            {
-                delayable_unlock(handle);
-                return OSAL_WOULD_BLOCK;
-            }
+            delayable_unlock(handle);
+            return OSAL_WOULD_BLOCK;
         }
-        else
+        const osal_result_t stopped = osal_c_timer_stop(&handle->timer);
+        if (stopped != OSAL_OK)
         {
-            (void)osal_c_timer_stop(&handle->timer);
+            delayable_state_store(handle, c_delayable_state::armed);
+            delayable_unlock(handle);
+            return stopped;
         }
+        delayable_state_store(handle, c_delayable_state::idle);
     }
 
     delayable_clear_dispatch_error(handle);
@@ -1579,14 +1787,18 @@ extern "C" osal_result_t osal_c_delayable_work_cancel(osal_delayable_work_handle
     }
 
     c_delayable_state expected = c_delayable_state::armed;
-    if (!delayable_state_compare_exchange(handle, &expected, c_delayable_state::idle))
+    if (!delayable_state_compare_exchange(handle, &expected, c_delayable_state::stopping))
     {
         delayable_unlock(handle);
         return (expected == c_delayable_state::idle) ? OSAL_OK : OSAL_WOULD_BLOCK;
     }
 
-    delayable_clear_dispatch_error(handle);
     const osal_result_t stop_rc = osal_c_timer_stop(&handle->timer);
+    delayable_state_store(handle, (stop_rc == OSAL_OK) ? c_delayable_state::idle : c_delayable_state::armed);
+    if (stop_rc == OSAL_OK)
+    {
+        delayable_clear_dispatch_error(handle);
+    }
     delayable_unlock(handle);
     return stop_rc;
 }
@@ -1640,10 +1852,7 @@ extern "C" int osal_c_delayable_work_pending(const osal_delayable_work_handle* h
     }
 
     const c_delayable_state current = delayable_state_load(handle);
-    return ((current == c_delayable_state::armed) || (current == c_delayable_state::queued) ||
-            (current == c_delayable_state::running))
-               ? 1
-               : 0;
+    return (current != c_delayable_state::idle) ? 1 : 0;
 }
 
 extern "C" int osal_c_delayable_work_running(const osal_delayable_work_handle* handle)

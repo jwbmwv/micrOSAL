@@ -69,7 +69,7 @@ endif()
 # Standalone cmake project
 # ---------------------------------------------------------------------------
 project(microsal
-    VERSION 0.0.2
+    VERSION 0.1.1
     LANGUAGES C CXX)
 
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/osal_diagnostics.cmake)
@@ -313,11 +313,27 @@ endif()
 # Alias for find_package consumers
 # ---------------------------------------------------------------------------
 add_library(MicrOSAL::OSAL ALIAS microsal)
+set_target_properties(microsal PROPERTIES EXPORT_NAME OSAL)
 
 # ---------------------------------------------------------------------------
 # Install rules
 # ---------------------------------------------------------------------------
 include(GNUInstallDirs)
+include(CMakePackageConfigHelpers)
+set(MICROSAL_NEEDS_THREADS OFF)
+if(_OSAL_BACKEND_UPPER MATCHES "^(POSIX|LINUX|NUTTX|QNX|RTEMS|INTEGRITY)$")
+    set(MICROSAL_NEEDS_THREADS ON)
+endif()
+configure_package_config_file(
+    cmake/microsal-config.cmake.in
+    ${CMAKE_CURRENT_BINARY_DIR}/microsal-config.cmake
+    INSTALL_DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/microsal
+)
+write_basic_package_version_file(
+    ${CMAKE_CURRENT_BINARY_DIR}/microsal-config-version.cmake
+    VERSION ${PROJECT_VERSION}
+    COMPATIBILITY SameMinorVersion
+)
 
 install(TARGETS microsal
     EXPORT  microsal-config
@@ -331,7 +347,13 @@ install(DIRECTORY include/
 )
 
 install(EXPORT microsal-config
+    FILE microsal-targets.cmake
     NAMESPACE  MicrOSAL::
+    DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/microsal
+)
+install(FILES
+    ${CMAKE_CURRENT_BINARY_DIR}/microsal-config.cmake
+    ${CMAKE_CURRENT_BINARY_DIR}/microsal-config-version.cmake
     DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/microsal
 )
 

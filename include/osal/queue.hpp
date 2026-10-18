@@ -26,6 +26,7 @@
 #include "backends.hpp"
 #include "clock.hpp"
 #include "error.hpp"
+#include "diagnostics.hpp"
 #include "types.hpp"
 #include <cstdint>
 #include <cstddef>
@@ -88,17 +89,21 @@ public:
     /// @brief Constructs and initialises the queue.
     /// @complexity O(1)
     /// @blocking   Never.
-    queue() noexcept : valid_(osal_queue_create(&handle_, storage_, sizeof(T), N).ok()) {}
-
-    /// @brief Destructs the queue.
-    ~queue() noexcept
+    queue() noexcept
+        : initialization_status_(osal_queue_create(&handle_, storage_, sizeof(T), N)),
+          valid_(initialization_status_.ok())
     {
+        auto& counters = diagnostics(diagnostic_resource::queue);
+        counters.attempt(initialization_status_);
+        operations_.set_capacity(N);
         if (valid_)
         {
-            (void)osal_queue_destroy(&handle_);
-            valid_ = false;
+            counters.acquire();
         }
     }
+
+    /// @brief Destructs the queue.
+    ~queue() noexcept { (void)close(); }
 
     queue(const queue&)            = delete;
     queue& operator=(const queue&) = delete;
@@ -108,11 +113,44 @@ public:
     // ---- query -------------------------------------------------------------
 
     /// @brief Returns true if the queue was successfully initialised.
-    [[nodiscard]] bool valid() const noexcept { return valid_; }
+    [[nodiscard]] bool   valid() const noexcept { return valid_; }
+    [[nodiscard]] result initialization_status() const noexcept { return initialization_status_; }
+
+    /// @brief Idempotent checked destruction; failure retains ownership for retry.
+    /// @details Call after quiescing concurrent users. Destruction is best-effort.
+    ///          On failure keep this object (and its inline storage) alive.
+    [[nodiscard]] result close() noexcept
+    {
+        if (!valid_)
+        {
+            return ok();
+        }
+        const result status = osal_queue_destroy(&handle_);
+        diagnostics(diagnostic_resource::queue).attempt(status);
+        if (status.ok())
+        {
+            valid_ = false;
+            operations_.set_backlog(0);
+            diagnostics(diagnostic_resource::queue).release();
+        }
+        return status;
+    }
+
+    /// @brief Independently sampled gauges and modulo-2^32 operation counters.
+    /// @details ISR operations are intentionally excluded. Backlog is the last
+    ///          thread-context observation, not a synchronization predicate.
+    ///          Drops count sends rejected by capacity/backpressure, not invalid
+    ///          handles. Global in_use/high water measure owned queue handles.
+    [[nodiscard]] diagnostic_snapshot statistics() const noexcept { return operations_.snapshot(); }
     /// @brief Returns the number of items currently in the queue.
-    [[nodiscard]] std::size_t count() const noexcept { return osal_queue_count(&handle_); }
+    [[nodiscard]] std::size_t count() const noexcept
+    {
+        const auto count = valid_ ? osal_queue_count(&handle_) : 0U;
+        operations_.set_backlog(static_cast<std::uint32_t>(count));
+        return count;
+    }
     /// @brief Returns remaining free slots.
-    [[nodiscard]] std::size_t free_slots() const noexcept { return osal_queue_free(&handle_); }
+    [[nodiscard]] std::size_t free_slots() const noexcept { return valid_ ? osal_queue_free(&handle_) : 0U; }
     /// @brief Returns true if the queue is empty.
     [[nodiscard]] bool empty() const noexcept { return count() == 0U; }
     /// @brief Returns true if the queue is full.
@@ -125,14 +163,14 @@ public:
     /// @retval osal::ok() The item was enqueued successfully.
     /// @complexity O(1)
     /// @blocking   Potentially blocking.
-    [[nodiscard]] result send(const T& item) noexcept { return osal_queue_send(&handle_, &item, WAIT_FOREVER); }
+    [[nodiscard]] result send(const T& item) noexcept { return send_checked(item, WAIT_FOREVER); }
 
     /// @brief Attempts to send without blocking.
     /// @param[in] item  Item to enqueue.
     /// @return true if enqueued; false if the queue was full.
     /// @complexity O(1)
     /// @blocking   Never.
-    [[nodiscard]] bool try_send(const T& item) noexcept { return osal_queue_send(&handle_, &item, NO_WAIT).ok(); }
+    [[nodiscard]] bool try_send(const T& item) noexcept { return send_checked(item, NO_WAIT).ok(); }
 
     /// @brief Sends with a timeout.
     /// @param[in] item     Item to enqueue.
@@ -145,7 +183,7 @@ public:
         if constexpr (timed_queue_backend<active_backend>)
         {
             const tick_t ticks = clock_utils::ms_to_ticks(timeout);
-            return osal_queue_send(&handle_, &item, ticks).ok();
+            return send_checked(item, ticks).ok();
         }
         else
         {
@@ -168,12 +206,12 @@ public:
     /// @retval osal::ok() An item was received successfully.
     /// @complexity O(1)
     /// @blocking   Potentially blocking.
-    [[nodiscard]] result receive(T& item) noexcept { return osal_queue_receive(&handle_, &item, WAIT_FOREVER); }
+    [[nodiscard]] result receive(T& item) noexcept { return receive_checked(item, WAIT_FOREVER); }
 
     /// @brief Attempts to receive without blocking.
     /// @param[out] item  Destination.
     /// @return true if an item was available.
-    [[nodiscard]] bool try_receive(T& item) noexcept { return osal_queue_receive(&handle_, &item, NO_WAIT).ok(); }
+    [[nodiscard]] bool try_receive(T& item) noexcept { return receive_checked(item, NO_WAIT).ok(); }
 
     /// @brief Receives with a timeout.
     /// @param[out] item    Destination.
@@ -183,7 +221,7 @@ public:
         if constexpr (timed_queue_backend<active_backend>)
         {
             const tick_t ticks = clock_utils::ms_to_ticks(timeout);
-            return osal_queue_receive(&handle_, &item, ticks).ok();
+            return receive_checked(item, ticks).ok();
         }
         else
         {
@@ -204,6 +242,7 @@ public:
     {
         if (!valid())
         {
+            (void)observe(error_code::not_initialized, false);
             return std::unexpected(error_code::not_initialized);
         }
         T            item{};
@@ -222,10 +261,11 @@ public:
     {
         if (!valid())
         {
+            (void)observe(error_code::not_initialized, false);
             return std::unexpected(error_code::not_initialized);
         }
         T            item{};
-        const result status = osal_queue_receive(&handle_, &item, NO_WAIT);
+        const result status = receive_checked(item, NO_WAIT);
         if (status.ok())
         {
             return std::move(item);
@@ -237,13 +277,49 @@ public:
     /// @brief Peeks at the front item without removing it.
     /// @param[out] item  Destination.
     /// @return true if an item was available.
-    [[nodiscard]] bool peek(T& item) noexcept { return osal_queue_peek(&handle_, &item, NO_WAIT).ok(); }
+    [[nodiscard]] bool peek(T& item) noexcept
+    {
+        return observe(valid_ ? osal_queue_peek(&handle_, &item, NO_WAIT) : result{error_code::not_initialized}, false)
+            .ok();
+    }
 
 private:
+    result observe(result status, bool sending) noexcept
+    {
+        operations_.attempt(status);
+        auto& counters = diagnostics(diagnostic_resource::queue);
+        counters.attempt(status);
+        if (status == error_code::timeout || status == error_code::would_block || status == error_code::overflow)
+        {
+            operations_.contended();
+            counters.contended();
+            if (sending)
+            {
+                operations_.dropped();
+                counters.dropped();
+            }
+        }
+        (void)count();
+        return status;
+    }
+
+    result send_checked(const T& item, tick_t ticks) noexcept
+    {
+        return observe(valid_ ? osal_queue_send(&handle_, &item, ticks) : result{error_code::not_initialized}, true);
+    }
+
+    result receive_checked(T& item, tick_t ticks) noexcept
+    {
+        return observe(valid_ ? osal_queue_receive(&handle_, &item, ticks) : result{error_code::not_initialized},
+                       false);
+    }
+
+    mutable diagnostic_counters   operations_{};
     active_traits::queue_handle_t handle_{};
     /// @brief Static backing storage — N items of size sizeof(T).
     alignas(T) std::uint8_t storage_[N * sizeof(T)]{};
-    bool valid_{};
+    result initialization_status_{error_code::not_initialized};
+    bool   valid_{};
 };
 
 /// @} // osal_queue

@@ -6,11 +6,11 @@
 ///          - mutex    → pthread_mutex_* (PTHREAD_PRIO_INHERIT protocol)
 ///          - semaphore→ sem_init / sem_timedwait_monotonic / sem_post
 ///          - queue    → mq_open / mq_timedsend / mq_timedreceive (with CLOCK_MONOTONIC)
-///          - timer    → timer_create(CLOCK_MONOTONIC) + pulse delivery
+///          - timer    → owned pthread watcher + monotonic condition variable
 ///          - event_flags→ pthread_cond_* (condvar + bitmask, monotonic clock)
 ///          - wait_set → ionotify / select based (stubbed for initial release)
 ///
-///          Uses CLOCK_MONOTONIC throughout for timed operations.
+///          Uses CLOCK_MONOTONIC for timed operations except standard rwlocks.
 ///          QNX Neutrino provides monotonic variants:
 ///            pthread_mutex_timedlock_monotonic, sem_timedwait_monotonic,
 ///            pthread_cond_timedwait_monotonic
@@ -31,6 +31,8 @@
 #include <cerrno>
 #include <cstdlib>
 #include <atomic>
+#include <cstdio>
+#include <fcntl.h>
 
 #include <pthread.h>
 #include <semaphore.h>
@@ -67,38 +69,103 @@ int osal_to_qnx_priority(osal::priority_t p) noexcept
 // ---------------------------------------------------------------------------
 struct qnx_timer_ctx
 {
-    timer_t               timerid;
-    osal_timer_callback_t fn;
-    void*                 arg;
-    struct itimerspec     its;
-    bool                  auto_reload;
-    std::atomic<bool>     alive;
+    osal_timer_callback_t   fn;
+    void*                   arg;
+    pthread_t               watcher;
+    mutable pthread_mutex_t mutex;
+    pthread_cond_t          changed;
+    osal::tick_t            period_ticks;
+    timespec                deadline{};
+    std::uint64_t           arm_revision{};
+    bool                    auto_reload;
+    bool                    active{false};
+    bool                    shutdown{false};
+    bool                    release_from_watcher{false};
 };
 
-qnx_timer_ctx* timer_alloc() noexcept
+void qnx_timer_release(qnx_timer_ctx* ctx) noexcept
 {
-    auto* ctx = new (std::nothrow) qnx_timer_ctx{};
-    if (ctx != nullptr)
-    {
-        ctx->alive.store(true, std::memory_order_relaxed);
-    }
-    return ctx;
+    pthread_cond_destroy(&ctx->changed);
+    pthread_mutex_destroy(&ctx->mutex);
+    delete ctx;
 }
 
-/// @brief SIGEV_THREAD callback for QNX timer.
-void qnx_timer_callback(union sigval sv) noexcept
+/// @brief Owned watcher serializes callbacks and makes join a lifetime barrier.
+void* qnx_timer_watcher(void* raw) noexcept
 {
-    auto* ctx = static_cast<qnx_timer_ctx*>(sv.sival_ptr);
-    if (ctx != nullptr && ctx->alive.load(std::memory_order_acquire) && ctx->fn != nullptr)
+    auto* ctx = static_cast<qnx_timer_ctx*>(raw);
+    pthread_mutex_lock(&ctx->mutex);
+    while (!ctx->shutdown)
     {
+        while (!ctx->shutdown && !ctx->active)
+        {
+            pthread_cond_wait(&ctx->changed, &ctx->mutex);
+        }
+        if (ctx->shutdown)
+        {
+            break;
+        }
+        const timespec deadline = ctx->deadline;
+        const auto     revision = ctx->arm_revision;
+        const int      rc       = pthread_cond_timedwait(&ctx->changed, &ctx->mutex, &deadline);
+        if (ctx->shutdown || rc != ETIMEDOUT || !ctx->active || revision != ctx->arm_revision)
+        {
+            continue;
+        }
+        if (!ctx->auto_reload)
+        {
+            ctx->active = false;
+        }
+        pthread_mutex_unlock(&ctx->mutex);
         ctx->fn(ctx->arg);
+        pthread_mutex_lock(&ctx->mutex);
+        if (ctx->active && ctx->auto_reload && revision == ctx->arm_revision)
+        {
+            ctx->deadline = ms_to_abs_mono(ctx->period_ticks);
+        }
     }
+    const bool release = ctx->release_from_watcher;
+    pthread_mutex_unlock(&ctx->mutex);
+    if (release)
+    {
+        pthread_detach(pthread_self());
+        qnx_timer_release(ctx);
+    }
+    return nullptr;
 }
 
 // ---------------------------------------------------------------------------
 // Queue name helper
 // ---------------------------------------------------------------------------
 std::atomic<unsigned> qnx_q_counter{0};
+
+struct qnx_queue_ctx
+{
+    mqd_t mq;
+    mqd_t nonblocking_mq;
+    long  msg_size;
+};
+
+struct qnx_thread_ctx
+{
+    void (*entry)(void*);
+    void*            arg;
+    osal::affinity_t affinity;
+};
+
+void* qnx_thread_entry(void* raw) noexcept
+{
+    auto* ctx = static_cast<qnx_thread_ctx*>(raw);
+    if (ctx->affinity != osal::AFFINITY_ANY)
+    {
+        ThreadCtl(_NTO_TCTL_RUNMASK, reinterpret_cast<void*>(static_cast<uintptr_t>(ctx->affinity)));
+    }
+    const auto entry = ctx->entry;
+    void*      arg   = ctx->arg;
+    delete ctx;
+    entry(arg);
+    return nullptr;
+}
 
 // ---------------------------------------------------------------------------
 // Initialise a pthread_cond_t that uses CLOCK_MONOTONIC for timed waits.
@@ -118,9 +185,9 @@ int cond_init_monotonic(pthread_cond_t* cond) noexcept
 
 // ---------------------------------------------------------------------------
 // Shared-include macro contracts for posix_condvar.inl and posix_rwlock.inl.
-// QNX: all timed operations use CLOCK_MONOTONIC via ms_to_abs_mono.
+// Standard timed rwlocks use CLOCK_REALTIME; condition variables use CLOCK_MONOTONIC.
 // ---------------------------------------------------------------------------
-#define OSAL_POSIX_RW_ABS(t) ms_to_abs_mono(t)
+#define OSAL_POSIX_RW_ABS(t) osal::detail::backend_timeout_adapter::to_abs_timespec(CLOCK_REALTIME, t)
 #define OSAL_POSIX_COND_ABS(t) ms_to_abs_mono(t)
 
 extern "C"
@@ -162,10 +229,17 @@ extern "C"
     /// @retval osal::ok()                          On success.
     /// @retval osal::error_code::out_of_resources  On failure.
     osal::result osal_thread_create(osal::active_traits::thread_handle_t* handle, void (*entry)(void*), void* arg,
-                                    osal::priority_t priority, osal::affinity_t /*affinity*/, void* stack,
+                                    osal::priority_t priority, osal::affinity_t affinity, void* stack,
                                     osal::stack_size_t stack_bytes, const char* /*name*/) noexcept
     {
-        assert(handle != nullptr && entry != nullptr);
+        if (handle == nullptr || entry == nullptr || (stack != nullptr && stack_bytes == 0U))
+        {
+            return osal::error_code::invalid_argument;
+        }
+        if (handle->native != nullptr)
+        {
+            return osal::error_code::already_exists;
+        }
         pthread_attr_t attr;
         pthread_attr_init(&attr);
 
@@ -193,12 +267,19 @@ extern "C"
             return osal::error_code::out_of_resources;
         }
 
-        using entry_fn = void* (*)(void*);
-        const int rc   = pthread_create(tid, &attr, reinterpret_cast<entry_fn>(entry), arg);
+        auto* ctx = new (std::nothrow) qnx_thread_ctx{entry, arg, affinity};
+        if (!ctx)
+        {
+            pthread_attr_destroy(&attr);
+            delete tid;
+            return osal::error_code::out_of_resources;
+        }
+        const int rc = pthread_create(tid, &attr, qnx_thread_entry, ctx);
         pthread_attr_destroy(&attr);
 
         if (rc != 0)
         {
+            delete ctx;
             delete tid;
             return osal::error_code::out_of_resources;
         }
@@ -208,7 +289,7 @@ extern "C"
 
     /// @brief Join a thread using pthread_timedjoin_monotonic() for finite timeouts.
     /// @param[in,out] handle  Thread handle to join.
-    /// @param[in] timeout     Maximum wait in OSAL ticks; WAIT_FOREVER or 0 uses pthread_join().
+    /// @param[in] timeout     Maximum wait in OSAL ticks; only WAIT_FOREVER uses pthread_join().
     /// @retval osal::ok()                         On success.
     /// @retval osal::error_code::timeout          On failure.
     /// @retval osal::error_code::not_initialized  On failure.
@@ -220,18 +301,19 @@ extern "C"
         }
         auto* tid = static_cast<pthread_t*>(handle->native);
 
-        if (timeout == osal::WAIT_FOREVER || timeout == 0U)
+        int rc{0};
+        if (timeout == osal::WAIT_FOREVER)
         {
-            pthread_join(*tid, nullptr);
+            rc = pthread_join(*tid, nullptr);
         }
         else
         {
             struct timespec ts = ms_to_abs_mono(timeout);
-            const int       rc = pthread_timedjoin_monotonic(*tid, nullptr, &ts);
-            if (rc == ETIMEDOUT)
-            {
-                return osal::error_code::timeout;
-            }
+            rc                 = pthread_timedjoin_monotonic(*tid, nullptr, &ts);
+        }
+        if (rc != 0)
+        {
+            return rc == ETIMEDOUT ? osal::error_code::timeout : osal::error_code::unknown;
         }
         delete tid;
         handle->native = nullptr;
@@ -249,7 +331,10 @@ extern "C"
             return osal::error_code::not_initialized;
         }
         auto* tid = static_cast<pthread_t*>(handle->native);
-        pthread_detach(*tid);
+        if (pthread_detach(*tid) != 0)
+        {
+            return osal::error_code::unknown;
+        }
         delete tid;
         handle->native = nullptr;
         return osal::ok();
@@ -276,7 +361,7 @@ extern "C"
         return (rc == 0) ? osal::ok() : osal::error_code::unknown;
     }
 
-    /// @brief Set thread CPU affinity via QNX ThreadCtl(_NTO_TCTL_RUNMASK).
+    /// @brief Set the target thread CPU affinity via QNX ThreadCtlExt.
     /// @param[in] handle    Thread handle.
     /// @param[in] affinity  CPU runmask; each bit represents a processor.
     /// @retval osal::ok()                         On success.
@@ -289,10 +374,9 @@ extern "C"
         {
             return osal::error_code::not_initialized;
         }
-        // QNX: thread affinity via ThreadCtl or runmask
         auto      rmask = static_cast<unsigned>(affinity);
-        const int rc    = ThreadCtl(_NTO_TCTL_RUNMASK, reinterpret_cast<void*>(static_cast<uintptr_t>(
-                                                        rmask)));  // NOLINT(cppcoreguidelines-init-variables)
+        const int rc    = ThreadCtlExt(0, static_cast<int>(*static_cast<pthread_t*>(handle->native)), _NTO_TCTL_RUNMASK,
+                                       reinterpret_cast<void*>(static_cast<uintptr_t>(rmask)));
         return (rc == 0) ? osal::ok() : osal::error_code::unknown;
     }
 
@@ -434,20 +518,33 @@ extern "C"
     // Semaphore (POSIX named semaphore with sem_timedwait_monotonic)
     // ---------------------------------------------------------------------------
 
-    /// @brief Allocate and initialise a POSIX sem_t via sem_init().
+#include "../common/posix/posix_bounded_semaphore.inl"
+
+    /// @brief Allocate and initialise a bounded POSIX sem_t via sem_init().
     /// @param[out] handle        Output handle owns a heap-allocated sem_t.
     /// @param[in] initial_count  Starting token count.
+    /// @param[in] max_count      Maximum token count; excess gives return overflow.
     /// @retval osal::ok()                          On success.
     /// @retval osal::error_code::out_of_resources  On failure.
     osal::result osal_semaphore_create(osal::active_traits::semaphore_handle_t* handle, unsigned initial_count,
-                                       unsigned /*max_count*/) noexcept
+                                       unsigned max_count) noexcept
     {
-        auto* s = new (std::nothrow) sem_t{};
+        if (handle == nullptr || max_count == 0U || initial_count > max_count)
+        {
+            return osal::error_code::invalid_argument;
+        }
+        auto* s = new (std::nothrow) posix_bounded_semaphore{};
         if (s == nullptr)
         {
             return osal::error_code::out_of_resources;
         }
-        sem_init(s, 0, initial_count);
+        if (sem_init(&s->sem, 0, initial_count) != 0)
+        {
+            delete s;
+            return osal::error_code::out_of_resources;
+        }
+        s->count.store(initial_count, std::memory_order_relaxed);
+        s->maximum     = max_count;
         handle->native = static_cast<void*>(s);
         return osal::ok();
     }
@@ -461,8 +558,8 @@ extern "C"
         {
             return osal::ok();
         }
-        auto* s = static_cast<sem_t*>(handle->native);
-        sem_destroy(s);
+        auto* s = static_cast<posix_bounded_semaphore*>(handle->native);
+        sem_destroy(&s->sem);
         delete s;
         handle->native = nullptr;
         return osal::ok();
@@ -479,8 +576,7 @@ extern "C"
         {
             return osal::error_code::not_initialized;
         }
-        const int rc = sem_post(static_cast<sem_t*>(handle->native));
-        return (rc == 0) ? osal::ok() : osal::error_code::overflow;
+        return bounded_sem_post(static_cast<posix_bounded_semaphore*>(handle->native));
     }
 
     /// @brief Increment the semaphore from ISR context (sem_post is ISR-safe on QNX).
@@ -509,11 +605,11 @@ extern "C"
         {
             return osal::error_code::not_initialized;
         }
-        auto* s = static_cast<sem_t*>(handle->native);
+        auto* s = static_cast<posix_bounded_semaphore*>(handle->native);
 
         if (timeout_ticks == osal::WAIT_FOREVER)
         {
-            while (sem_wait(s) != 0)
+            while (bounded_sem_complete(s, sem_wait(&s->sem)) != 0)
             {
                 if (errno != EINTR)
                 {
@@ -524,12 +620,16 @@ extern "C"
         }
         if (timeout_ticks == osal::NO_WAIT)
         {
-            const int rc = sem_trywait(s);
+            const int rc = bounded_sem_complete(s, sem_trywait(&s->sem));
             return (rc == 0) ? osal::ok() : osal::error_code::would_block;
         }
         // QNX-specific monotonic timed wait
         struct timespec ts = ms_to_abs_mono(timeout_ticks);
-        const int       rc = sem_timedwait_monotonic(s, &ts);
+        int             rc{0};
+        do
+        {
+            rc = bounded_sem_complete(s, sem_timedwait_monotonic(&s->sem, &ts));
+        } while (rc == -1 && errno == EINTR);
         return (rc == 0) ? osal::ok() : osal::error_code::timeout;
     }
 
@@ -547,8 +647,8 @@ extern "C"
     // ---------------------------------------------------------------------------
 
     /// @brief Create a POSIX message queue with a unique name; unlinked immediately after open.
-    /// @details Uses mq_open() with O_CREAT|O_RDWR|O_NONBLOCK; mq_unlink() is called so the
-    ///          queue is cleaned up when closed.
+    /// @details Separate opens retain fixed blocking and nonblocking modes;
+    ///          mq_unlink() ensures the queue is cleaned up when closed.
     /// @param[out] handle    Output handle owns a heap-allocated {mqd_t, msg_size} context.
     /// @param[in] item_size  Size in bytes of each message.
     /// @param[in] capacity   Maximum number of messages the queue can hold.
@@ -557,6 +657,11 @@ extern "C"
     osal::result osal_queue_create(osal::active_traits::queue_handle_t* handle, void* /*buffer*/, std::size_t item_size,
                                    std::size_t capacity) noexcept
     {
+        if (handle == nullptr || item_size == 0U || capacity == 0U || item_size > static_cast<std::size_t>(LONG_MAX) ||
+            capacity > static_cast<std::size_t>(LONG_MAX))
+        {
+            return osal::error_code::invalid_argument;
+        }
         char           name[32]{};
         const unsigned id = qnx_q_counter.fetch_add(1U, std::memory_order_relaxed);
         (void)snprintf(name, sizeof(name), "/osal_q_%u_%u",
@@ -566,31 +671,34 @@ extern "C"
         struct mq_attr attr
         {
         };
-        attr.mq_maxmsg  = static_cast<long>(capacity > 0 ? capacity : 8);
-        attr.mq_msgsize = static_cast<long>(item_size > 0 ? item_size : sizeof(void*));
+        attr.mq_maxmsg  = static_cast<long>(capacity);
+        attr.mq_msgsize = static_cast<long>(item_size);
 
-        mqd_t mq =
-            mq_open(name, O_CREAT | O_RDWR | O_NONBLOCK, 0600, &attr);  // NOLINT(cppcoreguidelines-pro-type-vararg)
+        mqd_t mq = mq_open(name, O_CREAT | O_EXCL | O_RDWR, 0600, &attr);  // NOLINT(cppcoreguidelines-pro-type-vararg)
         if (mq == static_cast<mqd_t>(-1))
         {
             return osal::error_code::out_of_resources;
         }
-        mq_unlink(name);  // unlink now; fd remains valid until mq_close
-
-        // Store mqd_t as a pointer-sized value
-        auto* ctx = new (std::nothrow) struct
-        {
-            mqd_t mq;
-            long  msg_size;
-        };
-        if (ctx == nullptr)
+        const mqd_t nonblocking_mq = mq_open(name, O_RDWR | O_NONBLOCK);
+        mq_unlink(name);  // Each descriptor retains its own immutable blocking mode.
+        if (nonblocking_mq == static_cast<mqd_t>(-1))
         {
             mq_close(mq);
             return osal::error_code::out_of_resources;
         }
-        ctx->mq        = mq;
-        ctx->msg_size  = attr.mq_msgsize;
-        handle->native = static_cast<void*>(ctx);
+
+        // Store mqd_t as a pointer-sized value
+        auto* ctx = new (std::nothrow) qnx_queue_ctx;
+        if (ctx == nullptr)
+        {
+            mq_close(nonblocking_mq);
+            mq_close(mq);
+            return osal::error_code::out_of_resources;
+        }
+        ctx->mq             = mq;
+        ctx->nonblocking_mq = nonblocking_mq;
+        ctx->msg_size       = attr.mq_msgsize;
+        handle->native      = static_cast<void*>(ctx);
         return osal::ok();
     }
 
@@ -603,12 +711,9 @@ extern "C"
         {
             return osal::ok();
         }
-        auto* ctx = static_cast < struct
-        {
-            mqd_t mq;
-            long  msg_size;
-        }* > (handle->native);
+        auto* ctx = static_cast<qnx_queue_ctx*>(handle->native);
         mq_close(ctx->mq);
+        mq_close(ctx->nonblocking_mq);
         delete ctx;
         handle->native = nullptr;
         return osal::ok();
@@ -628,27 +733,14 @@ extern "C"
         {
             return osal::error_code::not_initialized;
         }
-        auto* ctx = static_cast < struct
-        {
-            mqd_t mq;
-            long  msg_size;
-        }* > (handle->native);
+        auto* ctx = static_cast<qnx_queue_ctx*>(handle->native);
 
         if (timeout_ticks == osal::NO_WAIT)
         {
-            const int rc = mq_send(ctx->mq, static_cast<const char*>(item), static_cast<std::size_t>(ctx->msg_size), 0);
+            const int rc = mq_send(ctx->nonblocking_mq, static_cast<const char*>(item),
+                                   static_cast<std::size_t>(ctx->msg_size), 0);
             return (rc == 0) ? osal::ok() : osal::error_code::would_block;
         }
-        // For timed/blocking sends, remove O_NONBLOCK temporarily
-        struct mq_attr old_attr
-        {
-        };
-        struct mq_attr new_attr
-        {
-        };
-        new_attr.mq_flags = 0;  // blocking
-        mq_setattr(ctx->mq, &new_attr, &old_attr);
-
         int rc = 0;
         if (timeout_ticks == osal::WAIT_FOREVER)
         {
@@ -660,8 +752,6 @@ extern "C"
             rc                 = mq_timedsend_monotonic(ctx->mq, static_cast<const char*>(item),
                                                         static_cast<std::size_t>(ctx->msg_size), 0, &ts);
         }
-        mq_setattr(ctx->mq, &old_attr, nullptr);  // restore
-
         if (rc == 0)
         {
             return osal::ok();
@@ -693,27 +783,14 @@ extern "C"
         {
             return osal::error_code::not_initialized;
         }
-        auto* ctx = static_cast < struct
-        {
-            mqd_t mq;
-            long  msg_size;
-        }* > (handle->native);
+        auto* ctx = static_cast<qnx_queue_ctx*>(handle->native);
 
         if (timeout_ticks == osal::NO_WAIT)
         {
-            const ssize_t n =
-                mq_receive(ctx->mq, static_cast<char*>(item), static_cast<std::size_t>(ctx->msg_size), nullptr);
+            const ssize_t n = mq_receive(ctx->nonblocking_mq, static_cast<char*>(item),
+                                         static_cast<std::size_t>(ctx->msg_size), nullptr);
             return (n >= 0) ? osal::ok() : osal::error_code::would_block;
         }
-        struct mq_attr old_attr
-        {
-        };
-        struct mq_attr new_attr
-        {
-        };
-        new_attr.mq_flags = 0;
-        mq_setattr(ctx->mq, &new_attr, &old_attr);
-
         ssize_t n = 0;
         if (timeout_ticks == osal::WAIT_FOREVER)
         {
@@ -725,8 +802,6 @@ extern "C"
             n = mq_timedreceive_monotonic(ctx->mq, static_cast<char*>(item), static_cast<std::size_t>(ctx->msg_size),
                                           nullptr, &ts);
         }
-        mq_setattr(ctx->mq, &old_attr, nullptr);
-
         if (n >= 0)
         {
             return osal::ok();
@@ -761,11 +836,7 @@ extern "C"
         {
             return 0U;
         }
-        auto* ctx = static_cast < const struct
-        {
-            mqd_t mq;
-            long  msg_size;
-        }* > (handle->native);
+        auto* ctx = static_cast<const qnx_queue_ctx*>(handle->native);
         struct mq_attr attr
         {
         };
@@ -782,11 +853,7 @@ extern "C"
         {
             return 0U;
         }
-        auto* ctx = static_cast < const struct
-        {
-            mqd_t mq;
-            long  msg_size;
-        }* > (handle->native);
+        auto* ctx = static_cast<const qnx_queue_ctx*>(handle->native);
         struct mq_attr attr
         {
         };
@@ -795,54 +862,53 @@ extern "C"
     }
 
     // ---------------------------------------------------------------------------
-    // Timer (CLOCK_MONOTONIC + SIGEV_THREAD)
+    // Timer (CLOCK_MONOTONIC + owned pthread watcher)
     // ---------------------------------------------------------------------------
 
-    /// @brief Create a CLOCK_MONOTONIC POSIX timer with SIGEV_THREAD delivery.
-    /// @details The callback is invoked from a kernel-spawned thread on expiry.
+    /// @brief Create a CLOCK_MONOTONIC timer with serialized watcher callbacks.
+    /// @details Periodic callbacks use fixed-delay scheduling, like the POSIX backend.
     /// @param[out] handle       Output handle owns a heap-allocated qnx_timer_ctx.
     /// @param[in] callback      Function called on each expiry.
     /// @param[in] arg           Opaque argument forwarded to @p callback.
     /// @param[in] period_ticks  Expiry period in OSAL ticks (milliseconds).
-    /// @param[in] auto_reload   If true, the interval (it_interval) is set for periodic fire.
+    /// @param[in] auto_reload   If true, wait a full period after each callback completes.
     /// @retval osal::ok()                          On success.
     /// @retval osal::error_code::out_of_resources  On failure.
     osal::result osal_timer_create(osal::active_traits::timer_handle_t* handle, const char* /*name*/,
                                    osal_timer_callback_t callback, void* arg, osal::tick_t period_ticks,
                                    bool auto_reload) noexcept
     {
-        assert(handle != nullptr && callback != nullptr);
-        auto* ctx = timer_alloc();
+        if (handle == nullptr || callback == nullptr || period_ticks == 0U || period_ticks == osal::WAIT_FOREVER)
+        {
+            return osal::error_code::invalid_argument;
+        }
+        if (handle->native != nullptr)
+        {
+            return osal::error_code::already_exists;
+        }
+        auto* ctx = new (std::nothrow) qnx_timer_ctx{};
         if (ctx == nullptr)
         {
             return osal::error_code::out_of_resources;
         }
-        ctx->fn          = callback;
-        ctx->arg         = arg;
-        ctx->auto_reload = auto_reload;
-
-        // Convert ticks (ms) to itimerspec
-        const auto sec            = static_cast<time_t>(period_ticks / 1000U);
-        const auto nsec           = static_cast<long>((period_ticks % 1000U) * 1'000'000L);
-        ctx->its.it_value.tv_sec  = sec;
-        ctx->its.it_value.tv_nsec = nsec;
-        if (auto_reload)
-        {
-            ctx->its.it_interval.tv_sec  = sec;
-            ctx->its.it_interval.tv_nsec = nsec;
-        }
-
-        struct sigevent sev
-        {
-        };
-        sev.sigev_notify            = SIGEV_THREAD;
-        sev.sigev_notify_function   = qnx_timer_callback;
-        sev.sigev_value.sival_ptr   = ctx;
-        sev.sigev_notify_attributes = nullptr;
-
-        if (timer_create(CLOCK_MONOTONIC, &sev, &ctx->timerid) != 0)
+        ctx->fn           = callback;
+        ctx->arg          = arg;
+        ctx->auto_reload  = auto_reload;
+        ctx->period_ticks = period_ticks;
+        if (pthread_mutex_init(&ctx->mutex, nullptr) != 0)
         {
             delete ctx;
+            return osal::error_code::out_of_resources;
+        }
+        if (cond_init_monotonic(&ctx->changed) != 0)
+        {
+            pthread_mutex_destroy(&ctx->mutex);
+            delete ctx;
+            return osal::error_code::out_of_resources;
+        }
+        if (pthread_create(&ctx->watcher, nullptr, qnx_timer_watcher, ctx) != 0)
+        {
+            qnx_timer_release(ctx);
             return osal::error_code::out_of_resources;
         }
         handle->native = static_cast<void*>(ctx);
@@ -859,25 +925,28 @@ extern "C"
             return osal::ok();
         }
         auto* ctx = static_cast<qnx_timer_ctx*>(handle->native);
-        ctx->alive.store(false, std::memory_order_release);
-
-        // Disarm before delete
-        struct itimerspec disarm
+        pthread_mutex_lock(&ctx->mutex);
+        ctx->active   = false;
+        ctx->shutdown = true;
+        pthread_cond_broadcast(&ctx->changed);
+        if (pthread_equal(pthread_self(), ctx->watcher))
         {
-        };
-        timer_settime(ctx->timerid, 0, &disarm, nullptr);
-
-        // Brief settle to avoid racing with in-flight callback
-        struct timespec settle = {0, 5'000'000};  // 5 ms
-        nanosleep(&settle, nullptr);
-
-        timer_delete(ctx->timerid);
-        delete ctx;
+            ctx->release_from_watcher = true;
+            pthread_mutex_unlock(&ctx->mutex);
+            handle->native = nullptr;
+            return osal::ok();
+        }
+        pthread_mutex_unlock(&ctx->mutex);
+        if (pthread_join(ctx->watcher, nullptr) != 0)
+        {
+            return osal::error_code::unknown;
+        }
+        qnx_timer_release(ctx);
         handle->native = nullptr;
         return osal::ok();
     }
 
-    /// @brief Arm the timer via timer_settime() with the stored itimerspec.
+    /// @brief Arm the timer watcher with the stored period.
     /// @param[in] handle  Timer handle.
     /// @retval osal::ok()                         On success.
     /// @retval osal::error_code::not_initialized  On failure.
@@ -888,12 +957,17 @@ extern "C"
         {
             return osal::error_code::not_initialized;
         }
-        auto*     ctx = static_cast<qnx_timer_ctx*>(handle->native);
-        const int rc  = timer_settime(ctx->timerid, 0, &ctx->its, nullptr);
-        return (rc == 0) ? osal::ok() : osal::error_code::unknown;
+        auto* ctx = static_cast<qnx_timer_ctx*>(handle->native);
+        pthread_mutex_lock(&ctx->mutex);
+        ctx->active   = ctx->period_ticks != osal::NO_WAIT;
+        ctx->deadline = ms_to_abs_mono(ctx->period_ticks);
+        ++ctx->arm_revision;
+        pthread_cond_broadcast(&ctx->changed);
+        pthread_mutex_unlock(&ctx->mutex);
+        return osal::ok();
     }
 
-    /// @brief Disarm the timer by passing a zero itimerspec to timer_settime().
+    /// @brief Disarm the timer watcher.
     /// @param[in] handle  Timer handle.
     /// @retval osal::ok()                         On success.
     /// @retval osal::error_code::not_initialized  If the handle is null.
@@ -904,10 +978,10 @@ extern "C"
             return osal::error_code::not_initialized;
         }
         auto* ctx = static_cast<qnx_timer_ctx*>(handle->native);
-        struct itimerspec disarm
-        {
-        };
-        timer_settime(ctx->timerid, 0, &disarm, nullptr);
+        pthread_mutex_lock(&ctx->mutex);
+        ctx->active = false;
+        pthread_cond_broadcast(&ctx->changed);
+        pthread_mutex_unlock(&ctx->mutex);
         return osal::ok();
     }
 
@@ -920,7 +994,7 @@ extern "C"
         return osal_timer_start(handle);
     }
 
-    /// @brief Update the stored itimerspec period; takes effect on the next osal_timer_start().
+    /// @brief Update the period; an active timer begins a fresh interval.
     /// @param[in] handle            Timer handle.
     /// @param[in] new_period_ticks  New period in OSAL ticks (milliseconds).
     /// @retval osal::ok()                         On success.
@@ -932,20 +1006,24 @@ extern "C"
         {
             return osal::error_code::not_initialized;
         }
-        auto*      ctx            = static_cast<qnx_timer_ctx*>(handle->native);
-        const auto sec            = static_cast<time_t>(new_period_ticks / 1000U);
-        const auto nsec           = static_cast<long>((new_period_ticks % 1000U) * 1'000'000L);
-        ctx->its.it_value.tv_sec  = sec;
-        ctx->its.it_value.tv_nsec = nsec;
-        if (ctx->auto_reload)
+        auto* ctx = static_cast<qnx_timer_ctx*>(handle->native);
+        if (new_period_ticks == 0U || new_period_ticks == osal::WAIT_FOREVER)
         {
-            ctx->its.it_interval.tv_sec  = sec;
-            ctx->its.it_interval.tv_nsec = nsec;
+            return osal::error_code::invalid_argument;
         }
+        pthread_mutex_lock(&ctx->mutex);
+        ctx->period_ticks = new_period_ticks;
+        if (ctx->active)
+        {
+            ctx->deadline = ms_to_abs_mono(new_period_ticks);
+            ++ctx->arm_revision;
+            pthread_cond_broadcast(&ctx->changed);
+        }
+        pthread_mutex_unlock(&ctx->mutex);
         return osal::ok();
     }
 
-    /// @brief Query whether the timer is still armed via timer_gettime().
+    /// @brief Query whether the timer watcher is armed.
     /// @param[in] handle  Timer handle.
     /// @return True if it_value is non-zero (timer has not yet fired or is periodic).
     bool osal_timer_is_active(const osal::active_traits::timer_handle_t* handle) noexcept
@@ -955,11 +1033,10 @@ extern "C"
             return false;
         }
         const auto* ctx = static_cast<const qnx_timer_ctx*>(handle->native);
-        struct itimerspec cur
-        {
-        };
-        timer_gettime(ctx->timerid, &cur);
-        return cur.it_value.tv_sec != 0 || cur.it_value.tv_nsec != 0;
+        pthread_mutex_lock(&ctx->mutex);
+        const bool active = ctx->active;
+        pthread_mutex_unlock(&ctx->mutex);
+        return active;
     }
 
     // ---------------------------------------------------------------------------

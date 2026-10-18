@@ -19,6 +19,7 @@ project(microsal_ztest LANGUAGES CXX)
 
 target_sources(app PRIVATE
     src/main.cpp
+    src/portable_features.cpp
 )
 
 # MicrOSAL public headers

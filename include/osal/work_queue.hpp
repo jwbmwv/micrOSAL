@@ -27,6 +27,7 @@
 #include "backends.hpp"
 #include "clock.hpp"
 #include "error.hpp"
+#include "diagnostics.hpp"
 #include "types.hpp"
 #include <cstddef>
 #include <cstdint>
@@ -123,7 +124,7 @@ public:
         : valid_(false)
     {
         const std::size_t capped = (depth > OSAL_WORK_QUEUE_MAX_DEPTH) ? OSAL_WORK_QUEUE_MAX_DEPTH : depth;
-        valid_                   = osal_work_queue_create(&handle_, stack, stack_bytes, capped, name).ok();
+        initialize(stack, stack_bytes, capped, name);
     }
 
     /// @brief Constructs from an immutable config (config may reside in FLASH).
@@ -132,20 +133,13 @@ public:
     explicit work_queue(const work_queue_config& cfg) noexcept : valid_(false)
     {
         const std::size_t capped = (cfg.depth > OSAL_WORK_QUEUE_MAX_DEPTH) ? OSAL_WORK_QUEUE_MAX_DEPTH : cfg.depth;
-        valid_                   = osal_work_queue_create(&handle_, cfg.stack, cfg.stack_bytes, capped, cfg.name).ok();
+        initialize(cfg.stack, cfg.stack_bytes, capped, cfg.name);
     }
 
     /// @brief Destroys the work queue after draining any already-queued items.
     /// @details The worker thread is signalled to stop once the queue becomes empty,
     ///          then joined before resources are released.
-    ~work_queue() noexcept
-    {
-        if (valid_)
-        {
-            (void)osal_work_queue_destroy(&handle_);
-            valid_ = false;
-        }
-    }
+    ~work_queue() noexcept { (void)shutdown(); }
 
     work_queue(const work_queue&)            = delete;
     work_queue& operator=(const work_queue&) = delete;
@@ -161,7 +155,19 @@ public:
     /// @retval error_code::overflow The work queue is full.
     [[nodiscard]] result submit(work_func_t func, void* arg = nullptr) noexcept
     {
-        return osal_work_queue_submit(&handle_, func, arg);
+        const result status =
+            valid_ ? osal_work_queue_submit(&handle_, func, arg) : result{error_code::not_initialized};
+        operations_.attempt(status);
+        diagnostics(diagnostic_resource::work_queue).attempt(status);
+        if (status == error_code::overflow || status == error_code::would_block)
+        {
+            operations_.dropped();
+            operations_.contended();
+            diagnostics(diagnostic_resource::work_queue).dropped();
+            diagnostics(diagnostic_resource::work_queue).contended();
+        }
+        (void)pending();
+        return status;
     }
 
     /// @brief Submits a work item from ISR context.
@@ -179,22 +185,88 @@ public:
     /// @retval error_code::timeout  The wait expired.
     [[nodiscard]] result flush(milliseconds timeout = milliseconds{5000}) noexcept
     {
-        const tick_t ticks = (timeout.count() < 0) ? WAIT_FOREVER : clock_utils::ms_to_ticks(timeout);
-        return osal_work_queue_flush(&handle_, ticks);
+        const tick_t ticks  = (timeout.count() < 0) ? WAIT_FOREVER : clock_utils::ms_to_ticks(timeout);
+        const result status = valid_ ? osal_work_queue_flush(&handle_, ticks) : result{error_code::not_initialized};
+        operations_.attempt(status);
+        diagnostics(diagnostic_resource::work_queue).attempt(status);
+        if (status == error_code::timeout || status == error_code::overflow || status == error_code::would_block)
+        {
+            operations_.contended();
+            diagnostics(diagnostic_resource::work_queue).contended();
+        }
+        (void)pending();
+        return status;
     }
 
     /// @brief Cancels all pending (not yet started) items.
-    [[nodiscard]] result cancel_all() noexcept { return osal_work_queue_cancel_all(&handle_); }
+    [[nodiscard]] result cancel_all() noexcept
+    {
+        const result status = valid_ ? osal_work_queue_cancel_all(&handle_) : result{error_code::not_initialized};
+        operations_.attempt(status);
+        diagnostics(diagnostic_resource::work_queue).attempt(status);
+        (void)pending();
+        return status;
+    }
+
+    /// @brief Drains and destroys the worker; failure retains ownership for retry.
+    /// @details Idempotent. Quiesce producers before calling; never call from ISR.
+    ///          Calling from the worker must return the backend's error, not force
+    ///          termination. The destructor performs best-effort shutdown.
+    ///          On failure keep this object and all callback arguments alive.
+    [[nodiscard]] result shutdown() noexcept
+    {
+        if (!valid_)
+        {
+            return ok();
+        }
+        const result status = osal_work_queue_destroy(&handle_);
+        diagnostics(diagnostic_resource::work_queue).attempt(status);
+        if (status.ok())
+        {
+            valid_ = false;
+            operations_.set_backlog(0);
+            diagnostics(diagnostic_resource::work_queue).release();
+        }
+        return status;
+    }
+
+    [[nodiscard]] result close() noexcept { return shutdown(); }
 
     // ---- query -------------------------------------------------------------
 
     /// @brief Returns the number of items currently queued (not yet executed).
-    [[nodiscard]] std::size_t pending() const noexcept { return osal_work_queue_pending(&handle_); }
+    [[nodiscard]] std::size_t pending() const noexcept
+    {
+        const auto count = valid_ ? osal_work_queue_pending(&handle_) : 0U;
+        operations_.set_backlog(static_cast<std::uint32_t>(count));
+        return count;
+    }
 
     /// @brief Returns true if the work queue was successfully initialised.
-    [[nodiscard]] bool valid() const noexcept { return valid_; }
+    [[nodiscard]] bool   valid() const noexcept { return valid_; }
+    [[nodiscard]] result initialization_status() const noexcept { return initialization_status_; }
+
+    /// @brief Approximate last-observed backlog and modulo-2^32 operation counters.
+    /// @details ISR submissions are excluded. Backlog/high water here measure
+    ///          work items; global in_use/high water measure owned queue handles.
+    [[nodiscard]] diagnostic_snapshot statistics() const noexcept { return operations_.snapshot(); }
 
 private:
+    void initialize(void* stack, std::size_t stack_bytes, std::size_t depth, const char* name) noexcept
+    {
+        initialization_status_ = osal_work_queue_create(&handle_, stack, stack_bytes, depth, name);
+        valid_                 = initialization_status_.ok();
+        operations_.set_capacity(static_cast<std::uint32_t>(depth));
+        auto& counters = diagnostics(diagnostic_resource::work_queue);
+        counters.attempt(initialization_status_);
+        if (valid_)
+        {
+            counters.acquire();
+        }
+    }
+
+    result                             initialization_status_{error_code::not_initialized};
+    mutable diagnostic_counters        operations_{};
     bool                               valid_;
     active_traits::work_queue_handle_t handle_{};
 };

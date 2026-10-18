@@ -20,20 +20,38 @@ Backend-by-backend storage and allocation profiles are summarized in
 ```cpp
 #include <osal/osal.hpp>      // or include individual headers
 
-osal::mutex          mtx;
-osal::semaphore      sem{osal::semaphore_type::binary, 0U};
-osal::queue<int, 8>  q;
-osal::timer          t{timer_cfg};
-osal::thread         worker{thread_cfg};
-
+int main()
 {
-    osal::mutex::lock_guard lg{mtx};
-    // critical section
-}
+    osal::mutex mtx;
+    osal::semaphore sem{osal::semaphore_type::binary, 0U};
+    osal::queue<int, 8> q;
+    const osal::timer_config timer_cfg{
+        .callback = +[](void*) {},
+        .period = osal::milliseconds{100},
+    };
+    osal::timer t{timer_cfg};
+    osal::thread worker;
+    if (!mtx.valid() || !sem.valid() || !q.valid() || !t.valid())
+        return 1;
 
-auto rc = sem.take_for(std::chrono::milliseconds{100});
-if (rc != osal::error_code::ok) { /* timed out */ }
+    {
+        osal::mutex::lock_guard lg{mtx};
+        // critical section
+    }
+    const osal::thread_config thread_cfg{
+        .entry = +[](void* arg) { static_cast<osal::semaphore*>(arg)->give(); },
+        .arg = &sem,
+    };
+    if (!worker.create(thread_cfg).ok())
+        return 1;
+    const bool signalled = sem.take_for(osal::milliseconds{100});
+    const auto joined = worker.join();
+    return signalled && joined.ok() ? 0 : 1;
+}
 ```
+
+This hosted example uses backend-managed thread stacks. Embedded applications
+must supply the stack storage and supported lifecycle required by their backend.
 
 ---
 
@@ -84,6 +102,10 @@ if (rc != osal::error_code::ok) { /* timed out */ }
 | `delayable_work.hpp` | `osal::delayable_work` | One-shot delayed work item built on `timer + work_queue` |
 | `notification.hpp` | `osal::notification<Slots>` | Indexed 32-bit notification words with FreeRTOS-like update actions |
 | `object_wait_set.hpp` | `osal::object_wait_set` | Portable polling wait-set for OSAL objects |
+| `stop_token.hpp`, `wait_signal.hpp` | Stop tokens and explicit wake channels | Cooperative, event-driven cancellable waits |
+| `diagnostics.hpp` | Resource and operation snapshots | Allocation-free counters, pool high-water marks, failures, contention and backlog |
+| `bus/zero_copy_signal.hpp` | Owned-loan pub/sub | Bounded zero-copy fanout with immutable subscriber loans |
+| `bus/topic_registry.hpp` | Typed registry | Allocation-free topic routing with checked unregister lifetimes |
 | `thread_local_data.hpp` | `osal::thread_local_data` | Per-thread key/value storage |
 | `wait_set.hpp` | `osal::wait_set` | Multi-object wait (Linux `epoll`, POSIX-family `poll`, PX5 native wait-set) |
 | `clock.hpp` | Free functions | `osal_clock_monotonic_ms`, `_ticks`, `_tick_period_us` |
@@ -100,6 +122,21 @@ existing OSAL primitives and do not require new per-backend ABI hooks.
 `osal::wait_set` remains the native descriptor/object wait API where the host
 OS provides one; `osal::object_wait_set` is the RTOS-object complement for
 queue-like and event-like OSAL objects.
+
+For event-driven object waits, pass a caller-owned `wait_signal` and optionally
+a `stop_token`; producers must explicitly notify after updating observed state.
+This preserves the original polling overload and does not claim automatic native
+subscriptions. Genuine zero-copy pub/sub uses owned producer/subscriber loans,
+not the legacy copying raw-pointer overload. Pools must outlive outstanding
+loans. See the [release contract](docs/RELEASE_CONTRACT.md) and
+[pub/sub ownership contract](docs/bus/premium_pubsub.md).
+
+Checked wrappers retain `initialization_status()` and provide explicit lifecycle
+results; use `mutex::checked_lock_guard` rather than assuming acquisition always
+succeeds. Mutex configurations can request inheritance, ceiling and robustness
+where implemented; unsupported policies return an error rather than silently
+using defaults. This `0.1.0` change requires rebuilding consumers and zero-initializing
+owning C handles before first creation.
 
 Optional or native-only APIs also expose explicit support helpers. Use
 `osal::spinlock::is_supported`, `osal::wait_set::is_supported`,
@@ -151,8 +188,14 @@ cmake -B build \
 cmake --build build -j$(nproc)
 ```
 
-`find_package(microsal)` is supported after install; the library exports the
-`microsal` CMake target.
+After installation, use `find_package(microsal CONFIG REQUIRED)` and link
+`MicrOSAL::OSAL`, the same target name used by `add_subdirectory()`.
+The legacy installed `MicrOSAL::microsal` target remains available.
+
+```cmake
+find_package(microsal 0.1.0 CONFIG REQUIRED)
+target_link_libraries(myapp PRIVATE MicrOSAL::OSAL)
+```
 
 ### Zephyr (west)
 
@@ -204,6 +247,9 @@ The hosted doctest build enables a test-only synthetic tick/context helper so
 the suite is self-driving under `ctest`. Production bare-metal integrations
 still need the application to pump `osal_baremetal_tick()` or
 `osal_baremetal_tick_with_timers()` from SysTick (or the platform equivalent).
+Production thread creation returns `not_supported`; check
+`osal::thread::is_supported`. The hosted separate-stack scheduler is not a
+production target context-switch port.
 
 ### FreeRTOS v11 (POSIX simulation, no emulator)
 
@@ -263,12 +309,12 @@ toolchain and core support them.
 
 | Backend | Test suite | Runner | Status |
 | --- | --- | --- | --- |
-| Linux | CTest / doctest | Native process | ✅ 28/28 locally rerun |
-| POSIX | CTest / doctest | Native process | ✅ same 28 hosted binaries configured in CI |
-| Bare-metal | CTest / doctest | Native process with hosted self-tick/context helper | ✅ same 28 hosted binaries configured in CI |
-| RTEMS | CTest / doctest | Native process | ✅ same 28 hosted binaries configured in CI |
-| INTEGRITY | CTest / doctest | Native process | ✅ same 28 hosted binaries configured in CI |
-| FreeRTOS v11 | CTest / doctest | POSIX sim | ✅ 44/44 locally rerun |
+| Linux | CTest / doctest | Native process | ✅ hosted primitives, conformance, fault injection, package, and documentation tests |
+| POSIX | CTest / doctest | Native process | ✅ hosted primitives, conformance, package, and documentation tests |
+| Bare-metal | CTest / doctest | Native process with hosted self-tick/context helper | ✅ hosted regression only; production threads unsupported |
+| RTEMS | CTest / doctest | Native process | ✅ hosted binaries configured in CI |
+| INTEGRITY | CTest / doctest | Native process | ✅ hosted binaries configured in CI |
+| FreeRTOS v11 | CTest / doctest | POSIX sim | ✅ static/dynamic suites; 64 cases / 1378 assertions and 10 repeated full-suite passes each |
 | NuttX (`sim/nsh`) | printf framework | NuttX sim on x86-64 Linux | ✅ 30/30 last recorded rerun |
 | Zephyr (`native_sim`) | west twister / ztest | Native process | ✅ 194/194 locally rerun across 2 configs |
 | Zephyr (`nrf52840dk`) | west twister / ztest | Renode v1.15.3 | ⚠️ 79/79 last recorded rerun on the pre-thread-introspection suite |

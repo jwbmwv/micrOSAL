@@ -7,6 +7,15 @@
 #include <atomic>
 #include <cstring>
 
+static_assert(osal::thread::is_supported == osal::supports_requirement<osal::support_requirement::thread>);
+static_assert(!osal::capabilities<osal::backend_threadx>::has_native_memory_pool);
+static_assert(!osal::capabilities<osal::backend_px5>::has_native_memory_pool);
+static_assert(!osal::capabilities<osal::backend_micrium>::has_native_memory_pool);
+static_assert(!osal::capabilities<osal::backend_embos>::has_native_memory_pool);
+static_assert(!osal::capabilities<osal::backend_chibios>::has_native_memory_pool);
+static_assert(!osal::capabilities<osal::backend_vxworks>::has_native_memory_pool);
+static_assert(!osal::capabilities<osal::backend_vxworks>::has_native_work_queue);
+static_assert(!osal::capabilities<osal::backend_zephyr>::has_system_clock);
 static_assert(osal::thread::supports_timed_join == osal::active_capabilities::has_timed_join);
 static_assert(osal::thread::supports_affinity == osal::active_capabilities::has_thread_affinity);
 static_assert(osal::thread::supports_dynamic_priority == osal::active_capabilities::has_dynamic_thread_priority);

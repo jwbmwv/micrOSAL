@@ -55,6 +55,22 @@ class osal_signal<T, MaxSubscribers, PerSubCapacity, bus_backend_generic>
 public:
     using value_type = T;
 
+    [[nodiscard]] bool valid() const noexcept
+    {
+        if (!mutex_.valid())
+        {
+            return false;
+        }
+        for (const auto& slot : slots_)
+        {
+            if (!slot.queue_.valid())
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+
     // ---- subscribe / unsubscribe -------------------------------------------
 
     /// @brief Registers a new subscriber and returns its ID.
@@ -63,6 +79,11 @@ public:
     /// @blocking Never (mutex-locked, O(MaxSubscribers) scan).
     [[nodiscard]] bool subscribe(subscriber_id& out_id) noexcept
     {
+        if (!valid())
+        {
+            out_id = invalid_subscriber_id;
+            return false;
+        }
         scoped_lock lk{mutex_};
         for (std::size_t i = 0U; i < MaxSubscribers; ++i)
         {
@@ -87,12 +108,20 @@ public:
 
     /// @brief Removes a subscriber by ID.
     /// @param[in] id  Subscriber ID obtained from subscribe().
-    /// @return true if the ID was valid and active; false otherwise.
+    /// @return true if removed; false if invalid or a receive is still in progress.
     [[nodiscard]] bool unsubscribe(subscriber_id id) noexcept
     {
+        if (!valid())
+        {
+            return false;
+        }
         scoped_lock       lk{mutex_};
         const std::size_t slot_index = slot_index_from_id_(id);
         if (slot_index >= MaxSubscribers || !subscriber_id_matches_slot_(id, slot_index))
+        {
+            return false;
+        }
+        if (slots_[slot_index].receivers_ != 0U)
         {
             return false;
         }
@@ -111,6 +140,10 @@ public:
     /// @complexity O(MaxSubscribers).
     [[nodiscard]] bool publish(const T& msg) noexcept
     {
+        if (!valid())
+        {
+            return false;
+        }
         scoped_lock lk{mutex_};
         bool        any = false;
         for (auto& slot : slots_)
@@ -131,6 +164,11 @@ public:
     /// @return true if a message was available.
     [[nodiscard]] bool try_receive(subscriber_id id, T& out) noexcept
     {
+        if (!valid())
+        {
+            return false;
+        }
+        scoped_lock       lk{mutex_};
         const std::size_t slot_index = slot_index_from_id_(id);
         if (slot_index >= MaxSubscribers || !subscriber_id_matches_slot_(id, slot_index))
         {
@@ -146,18 +184,39 @@ public:
     /// @return true if a message was received within the timeout.
     [[nodiscard]] bool receive(subscriber_id id, T& out, tick_t timeout = WAIT_FOREVER) noexcept
     {
-        const std::size_t slot_index = slot_index_from_id_(id);
-        if (slot_index >= MaxSubscribers || !subscriber_id_matches_slot_(id, slot_index))
+        if (!valid())
         {
             return false;
         }
-        return slots_[slot_index].queue_.receive(out, timeout);
+        const std::size_t slot_index = slot_index_from_id_(id);
+        {
+            scoped_lock lk{mutex_};
+            if (slot_index >= MaxSubscribers || !subscriber_id_matches_slot_(id, slot_index))
+            {
+                return false;
+            }
+            ++slots_[slot_index].receivers_;
+        }
+        const bool received = slots_[slot_index].queue_.receive(out, timeout);
+        {
+            scoped_lock lk{mutex_};
+            --slots_[slot_index].receivers_;
+        }
+        return received;
     }
 
     // ---- query -------------------------------------------------------------
 
     /// @brief Returns the current number of active subscribers.
-    [[nodiscard]] std::size_t subscriber_count() const noexcept { return subscriber_count_; }
+    [[nodiscard]] std::size_t subscriber_count() const noexcept
+    {
+        if (!valid())
+        {
+            return 0U;
+        }
+        scoped_lock lk{mutex_};
+        return subscriber_count_;
+    }
 
     /// @brief Returns the compile-time maximum subscriber count.
     static constexpr std::size_t max_subscribers() noexcept { return MaxSubscribers; }
@@ -181,6 +240,7 @@ private:
     {
         subscriber_generation_t                          generation_{0U};
         bool                                             in_use_{false};
+        std::size_t                                      receivers_{0U};
         osal_bus<T, PerSubCapacity, bus_backend_generic> queue_{};
     };
 
@@ -290,7 +350,7 @@ private:
     // ---- data --------------------------------------------------------------
 
     std::array<subscriber_slot, MaxSubscribers> slots_{};
-    mutex                                       mutex_;
+    mutable mutex                               mutex_;
     std::size_t                                 subscriber_count_{0U};
 };
 

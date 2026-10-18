@@ -34,9 +34,12 @@ TEST_CASE("wait_set: add returns ok when supported")
     osal::wait_set ws;
     REQUIRE(ws.valid());
 
-    // Use a dummy fd (e.g. STDIN_FILENO on Linux/POSIX).
-    auto r = ws.add(0, osal::wait_events::readable);
+    int pipefd[2]{-1, -1};
+    REQUIRE(::pipe(pipefd) == 0);
+    auto r = ws.add(pipefd[0], osal::wait_events::readable);
     CHECK(r.ok());
+    ::close(pipefd[0]);
+    ::close(pipefd[1]);
 }
 
 TEST_CASE("wait_set: remove returns ok when supported")
@@ -50,9 +53,13 @@ TEST_CASE("wait_set: remove returns ok when supported")
     osal::wait_set ws;
     REQUIRE(ws.valid());
 
-    REQUIRE(ws.add(0, osal::wait_events::readable).ok());
-    auto r = ws.remove(0);
+    int pipefd[2]{-1, -1};
+    REQUIRE(::pipe(pipefd) == 0);
+    CHECK(ws.add(pipefd[0], osal::wait_events::readable).ok());
+    auto r = ws.remove(pipefd[0]);
     CHECK(r.ok());
+    ::close(pipefd[0]);
+    ::close(pipefd[1]);
 }
 
 TEST_CASE("wait_set: wait times out with no events")

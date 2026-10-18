@@ -51,6 +51,48 @@
 
 namespace
 {
+struct nx_sem_slot
+{
+    std::atomic<bool>     used{};
+    std::atomic<sem_t*>   id{};
+    std::atomic<unsigned> count{};
+    unsigned              maximum{};
+
+    osal::result reserve() noexcept
+    {
+        unsigned value = count.load(std::memory_order_relaxed);
+        for (unsigned attempt = 0; attempt < 32U; ++attempt)
+        {
+            if (value >= maximum)
+            {
+                return osal::error_code::overflow;
+            }
+            if (count.compare_exchange_weak(value, value + 1U, std::memory_order_relaxed))
+            {
+                return osal::ok();
+            }
+        }
+        return osal::error_code::would_block;
+    }
+};
+static_assert(std::atomic<unsigned>::is_always_lock_free);
+static_assert(std::atomic<sem_t*>::is_always_lock_free);
+#ifndef OSAL_NX_MAX_SEMS
+#define OSAL_NX_MAX_SEMS 64
+#endif
+nx_sem_slot nx_sems[OSAL_NX_MAX_SEMS];
+
+nx_sem_slot* nx_sem_find(sem_t* id) noexcept
+{
+    for (auto& slot : nx_sems)
+    {
+        if (slot.id.load(std::memory_order_acquire) == id)
+        {
+            return &slot;
+        }
+    }
+    return nullptr;
+}
 
 /// @brief Convert ms timeout to absolute timespec (CLOCK_MONOTONIC).
 struct timespec ms_to_abs_timespec(osal::tick_t ms) noexcept
@@ -98,21 +140,38 @@ struct nx_timer_ctx
     void*                 arg          = nullptr;
     uint32_t              period_ticks = 0;
     bool                  auto_reload  = false;
-    bool                  active       = false;
+    std::atomic<bool>     active{false};
+    std::atomic<bool>     used{false};
+    std::atomic<bool>     ever_started{false};
+    std::atomic<bool>     callback_gate{false};
 };
 nx_timer_ctx nx_timer_ctxs[OSAL_NX_MAX_TIMERS];
 
 void nx_timer_worker(void* arg) noexcept
 {
     auto* ctx = static_cast<nx_timer_ctx*>(arg);
+    if (ctx->callback_gate.exchange(true, std::memory_order_acquire))
+    {
+        return;
+    }
+    if (!ctx->active.load(std::memory_order_acquire))
+    {
+        ctx->callback_gate.store(false, std::memory_order_release);
+        return;
+    }
     if (ctx->fn != nullptr)
     {
+        if (!ctx->auto_reload)
+        {
+            ctx->active.store(false, std::memory_order_release);
+        }
         ctx->fn(ctx->arg);
     }
     if (ctx->auto_reload && ctx->active)
     {
         work_queue(LPWORK, &ctx->work, nx_timer_worker, ctx, ctx->period_ticks);
     }
+    ctx->callback_gate.store(false, std::memory_order_release);
 }
 
 }  // namespace
@@ -178,7 +237,14 @@ extern "C"
                                     osal::priority_t priority, osal::affinity_t /*affinity*/, void* stack,
                                     osal::stack_size_t stack_bytes, const char* /*name*/) noexcept
     {
-        assert(handle != nullptr && entry != nullptr);
+        if (handle == nullptr || entry == nullptr || (stack != nullptr && stack_bytes == 0U))
+        {
+            return osal::error_code::invalid_argument;
+        }
+        if (handle->native != nullptr)
+        {
+            return osal::error_code::already_exists;
+        }
         auto* ctx = new (std::nothrow) nx_thread_ctx{entry, arg};
         if (ctx == nullptr)
         {
@@ -425,18 +491,40 @@ extern "C"
     /// @retval osal::ok()                          On success.
     /// @retval osal::error_code::out_of_resources  On failure.
     osal::result osal_semaphore_create(osal::active_traits::semaphore_handle_t* handle, unsigned initial_count,
-                                       unsigned /*max_count*/) noexcept
+                                       unsigned max_count) noexcept
     {
+        if (handle == nullptr || max_count == 0U || initial_count > max_count || max_count > SEM_VALUE_MAX)
+        {
+            return osal::error_code::invalid_argument;
+        }
+        nx_sem_slot* slot = nullptr;
+        for (auto& candidate : nx_sems)
+        {
+            if (!candidate.used.exchange(true, std::memory_order_acquire))
+            {
+                slot = &candidate;
+                break;
+            }
+        }
+        if (slot == nullptr)
+        {
+            return osal::error_code::out_of_resources;
+        }
         auto* s = new (std::nothrow) sem_t;
         if (s == nullptr)
         {
+            slot->used.store(false, std::memory_order_release);
             return osal::error_code::out_of_resources;
         }
         if (nxsem_init(s, 0, static_cast<int>(initial_count)) < 0)
         {
             delete s;
+            slot->used.store(false, std::memory_order_release);
             return osal::error_code::out_of_resources;
         }
+        slot->maximum = max_count;
+        slot->count.store(initial_count, std::memory_order_relaxed);
+        slot->id.store(s, std::memory_order_release);
         handle->native = static_cast<void*>(s);
         return osal::ok();
     }
@@ -450,8 +538,14 @@ extern "C"
         {
             return osal::ok();
         }
-        nxsem_destroy(static_cast<sem_t*>(handle->native));
+        auto* slot = nx_sem_find(static_cast<sem_t*>(handle->native));
+        if (slot == nullptr || nxsem_destroy(static_cast<sem_t*>(handle->native)) < 0)
+        {
+            return osal::error_code::unknown;
+        }
         delete static_cast<sem_t*>(handle->native);
+        slot->id.store(nullptr, std::memory_order_release);
+        slot->used.store(false, std::memory_order_release);
         handle->native = nullptr;
         return osal::ok();
     }
@@ -467,7 +561,22 @@ extern "C"
         {
             return osal::error_code::not_initialized;
         }
-        return (nxsem_post(static_cast<sem_t*>(handle->native)) >= 0) ? osal::ok() : osal::error_code::unknown;
+        auto* slot = nx_sem_find(static_cast<sem_t*>(handle->native));
+        if (slot == nullptr)
+        {
+            return osal::error_code::not_initialized;
+        }
+        const auto reserved = slot->reserve();
+        if (!reserved.ok())
+        {
+            return reserved;
+        }
+        if (nxsem_post(static_cast<sem_t*>(handle->native)) < 0)
+        {
+            slot->count.fetch_sub(1U, std::memory_order_relaxed);
+            return osal::error_code::unknown;
+        }
+        return osal::ok();
     }
 
     /// @brief Increment a semaphore from ISR context (nxsem_post is ISR-safe in NuttX).
@@ -503,16 +612,26 @@ extern "C"
             {
                 rc = nxsem_wait(s);
             } while (rc == -EINTR);
+            if (rc >= 0)
+            {
+                nx_sem_find(s)->count.fetch_sub(1U, std::memory_order_relaxed);
+            }
             return (rc >= 0) ? osal::ok() : osal::error_code::unknown;
         }
         if (timeout_ticks == osal::NO_WAIT)
         {
-            return (nxsem_trywait(s) >= 0) ? osal::ok() : osal::error_code::would_block;
+            if (nxsem_trywait(s) < 0)
+            {
+                return osal::error_code::would_block;
+            }
+            nx_sem_find(s)->count.fetch_sub(1U, std::memory_order_relaxed);
+            return osal::ok();
         }
         const struct timespec abs = ms_to_abs_timespec(timeout_ticks);
         const int             rc  = nxsem_clockwait(s, CLOCK_MONOTONIC, &abs);
         if (rc >= 0)
         {
+            nx_sem_find(s)->count.fetch_sub(1U, std::memory_order_relaxed);
             return osal::ok();
         }
         return (rc == -ETIMEDOUT) ? osal::error_code::timeout : osal::error_code::unknown;
@@ -905,11 +1024,19 @@ extern "C"
                                    osal_timer_callback_t callback, void* arg, osal::tick_t period_ticks,
                                    bool auto_reload) noexcept
     {
-        assert(handle != nullptr && callback != nullptr);
+        if (handle == nullptr || callback == nullptr || period_ticks == 0U || period_ticks == osal::WAIT_FOREVER ||
+            period_ticks > UINT32_MAX)
+        {
+            return osal::error_code::invalid_argument;
+        }
+        if (handle->native != nullptr)
+        {
+            return osal::error_code::already_exists;
+        }
         long idx = -1;
         for (long i = 0; i < OSAL_NX_MAX_TIMERS; ++i)
         {
-            if (nx_timer_ctxs[i].fn == nullptr)
+            if (!nx_timer_ctxs[i].used.exchange(true, std::memory_order_acquire))
             {
                 idx = i;
                 break;
@@ -927,8 +1054,10 @@ extern "C"
         ctx.period_ticks = static_cast<uint32_t>(period_ticks);
         ctx.auto_reload  = auto_reload;
         ctx.active       = false;
+        ctx.ever_started.store(false, std::memory_order_relaxed);
+        ctx.callback_gate.store(false, std::memory_order_relaxed);
 
-        handle->native = reinterpret_cast<void*>(static_cast<intptr_t>(idx));
+        handle->native = reinterpret_cast<void*>(static_cast<intptr_t>(idx + 1));
         return osal::ok();
     }
 
@@ -937,17 +1066,23 @@ extern "C"
     /// @retval osal::ok()  Always.
     osal::result osal_timer_destroy(osal::active_traits::timer_handle_t* handle) noexcept
     {
-        if (handle == nullptr)
+        if (handle == nullptr || handle->native == nullptr)
         {
             return osal::ok();
         }
-        const long idx = static_cast<long>(reinterpret_cast<intptr_t>(handle->native));
+        const long idx = static_cast<long>(reinterpret_cast<intptr_t>(handle->native)) - 1;
         if (idx >= 0 && idx < OSAL_NX_MAX_TIMERS)
         {
-            auto& ctx  = nx_timer_ctxs[idx];
+            auto& ctx = nx_timer_ctxs[idx];
+            // work_cancel does not join an executing callback or its requeue.
+            if (ctx.ever_started.load(std::memory_order_acquire))
+            {
+                return osal::error_code::not_supported;
+            }
             ctx.active = false;
             work_cancel(LPWORK, &ctx.work);
             ctx.fn = nullptr;
+            ctx.used.store(false, std::memory_order_release);
         }
         handle->native = nullptr;
         return osal::ok();
@@ -960,19 +1095,27 @@ extern "C"
     /// @retval osal::error_code::unknown          On failure.
     osal::result osal_timer_start(osal::active_traits::timer_handle_t* handle) noexcept
     {
-        if (handle == nullptr)
+        if (handle == nullptr || handle->native == nullptr)
         {
             return osal::error_code::not_initialized;
         }
-        const long idx = static_cast<long>(reinterpret_cast<intptr_t>(handle->native));
+        const long idx = static_cast<long>(reinterpret_cast<intptr_t>(handle->native)) - 1;
         if (idx < 0 || idx >= OSAL_NX_MAX_TIMERS || nx_timer_ctxs[idx].fn == nullptr)
         {
             return osal::error_code::not_initialized;
         }
-        auto& ctx    = nx_timer_ctxs[idx];
+        auto& ctx = nx_timer_ctxs[idx];
+        if (ctx.ever_started.exchange(true, std::memory_order_acq_rel))
+        {
+            return osal::error_code::not_supported;
+        }
         ctx.active   = true;
         const int rc = work_queue(LPWORK, &ctx.work, nx_timer_worker, &ctx,
                                   ctx.period_ticks);  // NOLINT(cppcoreguidelines-init-variables)
+        if (rc < 0)
+        {
+            ctx.active.store(false, std::memory_order_release);
+        }
         return (rc >= 0) ? osal::ok() : osal::error_code::unknown;
     }
 
@@ -982,18 +1125,23 @@ extern "C"
     /// @retval osal::error_code::not_initialized  If the handle is invalid.
     osal::result osal_timer_stop(osal::active_traits::timer_handle_t* handle) noexcept
     {
-        if (handle == nullptr)
+        if (handle == nullptr || handle->native == nullptr)
         {
             return osal::error_code::not_initialized;
         }
-        const long idx = static_cast<long>(reinterpret_cast<intptr_t>(handle->native));
+        const long idx = static_cast<long>(reinterpret_cast<intptr_t>(handle->native)) - 1;
         if (idx < 0 || idx >= OSAL_NX_MAX_TIMERS)
         {
             return osal::error_code::not_initialized;
         }
-        auto& ctx  = nx_timer_ctxs[idx];
+        auto& ctx = nx_timer_ctxs[idx];
+        if (ctx.callback_gate.exchange(true, std::memory_order_acquire))
+        {
+            return osal::error_code::not_supported;
+        }
         ctx.active = false;
         work_cancel(LPWORK, &ctx.work);
+        ctx.callback_gate.store(false, std::memory_order_release);
         return osal::ok();
     }
 
@@ -1002,7 +1150,11 @@ extern "C"
     /// @return osal::ok() on success; forwarded error from osal_timer_start().
     osal::result osal_timer_reset(osal::active_traits::timer_handle_t* handle) noexcept
     {
-        osal_timer_stop(handle);
+        const auto stopped = osal_timer_stop(handle);
+        if (!stopped.ok())
+        {
+            return stopped;
+        }
         return osal_timer_start(handle);
     }
 
@@ -1014,16 +1166,29 @@ extern "C"
     osal::result osal_timer_set_period(osal::active_traits::timer_handle_t* handle,
                                        osal::tick_t                         new_period_ticks) noexcept
     {
-        if (handle == nullptr)
+        if (handle == nullptr || handle->native == nullptr)
         {
             return osal::error_code::not_initialized;
         }
-        const long idx = static_cast<long>(reinterpret_cast<intptr_t>(handle->native));
+        const long idx = static_cast<long>(reinterpret_cast<intptr_t>(handle->native)) - 1;
         if (idx < 0 || idx >= OSAL_NX_MAX_TIMERS)
         {
             return osal::error_code::not_initialized;
         }
+        if (nx_timer_ctxs[idx].active.load(std::memory_order_acquire))
+        {
+            return osal::error_code::not_supported;
+        }
+        if (new_period_ticks == 0U || new_period_ticks == osal::WAIT_FOREVER || new_period_ticks > UINT32_MAX)
+        {
+            return osal::error_code::invalid_argument;
+        }
+        if (nx_timer_ctxs[idx].callback_gate.exchange(true, std::memory_order_acquire))
+        {
+            return osal::error_code::not_supported;
+        }
         nx_timer_ctxs[idx].period_ticks = static_cast<uint32_t>(new_period_ticks);
+        nx_timer_ctxs[idx].callback_gate.store(false, std::memory_order_release);
         return osal::ok();
     }
 
@@ -1032,11 +1197,11 @@ extern "C"
     /// @return True if the timer has been started and not yet cancelled.
     bool osal_timer_is_active(const osal::active_traits::timer_handle_t* handle) noexcept
     {
-        if (handle == nullptr)
+        if (handle == nullptr || handle->native == nullptr)
         {
             return false;
         }
-        const long idx = static_cast<long>(reinterpret_cast<intptr_t>(handle->native));
+        const long idx = static_cast<long>(reinterpret_cast<intptr_t>(handle->native)) - 1;
         if (idx < 0 || idx >= OSAL_NX_MAX_TIMERS)
         {
             return false;

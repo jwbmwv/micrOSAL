@@ -458,6 +458,45 @@ For standalone CMake builds:
 If AUTO cannot infer a configurable backend width precisely, MicrOSAL defaults
 conservatively and emits a CMake warning with the override to use.
 
+### FreeRTOS timer lifecycle
+
+The V11.1.0 GCC POSIX simulator also requires cancellation cleanup around
+condition waits: POSIX reacquires the event mutex before running cancellation
+handlers. Without an unlock handler, deleting a suspended task can leave that
+mutex locked forever. The Linux-hosted test target enables
+`OSAL_FREERTOS_POSIX_CANCEL_CLEANUP` and GNU linker wraps for `pthread_cond_wait`
+and `pthread_cond_timedwait`; normal return values and lock ownership are
+preserved. This is simulator glue, not a production RTOS scheduling change or
+a vendor-source patch. Other hosted simulator integrations must provide
+equivalent cleanup or use an upstream kernel version containing the fix.
+
+FreeRTOS timer reclamation requires
+`INCLUDE_xTimerPendFunctionCall=1` and `INCLUDE_xTaskGetSchedulerState=1` in
+`FreeRTOSConfig.h`; missing settings are rejected at compilation.
+Timer destruction must run from a task with the scheduler running, not from
+the timer daemon callback. Unsupported destruction retains ownership. Do not
+destroy a C++ timer wrapper inside its callback: its destructor cannot return
+the backend error to the caller.
+Period changes also require a running scheduler and task context; calls from
+the timer daemon return `not_supported`. Changing an inactive timer's period
+does not deliver a callback or leave it running.
+
+### Native timer reclamation boundary
+
+Check `osal::timer::can_reclaim_after_start` before choosing a transient timer
+lifetime. ThreadX, PX5, Micrium, ChibiOS, embOS, VxWorks, NuttX and both CMSIS
+ports currently retain started timer handles and slots permanently; even a
+failed start attempt crosses this conservative boundary. Stopping a timer is
+not proof that an already-dispatched callback has finished. Keep its wrapper
+and callback context alive when `close()` fails. Zephyr reclamation is supported
+only in UP task context, not SMP or ISR context.
+
+These restrictions must not be removed merely because a stop/delete function
+returns success. A port needs SDK-backed evidence that callback dispatch and
+rearm are quiescent before reusing storage. The period-change support matrix
+and current native validation limits are in
+[the release contract](RELEASE_CONTRACT.md#native-port-limitations).
+
 ### ISR variants
 
 Functions suffixed `_isr` (e.g., `osal_semaphore_give_isr`) MUST be safe
@@ -480,32 +519,26 @@ important constraints apply.
 
 ---
 
-### Cooperative scheduling model
+### Thread support boundary
 
-Bare-metal "threads" are **not preemptive**.  The scheduler is a simple
-round-robin triggered only when a task explicitly calls `osal::thread::yield()`
-or a blocking OSAL function (`sleep_for`, `mutex::lock`, `semaphore::take`,
-etc.).  Key implications:
+Production bare-metal builds do not implement safe independent thread contexts.
+Thread creation returns `error_code::not_supported`. Check
+`osal::thread::is_supported` or require `osal::thread::require_support()` at
+compile time. This also means a dedicated worker-thread work queue cannot be
+created in a production bare-metal build.
 
-- A task that never yields, sleeps, or blocks will starve all other tasks.
-- Priority values passed to `thread_config::priority` are **ignored** — the
-  scheduler picks the next valid task in slot order.
-- `osal::AFFINITY_ANY` (= 0) is the only meaningful affinity value; any other
-  value is accepted but silently ignored.
+Hosted tests enable `OSAL_BM_TEST_SELF_TICK` and use separate `ucontext` stacks
+with cooperative scheduling. That path is test evidence only, not a context
+switching implementation for Cortex-M or RISC-V.
 
 ---
 
 ### Thread/stack model — important limitation
 
-The user-supplied `stack` buffer in `thread_config` is **stored but not used
-for context switching**.  The bare-metal scheduler calls the entry function
-directly on the current operating stack using `setjmp`/`longjmp` for yield
-points; it does not perform true stack-frame manipulation.
-
-Consequence: each task consumes stack space on the main/interrupt stack during
-its execution slice, not on its private buffer.  The `stack_bytes` field is
-preserved for forward compatibility with RTOS backends but serves no purpose
-in the current bare-metal implementation.
+The old production implementation used shared-stack `setjmp`/`longjmp`
+contexts that could outlive their stack frames. It is no longer a supported
+thread execution path. A future production port must provide real context
+switching on caller-owned stacks before enabling thread support.
 
 ---
 
@@ -538,13 +571,13 @@ wait, which increases power consumption.
 
 ### Maximum task count
 
-The static task pool is `OSAL_BM_MAX_TASKS` (default **8**).  Attempting to
+In hosted tests, the static task pool is `OSAL_BAREMETAL_MAX_TASKS` (default **8**). Attempting to
 create more tasks returns `error_code::out_of_resources`.  There is no
-compile-time guard; the failure is silent until runtime.  Override at the top
-of `bare_metal_backend.cpp` if more tasks are needed:
+compile-time resource reservation; callers must check the creation result.
+Override the compile definition if more hosted tasks are needed:
 
 ```cpp
-#define OSAL_BM_MAX_TASKS 16
+#define OSAL_BAREMETAL_MAX_TASKS 16
 ```
 
 Similarly, `OSAL_BM_MAX_TIMERS` (default **8**) caps the software timer pool.

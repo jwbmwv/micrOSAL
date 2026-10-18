@@ -577,12 +577,16 @@ struct capabilities<backend_freertos>
 template<>
 struct capabilities<backend_zephyr>
 {
-    static constexpr bool has_recursive_mutex            = true;  // k_mutex is recursive by default
-    static constexpr bool has_timed_mutex                = true;
-    static constexpr bool has_priority_inheritance       = true;  // k_mutex uses PI by design
-    static constexpr bool has_isr_semaphore              = true;
-    static constexpr bool has_timed_semaphore            = true;
-    static constexpr bool has_thread_affinity            = true;
+    static constexpr bool has_recursive_mutex      = true;  // k_mutex is recursive by default
+    static constexpr bool has_timed_mutex          = true;
+    static constexpr bool has_priority_inheritance = true;  // k_mutex uses PI by design
+    static constexpr bool has_isr_semaphore        = true;
+    static constexpr bool has_timed_semaphore      = true;
+#if defined(CONFIG_SCHED_CPU_MASK)
+    static constexpr bool has_thread_affinity = true;
+#else
+    static constexpr bool has_thread_affinity = false;
+#endif
     static constexpr bool has_timed_join                 = true;
     static constexpr bool has_thread_suspend_resume      = true;
     static constexpr bool has_thread_local_data          = true;
@@ -611,7 +615,7 @@ struct capabilities<backend_zephyr>
     static constexpr bool has_spinlock                   = true;  // k_spinlock
     static constexpr bool has_barrier                    = true;  // shared emulated barrier
     static constexpr bool has_monotonic_clock            = true;
-    static constexpr bool has_system_clock               = true;
+    static constexpr bool has_system_clock               = false;  // system query falls back to uptime
     static constexpr bool has_high_resolution            = true;
 };
 
@@ -644,7 +648,7 @@ struct capabilities<backend_threadx>
     static constexpr bool has_native_condvar             = false;
     static constexpr bool has_native_work_queue          = false;
     static constexpr bool has_isr_work_queue_submit      = false;
-    static constexpr bool has_native_memory_pool         = true;  // tx_block_pool
+    static constexpr bool has_native_memory_pool         = false;  // shared bitmap allocator
     static constexpr bool has_native_stream_buffer       = false;
     static constexpr bool has_isr_stream_buffer          = false;
     static constexpr bool has_native_message_buffer      = false;
@@ -686,7 +690,7 @@ struct capabilities<backend_px5>
     static constexpr bool has_native_condvar             = false;
     static constexpr bool has_native_work_queue          = false;
     static constexpr bool has_isr_work_queue_submit      = false;
-    static constexpr bool has_native_memory_pool         = true;  // tx_block_pool
+    static constexpr bool has_native_memory_pool         = false;  // shared bitmap allocator
     static constexpr bool has_native_stream_buffer       = false;
     static constexpr bool has_isr_stream_buffer          = false;
     static constexpr bool has_native_message_buffer      = false;
@@ -799,13 +803,17 @@ struct capabilities<backend_integrity> : capabilities<backend_posix>
 template<>
 struct capabilities<backend_baremetal>
 {
-    static constexpr bool has_recursive_mutex          = false;
-    static constexpr bool has_timed_mutex              = true;
-    static constexpr bool has_priority_inheritance     = false;
-    static constexpr bool has_isr_semaphore            = true;
-    static constexpr bool has_timed_semaphore          = true;
-    static constexpr bool has_thread_affinity          = false;
-    static constexpr bool has_timed_join               = true;
+    static constexpr bool has_recursive_mutex      = false;
+    static constexpr bool has_timed_mutex          = true;
+    static constexpr bool has_priority_inheritance = false;
+    static constexpr bool has_isr_semaphore        = true;
+    static constexpr bool has_timed_semaphore      = true;
+    static constexpr bool has_thread_affinity      = false;
+#if defined(OSAL_BM_TEST_SELF_TICK)
+    static constexpr bool has_timed_join = true;
+#else
+    static constexpr bool has_timed_join = false;
+#endif
     static constexpr bool has_thread_suspend_resume    = false;
     static constexpr bool has_thread_local_data        = true;
     static constexpr bool has_dynamic_thread_priority  = false;
@@ -867,10 +875,10 @@ struct capabilities<backend_vxworks>
     static constexpr bool has_isr_event_flags            = true;   // emulated via semaphore_give_isr
     static constexpr bool has_timed_event_flags          = true;   // emulated via semaphore timed-take
     static constexpr bool has_wait_set                   = false;
-    static constexpr bool has_native_condvar             = true;  // condVarLib
-    static constexpr bool has_native_work_queue          = true;  // jobQueueLib
+    static constexpr bool has_native_condvar             = true;   // condVarLib
+    static constexpr bool has_native_work_queue          = false;  // shared worker-thread emulation
     static constexpr bool has_isr_work_queue_submit      = false;
-    static constexpr bool has_native_memory_pool         = true;  // memPartLib
+    static constexpr bool has_native_memory_pool         = false;  // shared bitmap allocator
     static constexpr bool has_native_stream_buffer       = false;
     static constexpr bool has_isr_stream_buffer          = false;
     static constexpr bool has_native_message_buffer      = false;
@@ -954,7 +962,7 @@ struct capabilities<backend_micrium>
     static constexpr bool has_native_condvar             = false;
     static constexpr bool has_native_work_queue          = false;
     static constexpr bool has_isr_work_queue_submit      = false;
-    static constexpr bool has_native_memory_pool         = true;  // OSMemCreate
+    static constexpr bool has_native_memory_pool         = false;  // shared bitmap allocator
     static constexpr bool has_native_stream_buffer       = false;
     static constexpr bool has_isr_stream_buffer          = false;
     static constexpr bool has_native_message_buffer      = false;
@@ -996,7 +1004,7 @@ struct capabilities<backend_chibios>
     static constexpr bool has_native_condvar             = true;  // chCondInit
     static constexpr bool has_native_work_queue          = false;
     static constexpr bool has_isr_work_queue_submit      = false;
-    static constexpr bool has_native_memory_pool         = true;  // chPoolInit
+    static constexpr bool has_native_memory_pool         = false;  // shared bitmap allocator
     static constexpr bool has_native_stream_buffer       = false;
     static constexpr bool has_isr_stream_buffer          = false;
     static constexpr bool has_native_message_buffer      = false;
@@ -1038,7 +1046,7 @@ struct capabilities<backend_embos>
     static constexpr bool has_native_condvar             = false;
     static constexpr bool has_native_work_queue          = false;
     static constexpr bool has_isr_work_queue_submit      = false;
-    static constexpr bool has_native_memory_pool         = true;  // OS_MEMPOOL
+    static constexpr bool has_native_memory_pool         = false;  // shared bitmap allocator
     static constexpr bool has_native_stream_buffer       = false;
     static constexpr bool has_isr_stream_buffer          = false;
     static constexpr bool has_native_message_buffer      = false;

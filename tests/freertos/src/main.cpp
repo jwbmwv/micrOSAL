@@ -25,6 +25,8 @@
 
 #include "FreeRTOS.h"
 #include "task.h"
+#include "semphr.h"
+#include "timers.h"
 
 #include <osal/osal.hpp>
 
@@ -32,6 +34,45 @@
 #include <cstdlib>
 #include <cstring>
 #include <atomic>
+
+#if defined(OSAL_FREERTOS_POSIX_CANCEL_CLEANUP)
+#include <pthread.h>
+
+namespace
+{
+void unlock_cancelled_wait(void* mutex) noexcept
+{
+    (void)pthread_mutex_unlock(static_cast<pthread_mutex_t*>(mutex));
+}
+}  // namespace
+
+// GNU ld's --wrap interface requires these reserved symbol names.
+// NOLINTBEGIN(bugprone-reserved-identifier)
+extern "C" int __real_pthread_cond_wait(pthread_cond_t*, pthread_mutex_t*);
+extern "C" int __real_pthread_cond_timedwait(pthread_cond_t*, pthread_mutex_t*, const timespec*);
+
+// The POSIX simulator's event wait must release its reacquired mutex when
+// vPortCancelThread cancels it. Link only hosted tests with --wrap for these APIs.
+extern "C" int __wrap_pthread_cond_wait(pthread_cond_t* condition, pthread_mutex_t* mutex)
+{
+    int rc = 0;
+    pthread_cleanup_push(unlock_cancelled_wait, mutex);
+    rc = __real_pthread_cond_wait(condition, mutex);
+    pthread_cleanup_pop(0);
+    return rc;
+}
+
+extern "C" int __wrap_pthread_cond_timedwait(pthread_cond_t* condition, pthread_mutex_t* mutex,
+                                             const timespec* deadline)
+{
+    int rc = 0;
+    pthread_cleanup_push(unlock_cancelled_wait, mutex);
+    rc = __real_pthread_cond_timedwait(condition, mutex, deadline);
+    pthread_cleanup_pop(0);
+    return rc;
+}
+// NOLINTEND(bugprone-reserved-identifier)
+#endif
 
 // ---------------------------------------------------------------------------
 // Static memory for the idle task and timer task (required when
@@ -156,6 +197,46 @@ TEST_CASE("freertos/mutex: try_lock succeeds when free")
     m.unlock();
 }
 
+TEST_CASE("freertos/mutex: recursive depth and normal non-recursion")
+{
+    osal::mutex normal;
+    REQUIRE(normal.valid());
+    REQUIRE(normal.try_lock());
+    CHECK_FALSE(normal.try_lock());
+    normal.unlock();
+
+    osal::mutex recursive{osal::mutex_type::recursive};
+    REQUIRE(recursive.valid());
+    REQUIRE(recursive.try_lock());
+    REQUIRE(recursive.try_lock_for(osal::milliseconds{0}));
+    recursive.unlock();
+
+    struct context
+    {
+        osal::mutex* mutex;
+        bool         acquired{false};
+    } ctx{&recursive};
+    alignas(16) static std::uint8_t stack[65536];
+    osal::thread_config             cfg{};
+    cfg.entry = [](void* arg)
+    {
+        auto* c     = static_cast<context*>(arg);
+        c->acquired = c->mutex->try_lock();
+        if (c->acquired)
+            c->mutex->unlock();
+    };
+    cfg.arg         = &ctx;
+    cfg.stack       = stack;
+    cfg.stack_bytes = sizeof(stack);
+    osal::thread probe;
+    REQUIRE(probe.create(cfg).ok());
+    REQUIRE(probe.join().ok());
+    CHECK_FALSE(ctx.acquired);
+    recursive.unlock();
+    REQUIRE(recursive.try_lock());
+    recursive.unlock();
+}
+
 TEST_CASE("freertos/mutex: try_lock fails when held by another thread")
 {
     osal::mutex m;
@@ -251,6 +332,60 @@ TEST_CASE("freertos/mutex: lock_guard RAII")
 // osal::semaphore
 // --------------------------------------------------------------------------
 
+#if defined(OSAL_FREERTOS_POSIX_CANCEL_CLEANUP)
+TEST_CASE("freertos/posix: cancelled condition waits release the event mutex")
+{
+    for (const bool timed : {false, true})
+    {
+        pthread_mutex_t mutex     = PTHREAD_MUTEX_INITIALIZER;
+        pthread_cond_t  condition = PTHREAD_COND_INITIALIZER;
+        struct context
+        {
+            pthread_mutex_t*  mutex;
+            pthread_cond_t*   condition;
+            std::atomic<bool> entered{false};
+            bool              timed;
+        } ctx{&mutex, &condition, false, timed};
+        pthread_t worker{};
+        REQUIRE(pthread_create(
+                    &worker, nullptr,
+                    +[](void* arg) -> void*
+                    {
+                        auto* c = static_cast<context*>(arg);
+                        (void)pthread_mutex_lock(c->mutex);
+                        c->entered.store(true);
+                        for (;;)
+                        {
+                            if (c->timed)
+                            {
+                                timespec deadline{};
+                                (void)clock_gettime(CLOCK_REALTIME, &deadline);
+                                deadline.tv_sec += 10;
+                                (void)pthread_cond_timedwait(c->condition, c->mutex, &deadline);
+                            }
+                            else
+                            {
+                                (void)pthread_cond_wait(c->condition, c->mutex);
+                            }
+                        }
+                    },
+                    &ctx) == 0);
+        while (!ctx.entered.load())
+            osal::thread::sleep_for(osal::milliseconds{1});
+        REQUIRE(pthread_mutex_lock(&mutex) == 0);
+        REQUIRE(pthread_mutex_unlock(&mutex) == 0);
+        REQUIRE(pthread_cancel(worker) == 0);
+        void* result = nullptr;
+        REQUIRE(pthread_join(worker, &result) == 0);
+        CHECK(result == PTHREAD_CANCELED);
+        REQUIRE(pthread_mutex_trylock(&mutex) == 0);
+        REQUIRE(pthread_mutex_unlock(&mutex) == 0);
+        REQUIRE(pthread_cond_destroy(&condition) == 0);
+        REQUIRE(pthread_mutex_destroy(&mutex) == 0);
+    }
+}
+#endif
+
 TEST_CASE("freertos/semaphore: binary give/take")
 {
     osal::semaphore s{osal::semaphore_type::binary, 0U};
@@ -278,6 +413,308 @@ TEST_CASE("freertos/semaphore: take_for timeout")
     osal::semaphore s{osal::semaphore_type::binary, 0U};
     REQUIRE(s.valid());
     CHECK_FALSE(s.take_for(osal::milliseconds{30}));
+}
+
+TEST_CASE("freertos/semaphore: bounded counts reject overflow")
+{
+    for (const unsigned ceiling : {1U, 3U})
+    {
+        osal::active_traits::semaphore_handle_t handle{};
+        REQUIRE(osal_semaphore_create(&handle, ceiling, ceiling).ok());
+        CHECK(osal_semaphore_give(&handle) == osal::error_code::overflow);
+        for (unsigned i = 0U; i < ceiling; ++i)
+            REQUIRE(osal_semaphore_take(&handle, osal::NO_WAIT).ok());
+        CHECK(osal_semaphore_take(&handle, osal::NO_WAIT) == osal::error_code::timeout);
+        REQUIRE(osal_semaphore_destroy(&handle).ok());
+        CHECK(osal_semaphore_create(&handle, ceiling + 1U, ceiling) == osal::error_code::invalid_argument);
+    }
+}
+
+TEST_CASE("freertos/thread: detach before and after completion reuses contexts")
+{
+    constexpr unsigned              iterations = 24U;
+    alignas(16) static std::uint8_t stacks[iterations][65536];
+    osal::semaphore                 gate{osal::semaphore_type::binary, 0U};
+    std::atomic<unsigned>           completed{0U};
+    struct context
+    {
+        osal::semaphore*       gate;
+        std::atomic<unsigned>* completed;
+        bool                   wait;
+    } ctx{&gate, &completed, false};
+    for (unsigned i = 0U; i < iterations; ++i)
+    {
+        ctx.wait = (i % 2U) != 0U;
+        osal::thread_config cfg{};
+        cfg.entry = [](void* arg)
+        {
+            auto* c = static_cast<context*>(arg);
+            if (c->wait)
+                c->gate->take();
+            c->completed->fetch_add(1U);
+        };
+        cfg.arg         = &ctx;
+        cfg.priority    = osal::PRIORITY_HIGHEST;
+        cfg.stack       = stacks[i];
+        cfg.stack_bytes = sizeof(stacks[i]);
+        osal::thread worker;
+        REQUIRE(worker.create(cfg).ok());
+        if (!ctx.wait)
+            CHECK(completed.load() == i + 1U);
+        REQUIRE(worker.detach().ok());
+        if (ctx.wait)
+            gate.give();
+        CHECK(completed.load() == i + 1U);
+    }
+}
+
+TEST_CASE("freertos/pools: competing tasks churn primitive controls")
+{
+    constexpr unsigned              workers = 4U;
+    alignas(16) static std::uint8_t stacks[workers][65536];
+    osal::thread                    threads[workers];
+    osal::semaphore                 start{osal::semaphore_type::counting, 0U, workers};
+    std::atomic<unsigned>           failures{0U};
+    struct context
+    {
+        osal::semaphore*       start;
+        std::atomic<unsigned>* failures;
+    } ctx{&start, &failures};
+    for (unsigned i = 0U; i < workers; ++i)
+    {
+        osal::thread_config cfg{};
+        cfg.entry = [](void* arg)
+        {
+            auto* c = static_cast<context*>(arg);
+            c->start->take();
+            for (unsigned j = 0U; j < 100U; ++j)
+            {
+                osal::mutex              mutex;
+                osal::semaphore          semaphore{osal::semaphore_type::binary, 0U};
+                osal::queue<unsigned, 2> queue;
+                osal::event_flags        events;
+                osal::stream_buffer<16>  stream;
+                osal::message_buffer<16> message;
+                if (!mutex.valid() || !semaphore.valid() || !queue.valid() || !events.valid() || !stream.valid() ||
+                    !message.valid())
+                    c->failures->fetch_add(1U);
+                if (mutex.valid())
+                {
+                    mutex.lock();
+                    osal::thread::sleep_for(osal::milliseconds{1});
+                    mutex.unlock();
+                }
+            }
+        };
+        cfg.arg         = &ctx;
+        cfg.stack       = stacks[i];
+        cfg.stack_bytes = sizeof(stacks[i]);
+        REQUIRE(threads[i].create(cfg).ok());
+    }
+    for (unsigned i = 0U; i < workers; ++i)
+        start.give();
+    for (auto& thread : threads)
+        REQUIRE(thread.join().ok());
+    CHECK(failures.load() == 0U);
+}
+
+TEST_CASE("freertos/thread: join reclaims native task before static stack reuse")
+{
+    alignas(16) static std::uint8_t stack[65536];
+    std::atomic<unsigned>           completed{0U};
+    const UBaseType_t               baseline = uxTaskGetNumberOfTasks();
+    for (unsigned i = 0U; i < 100U; ++i)
+    {
+        osal::thread_config cfg{};
+        cfg.entry       = [](void* arg) { static_cast<std::atomic<unsigned>*>(arg)->fetch_add(1U); };
+        cfg.arg         = &completed;
+        cfg.stack       = stack;
+        cfg.stack_bytes = sizeof(stack);
+        cfg.priority    = osal::PRIORITY_NORMAL;
+        osal::thread worker;
+        REQUIRE(worker.create(cfg).ok());
+        REQUIRE(worker.join().ok());
+        CHECK(completed.load() == i + 1U);
+        CHECK(uxTaskGetNumberOfTasks() == baseline);
+    }
+}
+
+TEST_CASE("freertos/timer: deletion fences callback and storage reuse")
+{
+    std::atomic<unsigned> callbacks{0U};
+    for (unsigned i = 0U; i < 100U; ++i)
+    {
+        osal::active_traits::timer_handle_t timer{};
+        REQUIRE(osal_timer_create(
+                    &timer, "churn", +[](void* arg) { static_cast<std::atomic<unsigned>*>(arg)->fetch_add(1U); },
+                    &callbacks, 1U, true)
+                    .ok());
+        REQUIRE(osal_timer_start(&timer).ok());
+        REQUIRE(osal_timer_destroy(&timer).ok());
+        CHECK(timer.native == nullptr);
+    }
+    const unsigned    after_destroy = callbacks.load();
+    StaticSemaphore_t storage{};
+    SemaphoreHandle_t fence = xSemaphoreCreateBinaryStatic(&storage);
+    REQUIRE(fence != nullptr);
+    REQUIRE(xTimerPendFunctionCall(
+                +[](void* arg, std::uint32_t) { (void)xSemaphoreGive(static_cast<SemaphoreHandle_t>(arg)); }, fence, 0U,
+                portMAX_DELAY) == pdPASS);
+    REQUIRE(xSemaphoreTake(fence, portMAX_DELAY) == pdTRUE);
+    vSemaphoreDelete(fence);
+    CHECK(callbacks.load() == after_destroy);
+}
+
+TEST_CASE("freertos/timer: callback deletion is rejected without losing ownership")
+{
+    osal::semaphore                     done{osal::semaphore_type::binary, 0U};
+    osal::active_traits::timer_handle_t timer{};
+    struct context
+    {
+        osal::active_traits::timer_handle_t* timer;
+        osal::semaphore*                     done;
+        bool                                 rejected{false};
+        bool                                 period_rejected{false};
+    } ctx{&timer, &done};
+    REQUIRE(osal_timer_create(
+                &timer, "self_delete",
+                +[](void* arg)
+                {
+                    auto* c            = static_cast<context*>(arg);
+                    c->rejected        = osal_timer_destroy(c->timer) == osal::error_code::not_supported;
+                    c->period_rejected = osal_timer_set_period(c->timer, 2U) == osal::error_code::not_supported;
+                    c->done->give();
+                },
+                &ctx, 1U, false)
+                .ok());
+    REQUIRE(osal_timer_start(&timer).ok());
+    REQUIRE(done.take_for(osal::milliseconds{500}));
+    CHECK(ctx.rejected);
+    CHECK(ctx.period_rejected);
+    CHECK(timer.native != nullptr);
+    REQUIRE(osal_timer_destroy(&timer).ok());
+}
+
+TEST_CASE("freertos/timer: destruction and period fences wait for an in-flight callback")
+{
+    alignas(16) static std::uint8_t stacks[2][65536];
+    for (unsigned operation = 0U; operation < 2U; ++operation)
+    {
+        osal::semaphore                     entered{osal::semaphore_type::binary, 0U};
+        osal::semaphore                     release{osal::semaphore_type::binary, 0U};
+        osal::semaphore                     completed{osal::semaphore_type::binary, 0U};
+        osal::active_traits::timer_handle_t timer{};
+        struct context
+        {
+            osal::semaphore*                     entered;
+            osal::semaphore*                     release;
+            osal::semaphore*                     completed;
+            osal::active_traits::timer_handle_t* timer;
+            std::atomic<bool>                    requested{false};
+            std::atomic<unsigned>                callbacks{0U};
+            bool                                 destroy;
+            bool                                 succeeded{false};
+        } ctx{&entered, &release, &completed, &timer, false, 0U, operation == 0U};
+        REQUIRE(osal_timer_create(
+                    &timer, "in_flight",
+                    +[](void* arg)
+                    {
+                        auto* c = static_cast<context*>(arg);
+                        c->callbacks.fetch_add(1U);
+                        c->entered->give();
+                        // Deliberately hold the daemon to exercise completion fences.
+                        c->release->take();
+                    },
+                    &ctx, 1U, false)
+                    .ok());
+        REQUIRE(osal_timer_start(&timer).ok());
+        REQUIRE(entered.take_for(osal::milliseconds{500}));
+
+        osal::thread_config cfg{};
+        cfg.entry = [](void* arg)
+        {
+            auto* c = static_cast<context*>(arg);
+            c->requested.store(true);
+            c->succeeded = (c->destroy ? osal_timer_destroy(c->timer) : osal_timer_set_period(c->timer, 1U)).ok();
+            c->completed->give();
+        };
+        cfg.arg         = &ctx;
+        cfg.stack       = stacks[operation];
+        cfg.stack_bytes = sizeof(stacks[operation]);
+        cfg.priority    = osal::PRIORITY_HIGHEST;
+        osal::thread worker;
+        REQUIRE(worker.create(cfg).ok());
+        REQUIRE(ctx.requested.load());
+        CHECK_FALSE(completed.take_for(osal::milliseconds{10}));
+        CHECK(timer.native != nullptr);
+        release.give();
+        REQUIRE(completed.take_for(osal::milliseconds{500}));
+        REQUIRE(worker.join().ok());
+        CHECK(ctx.succeeded);
+        CHECK(ctx.callbacks.load() == 1U);
+        if (!ctx.destroy)
+        {
+            CHECK_FALSE(osal_timer_is_active(&timer));
+            REQUIRE(osal_timer_destroy(&timer).ok());
+        }
+        CHECK(timer.native == nullptr);
+        osal::thread::sleep_for(osal::milliseconds{3});
+        CHECK(ctx.callbacks.load() == 1U);
+    }
+}
+
+TEST_CASE("freertos/timer: inactive period changes never invoke callback")
+{
+    std::atomic<unsigned>               callbacks{0U};
+    osal::active_traits::timer_handle_t timer{};
+    REQUIRE(osal_timer_create(
+                &timer, "inactive_period", +[](void* arg) { static_cast<std::atomic<unsigned>*>(arg)->fetch_add(1U); },
+                &callbacks, 1000U, true)
+                .ok());
+    for (unsigned i = 0U; i < 20U; ++i)
+    {
+        REQUIRE(osal_timer_set_period(&timer, 1U).ok());
+        CHECK_FALSE(osal_timer_is_active(&timer));
+        osal::thread::sleep_for(osal::milliseconds{3});
+        CHECK(callbacks.load() == 0U);
+    }
+    REQUIRE(osal_timer_start(&timer).ok());
+    REQUIRE(osal_timer_stop(&timer).ok());
+    REQUIRE(osal_timer_set_period(&timer, 1U).ok());
+    CHECK_FALSE(osal_timer_is_active(&timer));
+    const unsigned after_stop = callbacks.load();
+    osal::thread::sleep_for(osal::milliseconds{5});
+    CHECK(callbacks.load() == after_stop);
+    REQUIRE(osal_timer_destroy(&timer).ok());
+}
+
+TEST_CASE("freertos/timer: active period change preserves one-shot mode")
+{
+    osal::semaphore       done{osal::semaphore_type::binary, 0U};
+    std::atomic<unsigned> callbacks{0U};
+    struct context
+    {
+        osal::semaphore*       done;
+        std::atomic<unsigned>* callbacks;
+    } ctx{&done, &callbacks};
+    osal::active_traits::timer_handle_t timer{};
+    REQUIRE(osal_timer_create(
+                &timer, "oneshot_period",
+                +[](void* arg)
+                {
+                    auto* c = static_cast<context*>(arg);
+                    c->callbacks->fetch_add(1U);
+                    c->done->give();
+                },
+                &ctx, 1000U, false)
+                .ok());
+    REQUIRE(osal_timer_start(&timer).ok());
+    REQUIRE(osal_timer_set_period(&timer, 5U).ok());
+    REQUIRE(done.take_for(osal::milliseconds{500}));
+    CHECK_FALSE(done.take_for(osal::milliseconds{25}));
+    CHECK(callbacks.load() == 1U);
+    CHECK_FALSE(osal_timer_is_active(&timer));
+    REQUIRE(osal_timer_destroy(&timer).ok());
 }
 
 TEST_CASE("freertos/semaphore: cross-thread signal")

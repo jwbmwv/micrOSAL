@@ -103,8 +103,8 @@ int osal_c_smoke_test(void)
     }
 
     /* ---- Mutex ---- */
-    osal_mutex_handle mtx;
-    osal_result_t     rc = osal_c_mutex_create(&mtx, 0);
+    osal_mutex_handle mtx = {0};
+    osal_result_t     rc  = osal_c_mutex_create(&mtx, 0);
     if (rc != OSAL_OK)
     {
         return 1;
@@ -129,8 +129,8 @@ int osal_c_smoke_test(void)
     }
 
     /* ---- Semaphore ---- */
-    osal_semaphore_handle sem;
-    rc = osal_c_semaphore_create(&sem, 1, 10);
+    osal_semaphore_handle sem = {0};
+    rc                        = osal_c_semaphore_create(&sem, 1, 10);
     if (rc != OSAL_OK)
     {
         return 10;
@@ -155,7 +155,7 @@ int osal_c_smoke_test(void)
     }
 
     /* ---- Queue ---- */
-    osal_queue_handle q;
+    osal_queue_handle q = {0};
     int               queue_buf[4]; /* backing storage for 4 ints */
     rc = osal_c_queue_create(&q, queue_buf, sizeof(int), 4);
     if (rc != OSAL_OK)
@@ -193,8 +193,8 @@ int osal_c_smoke_test(void)
     }
 
     /* ---- Event Flags ---- */
-    osal_event_flags_handle ef;
-    rc = osal_c_event_flags_create(&ef);
+    osal_event_flags_handle ef = {0};
+    rc                         = osal_c_event_flags_create(&ef);
     if (rc != OSAL_OK)
     {
         return 30;
@@ -225,8 +225,8 @@ int osal_c_smoke_test(void)
     }
 
     /* ---- Condition Variable ---- */
-    osal_condvar_handle cv;
-    rc = osal_c_condvar_create(&cv);
+    osal_condvar_handle cv = {0};
+    rc                     = osal_c_condvar_create(&cv);
     if (rc != OSAL_OK)
     {
         return 40;
@@ -246,8 +246,8 @@ int osal_c_smoke_test(void)
     }
 
     /* ---- Read-Write Lock ---- */
-    osal_rwlock_handle rw;
-    rc = osal_c_rwlock_create(&rw);
+    osal_rwlock_handle rw = {0};
+    rc                    = osal_c_rwlock_create(&rw);
     if (rc != OSAL_OK)
     {
         return 50;
@@ -285,8 +285,8 @@ int osal_c_smoke_test(void)
 
     /* ---- Thread-Local Data ---- */
     {
-        osal_tls_key_handle tls;
-        rc = osal_c_tls_key_create(&tls);
+        osal_tls_key_handle tls = {0};
+        rc                      = osal_c_tls_key_create(&tls);
         if (rc == OSAL_NOT_SUPPORTED)
         {
             return 0;
@@ -321,8 +321,8 @@ int osal_c_smoke_test(void)
     /* ---- Config-based creation (FLASH-friendly) ---- */
     {
         const osal_mutex_config mcfg = {0};
-        osal_mutex_handle       cmtx;
-        rc = osal_c_mutex_create_with_cfg(&cmtx, &mcfg);
+        osal_mutex_handle       cmtx = {0};
+        rc                           = osal_c_mutex_create_with_cfg(&cmtx, &mcfg);
         if (rc != OSAL_OK)
         {
             return 60;
@@ -335,8 +335,8 @@ int osal_c_smoke_test(void)
     }
     {
         const osal_semaphore_config scfg = {1, 5};
-        osal_semaphore_handle       csem;
-        rc = osal_c_semaphore_create_with_cfg(&csem, &scfg);
+        osal_semaphore_handle       csem = {0};
+        rc                               = osal_c_semaphore_create_with_cfg(&csem, &scfg);
         if (rc != OSAL_OK)
         {
             return 62;
@@ -350,8 +350,8 @@ int osal_c_smoke_test(void)
     {
         int                     qbuf[2];
         const osal_queue_config qcfg = {qbuf, sizeof(int), 2};
-        osal_queue_handle       cq;
-        rc = osal_c_queue_create_with_cfg(&cq, &qcfg);
+        osal_queue_handle       cq   = {0};
+        rc                           = osal_c_queue_create_with_cfg(&cq, &qcfg);
         if (rc != OSAL_OK)
         {
             return 64;
@@ -367,8 +367,8 @@ int osal_c_smoke_test(void)
     {
         uint32_t                 values[2]  = {0U, 0U};
         uint8_t                  pending[2] = {0U, 0U};
-        osal_notification_handle note;
-        rc = osal_c_notification_create(&note, values, pending, 2U);
+        osal_notification_handle note       = {0};
+        rc                                  = osal_c_notification_create(&note, values, pending, 2U);
         if (rc != OSAL_OK)
         {
             return 67;
@@ -406,8 +406,8 @@ int osal_c_smoke_test(void)
     {
         /* capacity=16, so backing storage must be 17 bytes */
         unsigned char             sb_storage[17];
-        osal_stream_buffer_handle sb;
-        rc = osal_c_stream_buffer_create(&sb, sb_storage, 16, 1);
+        osal_stream_buffer_handle sb = {0};
+        rc                           = osal_c_stream_buffer_create(&sb, sb_storage, 16, 1);
         if (rc != OSAL_OK)
         {
             return 70;
@@ -458,8 +458,8 @@ int osal_c_smoke_test(void)
     {
         /* capacity=32, backing storage must be 33 bytes */
         unsigned char              mb_storage[33];
-        osal_message_buffer_handle mb;
-        rc = osal_c_message_buffer_create(&mb, mb_storage, 32);
+        osal_message_buffer_handle mb = {0};
+        rc                            = osal_c_message_buffer_create(&mb, mb_storage, 32);
         if (rc != OSAL_OK)
         {
             return 80;
@@ -505,8 +505,8 @@ int osal_c_smoke_test(void)
     /* ---- Delayable Work ---- */
     {
         static unsigned char   wq_stack[65536];
-        osal_work_queue_handle wq;
-        rc = osal_c_work_queue_create(&wq, wq_stack, sizeof(wq_stack), 8U, "c_smoke_dw_wq");
+        osal_work_queue_handle wq = {0};
+        rc                        = osal_c_work_queue_create(&wq, wq_stack, sizeof(wq_stack), 8U, "c_smoke_dw_wq");
         if (rc == OSAL_NOT_SUPPORTED)
         {
             return 0;
@@ -516,7 +516,7 @@ int osal_c_smoke_test(void)
             return 88;
         }
 
-        osal_delayable_work_handle work;
+        osal_delayable_work_handle work  = {0};
         int                        count = 0;
         rc = osal_c_delayable_work_create(&work, &wq, c_smoke_delayable_cb, &count, "c_smoke_dw");
         if (rc == OSAL_NOT_SUPPORTED)

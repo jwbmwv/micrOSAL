@@ -16,6 +16,7 @@
 #include <climits>
 #include <cstdint>
 #include <ctime>
+#include <limits>
 
 namespace osal::detail
 {
@@ -72,13 +73,22 @@ struct backend_timeout_adapter
         };
         clock_gettime(clock_id, &ts);
 
-        const std::uint64_t ns_add = ms * 1'000'000ULL;
-        ts.tv_sec += static_cast<time_t>(ns_add / 1'000'000'000ULL);
-        ts.tv_nsec += static_cast<long>(ns_add % 1'000'000'000ULL);
+        std::uint64_t seconds = ms / 1000U;
+        ts.tv_nsec += static_cast<long>((ms % 1000U) * 1'000'000U);
         if (ts.tv_nsec >= 1'000'000'000L)
         {
-            ts.tv_sec += 1;
+            ++seconds;
             ts.tv_nsec -= 1'000'000'000L;
+        }
+        const auto max_seconds = std::numeric_limits<time_t>::max();
+        if (seconds > static_cast<std::uint64_t>(max_seconds - ts.tv_sec))
+        {
+            ts.tv_sec  = max_seconds;
+            ts.tv_nsec = 999'999'999L;
+        }
+        else
+        {
+            ts.tv_sec += static_cast<time_t>(seconds);
         }
         return ts;
     }

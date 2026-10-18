@@ -49,6 +49,19 @@ ctest --test-dir build --output-on-failure -R '^(test_condvar|test_event_flags|t
 
 - [ ] Fresh configure performed from scratch.
 - [ ] At least one full hosted test pass completed.
+- [ ] Installed-package consumer and extracted README example pass.
+
+```bash
+ctest --test-dir build --output-on-failure -R '^(test_installed_package|test_readme_example)$'
+```
+
+For correctness hardening, include the portable queue/flags contract and the
+Linux fault-injection tests:
+
+```bash
+cmake --build build --parallel --target test_embedded_adapters test_delayable_work_faults
+ctest --test-dir build --output-on-failure -R '^(test_embedded_adapters|test_delayable_work_faults)$'
+```
 
 ## 3) Backend-Specific Validation (when relevant)
 
@@ -70,6 +83,10 @@ ctest --test-dir build-freertos --output-on-failure
 ### NuttX
 
 - [ ] NuttX sim validation rerun when NuttX path changed.
+- [ ] Public headers using atomics include `osal/detail/atomic_compat.hpp`
+      rather than `<atomic>` directly, including when included before `osal.hpp`.
+- [ ] The test app links the shared C bridge as well as the NuttX backend;
+      C++ mutex configuration also depends on the shared bridge.
 
 ## 4) Off-Rails Checks (must stay true)
 

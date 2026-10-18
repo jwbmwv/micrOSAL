@@ -43,6 +43,7 @@ struct emulated_condvar_waiter
 {
     osal::active_traits::semaphore_handle_t sem;     ///< Binary semaphore for this waiter.
     bool                                    in_use;  ///< Slot is occupied.
+    bool                                    signalled;
 };
 
 struct emulated_condvar_obj
@@ -106,7 +107,8 @@ osal::result osal_condvar_create(osal::active_traits::condvar_handle_t* handle) 
     cv->pool_allocated = true;
     for (auto& w : cv->waiters)
     {
-        w.in_use = false;
+        w.in_use    = false;
+        w.signalled = false;
     }
 
     // Create the internal guard mutex (non-recursive).
@@ -188,8 +190,9 @@ osal::result osal_condvar_wait(osal::active_traits::condvar_handle_t* handle,
         if (!w.in_use)
         {
             (void)osal_semaphore_try_take(&w.sem);
-            w.in_use = true;
-            my_slot  = &w;
+            w.in_use    = true;
+            w.signalled = false;
+            my_slot     = &w;
             break;
         }
     }
@@ -220,7 +223,7 @@ osal::result osal_condvar_wait(osal::active_traits::condvar_handle_t* handle,
     return r;
 }
 
-/// @brief Wake the oldest thread waiting on this condvar (signal semantics).
+/// @brief Wake one not-yet-signalled thread waiting on this condvar.
 /// @param[in] handle  Condvar handle.
 /// @retval osal::ok()                   On success.
 /// @retval error_code::not_initialized  If null.
@@ -240,8 +243,9 @@ osal::result osal_condvar_notify_one(osal::active_traits::condvar_handle_t* hand
     }
     for (auto& w : cv->waiters)
     {
-        if (w.in_use)
+        if (w.in_use && !w.signalled)
         {
+            w.signalled = true;
             osal_semaphore_give(&w.sem);
             break;  // Wake only one.
         }
@@ -270,8 +274,9 @@ osal::result osal_condvar_notify_all(osal::active_traits::condvar_handle_t* hand
     }
     for (auto& w : cv->waiters)
     {
-        if (w.in_use)
+        if (w.in_use && !w.signalled)
         {
+            w.signalled = true;
             osal_semaphore_give(&w.sem);
         }
     }

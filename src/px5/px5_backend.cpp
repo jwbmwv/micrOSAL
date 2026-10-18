@@ -19,8 +19,10 @@
 #include <osal/osal.hpp>
 
 #include <px5_api.h>  ///< PX5 extends tx_api.h
+#include <atomic>
 #include <cassert>
 #include <cstring>
+#include <limits>
 
 /// @note PX5 is API-compatible with ThreadX.  All ThreadX primitives use
 ///       the same TX_* structures and functions.  Only the wait_set
@@ -40,29 +42,35 @@
 namespace
 {
 
-TX_THREAD            px5_threads[OSAL_PX5_MAX_THREADS];
-bool                 px5_thread_used[OSAL_PX5_MAX_THREADS];
-TX_MUTEX             px5_mutexes[OSAL_PX5_MAX_MUTEXES];
-bool                 px5_mutex_used[OSAL_PX5_MAX_MUTEXES];
-TX_SEMAPHORE         px5_sems[OSAL_PX5_MAX_SEMS];
-bool                 px5_sem_used[OSAL_PX5_MAX_SEMS];
+TX_THREAD             px5_threads[OSAL_PX5_MAX_THREADS];
+std::atomic<bool>     px5_thread_used[OSAL_PX5_MAX_THREADS];
+TX_MUTEX              px5_mutexes[OSAL_PX5_MAX_MUTEXES];
+std::atomic<bool>     px5_mutex_used[OSAL_PX5_MAX_MUTEXES];
+TX_SEMAPHORE          px5_sems[OSAL_PX5_MAX_SEMS];
+std::atomic<bool>     px5_sem_used[OSAL_PX5_MAX_SEMS];
+unsigned              px5_sem_max[OSAL_PX5_MAX_SEMS];
+std::atomic<unsigned> px5_sem_count[OSAL_PX5_MAX_SEMS];
+static_assert(std::atomic<unsigned>::is_always_lock_free);
 TX_QUEUE             px5_queues[OSAL_PX5_MAX_QUEUES];
-bool                 px5_queue_used[OSAL_PX5_MAX_QUEUES];
+std::atomic<bool>    px5_queue_used[OSAL_PX5_MAX_QUEUES];
+ULONG                px5_queue_storage[OSAL_PX5_MAX_QUEUES][256];
+std::size_t          px5_queue_item_size[OSAL_PX5_MAX_QUEUES];
 TX_TIMER             px5_timers[OSAL_PX5_MAX_TIMERS];
-bool                 px5_timer_used[OSAL_PX5_MAX_TIMERS];
+std::atomic<bool>    px5_timer_used[OSAL_PX5_MAX_TIMERS];
+std::atomic<bool>    px5_timer_started[OSAL_PX5_MAX_TIMERS];
 TX_EVENT_FLAGS_GROUP px5_evtgrps[OSAL_PX5_MAX_EVTGRPS];
-bool                 px5_evtgrp_used[OSAL_PX5_MAX_EVTGRPS];
+std::atomic<bool>    px5_evtgrp_used[OSAL_PX5_MAX_EVTGRPS];
 PX5_WAIT_SET         px5_wait_sets[OSAL_PX5_MAX_WAITSETS];
-bool                 px5_ws_used[OSAL_PX5_MAX_WAITSETS];
+std::atomic<bool>    px5_ws_used[OSAL_PX5_MAX_WAITSETS];
+static_assert(std::atomic<bool>::is_always_lock_free);
 
 template<typename T, std::size_t N>
-T* pool_acquire(T (&pool)[N], bool (&used)[N]) noexcept
+T* pool_acquire(T (&pool)[N], std::atomic<bool> (&used)[N]) noexcept
 {
     for (std::size_t i = 0; i < N; ++i)
     {
-        if (!used[i])
+        if (!used[i].exchange(true, std::memory_order_acquire))
         {
-            used[i] = true;
             return &pool[i];
         }
     }
@@ -70,13 +78,13 @@ T* pool_acquire(T (&pool)[N], bool (&used)[N]) noexcept
 }
 
 template<typename T, std::size_t N>
-void pool_release(T (&pool)[N], bool (&used)[N], T* p) noexcept
+void pool_release(T (&pool)[N], std::atomic<bool> (&used)[N], T* p) noexcept
 {
     for (std::size_t i = 0; i < N; ++i)
     {
         if (&pool[i] == p)
         {
-            used[i] = false;
+            used[i].store(false, std::memory_order_release);
             return;
         }
     }
@@ -122,6 +130,7 @@ struct px5_timer_ctx
     void*                 arg{};
     ULONG                 period{};
     TX_TIMER*             timer{};
+    ULONG                 initial{};
 };
 px5_timer_ctx px5_timer_ctxs[OSAL_PX5_MAX_TIMERS];
 
@@ -137,7 +146,7 @@ extern "C"
     /// @return Milliseconds elapsed since an arbitrary epoch (tick counter).
     std::int64_t osal_clock_monotonic_ms() noexcept
     {
-        return static_cast<std::int64_t>(tx_time_get()) * static_cast<std::int64_t>(1000U / TX_TIMER_TICKS_PER_SECOND);
+        return static_cast<std::int64_t>(tx_time_get()) * 1000LL / TX_TIMER_TICKS_PER_SECOND;
     }
 
     /// @brief Return wall-clock time in milliseconds (aliased to monotonic on PX5).
@@ -179,7 +188,14 @@ extern "C"
                                     osal::priority_t priority, osal::affinity_t /*affinity*/, void* stack,
                                     osal::stack_size_t stack_bytes, const char* name) noexcept
     {
-        assert(handle != nullptr && entry != nullptr && stack != nullptr);
+        if (handle == nullptr || entry == nullptr || stack == nullptr || stack_bytes == 0U)
+        {
+            return osal::error_code::invalid_argument;
+        }
+        if (handle->native != nullptr)
+        {
+            return osal::error_code::already_exists;
+        }
         TX_THREAD* t = pool_acquire(px5_threads, px5_thread_used);
         if (t == nullptr)
         {
@@ -209,14 +225,17 @@ extern "C"
         {
             return osal::error_code::not_initialized;
         }
-        tx_thread_terminate(PX5_THREAD_PTR(handle));
-        tx_thread_delete(PX5_THREAD_PTR(handle));
+        if (tx_thread_terminate(PX5_THREAD_PTR(handle)) != TX_SUCCESS ||
+            tx_thread_delete(PX5_THREAD_PTR(handle)) != TX_SUCCESS)
+        {
+            return osal::error_code::unknown;
+        }
         pool_release(px5_threads, px5_thread_used, PX5_THREAD_PTR(handle));
         handle->native = nullptr;
         return osal::ok();
     }
 
-    /// @brief Detach a thread, releasing its pool slot without waiting.
+    /// @brief Detach is unsupported; retain ownership of the live thread.
     /// @param[in,out] handle  Thread handle to detach.
     /// @retval osal::ok()                         On success.
     /// @retval osal::error_code::not_initialized  If the handle is null.
@@ -226,9 +245,7 @@ extern "C"
         {
             return osal::error_code::not_initialized;
         }
-        pool_release(px5_threads, px5_thread_used, PX5_THREAD_PTR(handle));
-        handle->native = nullptr;
-        return osal::ok();
+        return osal::error_code::not_supported;
     }
 
     /// @brief Change the priority of a running thread.
@@ -381,8 +398,12 @@ extern "C"
     /// @retval osal::ok()                          On success.
     /// @retval osal::error_code::out_of_resources  On failure.
     osal::result osal_semaphore_create(osal::active_traits::semaphore_handle_t* handle, unsigned init,
-                                       unsigned) noexcept
+                                       unsigned max_count) noexcept
     {
+        if (handle == nullptr || max_count == 0U || init > max_count)
+        {
+            return osal::error_code::invalid_argument;
+        }
         TX_SEMAPHORE* s = pool_acquire(px5_sems, px5_sem_used);
         if (s == nullptr)
         {
@@ -393,7 +414,9 @@ extern "C"
             pool_release(px5_sems, px5_sem_used, s);
             return osal::error_code::out_of_resources;
         }
-        handle->native = s;
+        handle->native            = s;
+        px5_sem_max[s - px5_sems] = max_count;
+        px5_sem_count[s - px5_sems].store(init, std::memory_order_relaxed);
         return osal::ok();
     }
 
@@ -406,7 +429,10 @@ extern "C"
         {
             return osal::ok();
         }
-        tx_semaphore_delete(PX5_SEM_PTR(handle));
+        if (tx_semaphore_delete(PX5_SEM_PTR(handle)) != TX_SUCCESS)
+        {
+            return osal::error_code::unknown;
+        }
         pool_release(px5_sems, px5_sem_used, PX5_SEM_PTR(handle));
         handle->native = nullptr;
         return osal::ok();
@@ -422,7 +448,31 @@ extern "C"
         {
             return osal::error_code::not_initialized;
         }
-        tx_semaphore_put(PX5_SEM_PTR(handle));
+        const auto index    = PX5_SEM_PTR(handle) - px5_sems;
+        auto&      count    = px5_sem_count[index];
+        unsigned   value    = count.load(std::memory_order_relaxed);
+        bool       reserved = false;
+        for (unsigned attempt = 0; attempt < 32U; ++attempt)
+        {
+            if (value >= px5_sem_max[index])
+            {
+                return osal::error_code::overflow;
+            }
+            if (count.compare_exchange_weak(value, value + 1U, std::memory_order_relaxed))
+            {
+                reserved = true;
+                break;
+            }
+        }
+        if (!reserved)
+        {
+            return osal::error_code::would_block;
+        }
+        if (tx_semaphore_put(PX5_SEM_PTR(handle)) != TX_SUCCESS)
+        {
+            count.fetch_sub(1U, std::memory_order_relaxed);
+            return osal::error_code::unknown;
+        }
         return osal::ok();
     }
 
@@ -446,8 +496,12 @@ extern "C"
         {
             return osal::error_code::not_initialized;
         }
-        return (tx_semaphore_get(PX5_SEM_PTR(handle), to_px5_ticks(timeout)) == TX_SUCCESS) ? osal::ok()
-                                                                                            : osal::error_code::timeout;
+        if (tx_semaphore_get(PX5_SEM_PTR(handle), to_px5_ticks(timeout)) != TX_SUCCESS)
+        {
+            return osal::error_code::timeout;
+        }
+        px5_sem_count[PX5_SEM_PTR(handle) - px5_sems].fetch_sub(1U, std::memory_order_relaxed);
+        return osal::ok();
     }
 
     /// @brief Try to decrement a semaphore without blocking.
@@ -463,7 +517,7 @@ extern "C"
     // Queue (identical to ThreadX)
     // ---------------------------------------------------------------------------
 
-    /// @brief Create a fixed-size message queue backed by @p buf.
+    /// @brief Create a fixed-size message queue in internal ULONG-aligned storage.
     /// @param[out] handle  Output handle populated with the new TX_QUEUE pointer.
     /// @param[in] buf      Caller-supplied storage buffer.
     /// @param[in] item_sz  Size in bytes of each message; rounded up to ULONG words.
@@ -473,14 +527,28 @@ extern "C"
     osal::result osal_queue_create(osal::active_traits::queue_handle_t* handle, void* buf, std::size_t item_sz,
                                    std::size_t cap) noexcept
     {
+        if (handle == nullptr || buf == nullptr || item_sz == 0U || cap == 0U)
+        {
+            return osal::error_code::invalid_argument;
+        }
+        if (item_sz > 16U * sizeof(ULONG))
+        {
+            return osal::error_code::not_supported;
+        }
+        const UINT words = static_cast<UINT>((item_sz + sizeof(ULONG) - 1U) / sizeof(ULONG));
+        if (cap > 256U / words)
+        {
+            return osal::error_code::out_of_resources;
+        }
         TX_QUEUE* q = pool_acquire(px5_queues, px5_queue_used);
         if (q == nullptr)
         {
             return osal::error_code::out_of_resources;
         }
-        const UINT words = static_cast<UINT>((item_sz + sizeof(ULONG) - 1U) / sizeof(ULONG));
-        if (tx_queue_create(q, const_cast<CHAR*>("q"), words, buf, static_cast<ULONG>(cap * words * sizeof(ULONG))) !=
-            TX_SUCCESS)
+        const auto idx           = static_cast<std::size_t>(q - px5_queues);
+        px5_queue_item_size[idx] = item_sz;
+        if (tx_queue_create(q, const_cast<CHAR*>("q"), words, px5_queue_storage[idx],
+                            static_cast<ULONG>(cap * words * sizeof(ULONG))) != TX_SUCCESS)
         {
             pool_release(px5_queues, px5_queue_used, q);
             return osal::error_code::out_of_resources;
@@ -517,7 +585,13 @@ extern "C"
         {
             return osal::error_code::not_initialized;
         }
-        return (tx_queue_send(PX5_QUEUE_PTR(handle), const_cast<void*>(item), to_px5_ticks(timeout)) == TX_SUCCESS)
+        if (item == nullptr)
+        {
+            return osal::error_code::invalid_argument;
+        }
+        ULONG message[16]{};
+        std::memcpy(message, item, px5_queue_item_size[PX5_QUEUE_PTR(handle) - px5_queues]);
+        return (tx_queue_send(PX5_QUEUE_PTR(handle), message, to_px5_ticks(timeout)) == TX_SUCCESS)
                    ? osal::ok()
                    : osal::error_code::timeout;
     }
@@ -545,9 +619,17 @@ extern "C"
         {
             return osal::error_code::not_initialized;
         }
-        return (tx_queue_receive(PX5_QUEUE_PTR(handle), item, to_px5_ticks(timeout)) == TX_SUCCESS)
-                   ? osal::ok()
-                   : osal::error_code::timeout;
+        if (item == nullptr)
+        {
+            return osal::error_code::invalid_argument;
+        }
+        ULONG      message[16]{};
+        const UINT rc = tx_queue_receive(PX5_QUEUE_PTR(handle), message, to_px5_ticks(timeout));
+        if (rc == TX_SUCCESS)
+        {
+            std::memcpy(item, message, px5_queue_item_size[PX5_QUEUE_PTR(handle) - px5_queues]);
+        }
+        return (rc == TX_SUCCESS) ? osal::ok() : osal::error_code::timeout;
     }
 
     /// @brief Receive a message from an ISR (non-blocking).
@@ -577,8 +659,9 @@ extern "C"
             return 0U;
         }
         ULONG      e = 0U, a = 0U, s = 0U;
-        TX_THREAD *f = nullptr, *n = nullptr;
-        tx_queue_info_get(const_cast<TX_QUEUE*>(PX5_QUEUE_PTR(handle)), nullptr, &e, &a, &s, &f, &n);
+        TX_THREAD* f = nullptr;
+        TX_QUEUE*  n = nullptr;
+        tx_queue_info_get(const_cast<TX_QUEUE*>(PX5_QUEUE_PTR(handle)), nullptr, &e, &a, &f, &s, &n);
         return static_cast<std::size_t>(e);
     }
 
@@ -592,8 +675,9 @@ extern "C"
             return 0U;
         }
         ULONG      e = 0U, a = 0U, s = 0U;
-        TX_THREAD *f = nullptr, *n = nullptr;
-        tx_queue_info_get(const_cast<TX_QUEUE*>(PX5_QUEUE_PTR(handle)), nullptr, &e, &a, &s, &f, &n);
+        TX_THREAD* f = nullptr;
+        TX_QUEUE*  n = nullptr;
+        tx_queue_info_get(const_cast<TX_QUEUE*>(PX5_QUEUE_PTR(handle)), nullptr, &e, &a, &f, &s, &n);
         return static_cast<std::size_t>(a);
     }
 
@@ -628,28 +712,24 @@ extern "C"
     osal::result osal_timer_create(osal::active_traits::timer_handle_t* handle, const char* name,
                                    osal_timer_callback_t cb, void* arg, osal::tick_t period, bool auto_reload) noexcept
     {
-        assert(handle != nullptr && cb != nullptr);
+        if (handle == nullptr || cb == nullptr || period == 0U || period == osal::WAIT_FOREVER ||
+            period > std::numeric_limits<ULONG>::max())
+        {
+            return osal::error_code::invalid_argument;
+        }
+        if (handle->native != nullptr)
+        {
+            return osal::error_code::already_exists;
+        }
         TX_TIMER* t = pool_acquire(px5_timers, px5_timer_used);
         if (t == nullptr)
         {
             return osal::error_code::out_of_resources;
         }
-        ULONG idx = OSAL_PX5_MAX_TIMERS;
-        for (ULONG i = 0; i < OSAL_PX5_MAX_TIMERS; ++i)
-        {
-            if (px5_timer_ctxs[i].fn == nullptr)
-            {
-                idx = i;
-                break;
-            }
-        }
-        if (idx == OSAL_PX5_MAX_TIMERS)
-        {
-            pool_release(px5_timers, px5_timer_used, t);
-            return osal::error_code::out_of_resources;
-        }
-        px5_timer_ctxs[idx] = {cb, arg, static_cast<ULONG>(period), t};
+        const auto idx = static_cast<ULONG>(t - px5_timers);
+        px5_timer_started[idx].store(false, std::memory_order_relaxed);
         const ULONG resched = auto_reload ? static_cast<ULONG>(period) : 0U;
+        px5_timer_ctxs[idx] = {cb, arg, resched, t, static_cast<ULONG>(period)};
         if (tx_timer_create(t, const_cast<CHAR*>(name != nullptr ? name : "t"), px5_timer_expiry, idx,
                             static_cast<ULONG>(period), resched, TX_NO_ACTIVATE) != TX_SUCCESS)
         {
@@ -670,7 +750,15 @@ extern "C"
         {
             return osal::ok();
         }
-        tx_timer_delete(PX5_TIMER_PTR(handle));
+        // No SDK-backed callback-dispatch barrier is available for slot reuse.
+        if (px5_timer_started[PX5_TIMER_PTR(handle) - px5_timers].load(std::memory_order_acquire))
+        {
+            return osal::error_code::not_supported;
+        }
+        if (tx_timer_delete(PX5_TIMER_PTR(handle)) != TX_SUCCESS)
+        {
+            return osal::error_code::unknown;
+        }
         for (auto& c : px5_timer_ctxs)
         {
             if (c.timer == PX5_TIMER_PTR(handle))
@@ -694,8 +782,22 @@ extern "C"
         {
             return osal::error_code::not_initialized;
         }
-        tx_timer_activate(PX5_TIMER_PTR(handle));
-        return osal::ok();
+        UINT active = TX_FALSE;
+        if (tx_timer_info_get(PX5_TIMER_PTR(handle), nullptr, &active, nullptr, nullptr, nullptr) != TX_SUCCESS)
+        {
+            return osal::error_code::unknown;
+        }
+        if (active == TX_TRUE)
+        {
+            return osal::ok();
+        }
+        const auto& ctx = px5_timer_ctxs[PX5_TIMER_PTR(handle) - px5_timers];
+        px5_timer_started[PX5_TIMER_PTR(handle) - px5_timers].store(true, std::memory_order_release);
+        if (tx_timer_change(PX5_TIMER_PTR(handle), ctx.initial, ctx.period) != TX_SUCCESS)
+        {
+            return osal::error_code::unknown;
+        }
+        return tx_timer_activate(PX5_TIMER_PTR(handle)) == TX_SUCCESS ? osal::ok() : osal::error_code::unknown;
     }
 
     /// @brief Deactivate (stop) a timer.
@@ -708,8 +810,7 @@ extern "C"
         {
             return osal::error_code::not_initialized;
         }
-        tx_timer_deactivate(PX5_TIMER_PTR(handle));
-        return osal::ok();
+        return tx_timer_deactivate(PX5_TIMER_PTR(handle)) == TX_SUCCESS ? osal::ok() : osal::error_code::unknown;
     }
 
     /// @brief Stop and immediately restart a timer.
@@ -717,7 +818,11 @@ extern "C"
     /// @return osal::ok() on success; forwarded error from osal_timer_start().
     osal::result osal_timer_reset(osal::active_traits::timer_handle_t* handle) noexcept
     {
-        osal_timer_stop(handle);
+        const auto stopped = osal_timer_stop(handle);
+        if (!stopped.ok())
+        {
+            return stopped;
+        }
         return osal_timer_start(handle);
     }
 
@@ -732,10 +837,30 @@ extern "C"
         {
             return osal::error_code::not_initialized;
         }
-        tx_timer_deactivate(PX5_TIMER_PTR(handle));
-        tx_timer_change(PX5_TIMER_PTR(handle), static_cast<ULONG>(new_period), static_cast<ULONG>(new_period));
-        tx_timer_activate(PX5_TIMER_PTR(handle));
-        return osal::ok();
+        if (new_period == 0U || new_period == osal::WAIT_FOREVER || new_period > std::numeric_limits<ULONG>::max())
+        {
+            return osal::error_code::invalid_argument;
+        }
+        auto& ctx    = px5_timer_ctxs[PX5_TIMER_PTR(handle) - px5_timers];
+        UINT  active = TX_FALSE;
+        if (tx_timer_info_get(PX5_TIMER_PTR(handle), nullptr, &active, nullptr, nullptr, nullptr) != TX_SUCCESS ||
+            tx_timer_deactivate(PX5_TIMER_PTR(handle)) != TX_SUCCESS)
+        {
+            return osal::error_code::unknown;
+        }
+        const ULONG next = static_cast<ULONG>(new_period);
+        if (tx_timer_change(PX5_TIMER_PTR(handle), next, ctx.period == 0U ? 0U : static_cast<ULONG>(new_period)) !=
+            TX_SUCCESS)
+        {
+            return osal::error_code::unknown;
+        }
+        if (ctx.period != 0U)
+        {
+            ctx.period = static_cast<ULONG>(new_period);
+        }
+        ctx.initial = static_cast<ULONG>(new_period);
+        return active != TX_TRUE || tx_timer_activate(PX5_TIMER_PTR(handle)) == TX_SUCCESS ? osal::ok()
+                                                                                           : osal::error_code::unknown;
     }
 
     /// @brief Query whether a timer is currently active.

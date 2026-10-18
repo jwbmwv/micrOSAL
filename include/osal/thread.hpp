@@ -36,6 +36,7 @@
 #include "backends.hpp"
 #include "clock.hpp"
 #include "error.hpp"
+#include "diagnostics.hpp"
 #include "types.hpp"
 #include <cstdint>
 #include <cstddef>
@@ -124,6 +125,15 @@ struct thread_config
 class thread
 {
 public:
+    /// @brief False for production bare-metal builds without a context-switch port.
+    static constexpr bool is_supported = supports_requirement<support_requirement::thread>;
+
+    template<typename Backend = active_backend>
+    static consteval void require_support()
+    {
+        require_backend_support<support_requirement::thread, Backend>();
+    }
+
     /// @brief True when the active backend supports timed thread join.
     static constexpr bool supports_timed_join = supports_requirement<support_requirement::timed_join>;
     /// @brief True when the active backend supports CPU affinity changes.
@@ -215,6 +225,7 @@ public:
     /// @brief Destructor.
     /// @warning Destroying a running thread that has not been joined or detached
     ///          is undefined behaviour.
+    /// @details Does not implicitly join, detach, or terminate a thread.
     ~thread() noexcept = default;
 
     thread(const thread&)            = delete;
@@ -231,9 +242,22 @@ public:
     /// @blocking   Never (the new thread runs independently).
     result create(const thread_config& cfg) noexcept
     {
-        const result r = osal_thread_create(&handle_, cfg.entry, cfg.arg, cfg.priority, cfg.affinity, cfg.stack,
-                                            cfg.stack_bytes, cfg.name);
-        valid_         = r.ok();
+        if (valid_)
+        {
+            const result status{error_code::already_exists};
+            diagnostics(diagnostic_resource::thread).attempt(status);
+            return status;
+        }
+        const result r         = cfg.entry == nullptr ? result{error_code::invalid_argument}
+                                                      : osal_thread_create(&handle_, cfg.entry, cfg.arg, cfg.priority,
+                                                                           cfg.affinity, cfg.stack, cfg.stack_bytes, cfg.name);
+        initialization_status_ = r;
+        valid_                 = r.ok();
+        diagnostics(diagnostic_resource::thread).attempt(r);
+        if (valid_)
+        {
+            diagnostics(diagnostic_resource::thread).acquire();
+        }
         return r;
     }
 
@@ -244,10 +268,16 @@ public:
     /// @blocking   Blocks until the thread exits.
     result join() noexcept
     {
+        if (!valid_)
+        {
+            return error_code::not_initialized;
+        }
         const result r = osal_thread_join(&handle_, WAIT_FOREVER);
+        diagnostics(diagnostic_resource::thread).attempt(r);
         if (r.ok())
         {
             valid_ = false;
+            diagnostics(diagnostic_resource::thread).release();
         }
         return r;
     }
@@ -261,13 +291,19 @@ public:
     /// @blocking   Up to timeout.
     result join_for(milliseconds timeout) noexcept
     {
+        if (!valid_)
+        {
+            return error_code::not_initialized;
+        }
         if constexpr (timed_join_backend<active_backend>)
         {
             const tick_t ticks = clock_utils::ms_to_ticks(timeout);
             const result r     = osal_thread_join(&handle_, ticks);
+            diagnostics(diagnostic_resource::thread).attempt(r);
             if (r.ok())
             {
                 valid_ = false;
+                diagnostics(diagnostic_resource::thread).release();
             }
             return r;
         }
@@ -309,10 +345,16 @@ public:
     /// @complexity O(1)
     result detach() noexcept
     {
+        if (!valid_)
+        {
+            return error_code::not_initialized;
+        }
         const result r = osal_thread_detach(&handle_);
+        diagnostics(diagnostic_resource::thread).attempt(r);
         if (r.ok())
         {
             valid_ = false;
+            diagnostics(diagnostic_resource::thread).release();
         }
         return r;
     }
@@ -509,6 +551,8 @@ public:
 
     /// @brief Returns true if the thread was successfully created.
     [[nodiscard]] bool valid() const noexcept { return valid_; }
+    /// @brief Last backend creation result; a rejected duplicate create preserves it.
+    [[nodiscard]] result initialization_status() const noexcept { return initialization_status_; }
 
     // ---- static helpers (current thread) -----------------------------------
 
@@ -639,6 +683,7 @@ public:
     }
 
 private:
+    result                         initialization_status_{error_code::not_initialized};
     bool                           valid_{false};
     active_traits::thread_handle_t handle_{};
 };

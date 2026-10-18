@@ -60,8 +60,11 @@ enum class error_code : std::int32_t
     not_owner         = 12,  ///< Calling thread does not own the resource.
     isr_invalid       = 13,  ///< Operation is not valid from an ISR context.
     barrier_serial =
-        14,         ///< This thread is the barrier's serial thread (POSIX PTHREAD_BARRIER_SERIAL_THREAD; not an error).
-    unknown = 255,  ///< Unmapped / unspecified backend error.
+        14,  ///< This thread is the barrier's serial thread (POSIX PTHREAD_BARRIER_SERIAL_THREAD; not an error).
+    owner_died      = 15,   ///< A robust mutex was acquired after its owner died; repair protected state.
+    not_recoverable = 16,   ///< Robust mutex state was not repaired before unlock.
+    cancelled       = 17,   ///< Cooperative cancellation was requested.
+    unknown         = 255,  ///< Unmapped / unspecified backend error.
 };
 
 // ---------------------------------------------------------------------------

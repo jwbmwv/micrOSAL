@@ -22,8 +22,10 @@
 #include <osal/osal.hpp>
 
 #include <tx_api.h>
+#include <atomic>
 #include <cassert>
 #include <cstring>
+#include <limits>
 
 // ---------------------------------------------------------------------------
 // Pool sizes
@@ -42,26 +44,30 @@ namespace
 {
 
 TX_THREAD            tx_threads[OSAL_TX_MAX_THREADS];
-bool                 tx_thread_used[OSAL_TX_MAX_THREADS];
+std::atomic<bool>    tx_thread_used[OSAL_TX_MAX_THREADS];
 TX_MUTEX             tx_mutexes[OSAL_TX_MAX_MUTEXES];
-bool                 tx_mutex_used[OSAL_TX_MAX_MUTEXES];
+std::atomic<bool>    tx_mutex_used[OSAL_TX_MAX_MUTEXES];
 TX_SEMAPHORE         tx_sems[OSAL_TX_MAX_SEMS];
-bool                 tx_sem_used[OSAL_TX_MAX_SEMS];
+std::atomic<bool>    tx_sem_used[OSAL_TX_MAX_SEMS];
+unsigned             tx_sem_max[OSAL_TX_MAX_SEMS];
 TX_QUEUE             tx_queues[OSAL_TX_MAX_QUEUES];
-bool                 tx_queue_used[OSAL_TX_MAX_QUEUES];
+std::atomic<bool>    tx_queue_used[OSAL_TX_MAX_QUEUES];
+ULONG                tx_queue_storage[OSAL_TX_MAX_QUEUES][256];
+std::size_t          tx_queue_item_size[OSAL_TX_MAX_QUEUES];
 TX_TIMER             tx_timers[OSAL_TX_MAX_TIMERS];
-bool                 tx_timer_used[OSAL_TX_MAX_TIMERS];
+std::atomic<bool>    tx_timer_used[OSAL_TX_MAX_TIMERS];
+std::atomic<bool>    tx_timer_started[OSAL_TX_MAX_TIMERS];
 TX_EVENT_FLAGS_GROUP tx_evtgrps[OSAL_TX_MAX_EVTGRPS];
-bool                 tx_evtgrp_used[OSAL_TX_MAX_EVTGRPS];
+std::atomic<bool>    tx_evtgrp_used[OSAL_TX_MAX_EVTGRPS];
+static_assert(std::atomic<bool>::is_always_lock_free);
 
 template<typename T, std::size_t N>
-T* pool_acquire(T (&pool)[N], bool (&used)[N]) noexcept
+T* pool_acquire(T (&pool)[N], std::atomic<bool> (&used)[N]) noexcept
 {
     for (std::size_t i = 0; i < N; ++i)
     {
-        if (!used[i])
+        if (!used[i].exchange(true, std::memory_order_acquire))
         {
-            used[i] = true;
             return &pool[i];
         }
     }
@@ -69,13 +75,13 @@ T* pool_acquire(T (&pool)[N], bool (&used)[N]) noexcept
 }
 
 template<typename T, std::size_t N>
-void pool_release(T (&pool)[N], bool (&used)[N], T* p) noexcept
+void pool_release(T (&pool)[N], std::atomic<bool> (&used)[N], T* p) noexcept
 {
     for (std::size_t i = 0; i < N; ++i)
     {
         if (&pool[i] == p)
         {
-            used[i] = false;
+            used[i].store(false, std::memory_order_release);
             return;
         }
     }
@@ -123,6 +129,7 @@ struct tx_timer_ctx
     void*                 arg{};
     ULONG                 period{};  ///< 0 = one-shot
     TX_TIMER*             timer{};
+    ULONG                 initial{};
 };
 tx_timer_ctx tx_timer_ctxs[OSAL_TX_MAX_TIMERS];
 
@@ -138,7 +145,7 @@ extern "C"
     /// @return Monotonic time in milliseconds (derived from `tx_time_get()`).
     std::int64_t osal_clock_monotonic_ms() noexcept
     {
-        return static_cast<std::int64_t>(tx_time_get()) * static_cast<std::int64_t>(1000U / TX_TIMER_TICKS_PER_SECOND);
+        return static_cast<std::int64_t>(tx_time_get()) * 1000LL / TX_TIMER_TICKS_PER_SECOND;
     }
 
     /// @brief Return system time — delegates to `osal_clock_monotonic_ms` on ThreadX.
@@ -180,7 +187,14 @@ extern "C"
                                     osal::priority_t priority, osal::affinity_t /*affinity*/, void* stack,
                                     osal::stack_size_t stack_bytes, const char* name) noexcept
     {
-        assert(handle != nullptr && entry != nullptr && stack != nullptr);
+        if (handle == nullptr || entry == nullptr || stack == nullptr || stack_bytes == 0U)
+        {
+            return osal::error_code::invalid_argument;
+        }
+        if (handle->native != nullptr)
+        {
+            return osal::error_code::already_exists;
+        }
         TX_THREAD* t = pool_acquire(tx_threads, tx_thread_used);
         if (t == nullptr)
         {
@@ -214,28 +228,26 @@ extern "C"
             return osal::error_code::not_initialized;
         }
         TX_THREAD* t = TX_THREAD_PTR(handle);
-        tx_thread_terminate(t);
-        tx_thread_delete(t);
+        if (tx_thread_terminate(t) != TX_SUCCESS || tx_thread_delete(t) != TX_SUCCESS)
+        {
+            return osal::error_code::unknown;
+        }
         pool_release(tx_threads, tx_thread_used, t);
         handle->native = nullptr;
         return osal::ok();
     }
 
-    /// @brief Release the thread slot; the thread object remains until explicitly deleted.
+    /// @brief Detach is unsupported; retain ownership of the live thread object.
     /// @param[in] handle  Thread handle.
     /// @retval osal::ok()                   On success.
     /// @retval error_code::not_initialized  If @p handle is null.
     osal::result osal_thread_detach(osal::active_traits::thread_handle_t* handle) noexcept
     {
-        // In ThreadX there is no "detach" concept — the thread object
-        // lives until explicitly deleted.  Mark as released.
         if (handle == nullptr || handle->native == nullptr)
         {
             return osal::error_code::not_initialized;
         }
-        pool_release(tx_threads, tx_thread_used, TX_THREAD_PTR(handle));
-        handle->native = nullptr;
-        return osal::ok();
+        return osal::error_code::not_supported;
     }
 
     /// @brief Change thread priority via `tx_thread_priority_change`.
@@ -391,8 +403,12 @@ extern "C"
     /// @retval osal::ok()                    On success.
     /// @retval error_code::out_of_resources  On failure.
     osal::result osal_semaphore_create(osal::active_traits::semaphore_handle_t* handle, unsigned initial_count,
-                                       unsigned /*max_count*/) noexcept
+                                       unsigned max_count) noexcept
     {
+        if (handle == nullptr || max_count == 0U || initial_count > max_count)
+        {
+            return osal::error_code::invalid_argument;
+        }
         TX_SEMAPHORE* s = pool_acquire(tx_sems, tx_sem_used);
         if (s == nullptr)
         {
@@ -404,7 +420,8 @@ extern "C"
             pool_release(tx_sems, tx_sem_used, s);
             return osal::error_code::out_of_resources;
         }
-        handle->native = static_cast<void*>(s);
+        handle->native          = static_cast<void*>(s);
+        tx_sem_max[s - tx_sems] = max_count;
         return osal::ok();
     }
 
@@ -417,7 +434,10 @@ extern "C"
         {
             return osal::ok();
         }
-        tx_semaphore_delete(TX_SEM_PTR(handle));
+        if (tx_semaphore_delete(TX_SEM_PTR(handle)) != TX_SUCCESS)
+        {
+            return osal::error_code::unknown;
+        }
         pool_release(tx_sems, tx_sem_used, TX_SEM_PTR(handle));
         handle->native = nullptr;
         return osal::ok();
@@ -433,8 +453,8 @@ extern "C"
         {
             return osal::error_code::not_initialized;
         }
-        tx_semaphore_put(TX_SEM_PTR(handle));
-        return osal::ok();
+        const UINT rc = tx_semaphore_ceiling_put(TX_SEM_PTR(handle), tx_sem_max[TX_SEM_PTR(handle) - tx_sems]);
+        return rc == TX_SUCCESS ? osal::ok() : osal::error_code::overflow;
     }
 
     /// @brief Increment from ISR context (`tx_semaphore_put` is ISR-safe).
@@ -474,27 +494,39 @@ extern "C"
     // Queue (TX_QUEUE — works with 32-bit word items)
     // ---------------------------------------------------------------------------
 
-    /// @brief Create a `TX_QUEUE` backed by @p buffer.
+    /// @brief Create a `TX_QUEUE` using fixed internal ULONG-aligned storage.
     /// @param[out] handle    Output handle.
-    /// @param[in] buffer     Caller-supplied backing memory.
-    /// @param[in] item_size  Message size in bytes (rounded up to 32-bit words).
+    /// @param[in] buffer     Caller buffer (not used for native rounded-word storage).
+    /// @param[in] item_size  Exact value size; maximum 16 ULONG words.
     /// @param[in] capacity   Maximum number of messages.
     /// @retval osal::ok()                    On success.
     /// @retval error_code::out_of_resources  On failure.
     osal::result osal_queue_create(osal::active_traits::queue_handle_t* handle, void* buffer, std::size_t item_size,
                                    std::size_t capacity) noexcept
     {
+        if (handle == nullptr || buffer == nullptr || item_size == 0U || capacity == 0U)
+        {
+            return osal::error_code::invalid_argument;
+        }
+        if (item_size > 16U * sizeof(ULONG))
+        {
+            return osal::error_code::not_supported;
+        }
+        const UINT msg_size_words = static_cast<UINT>((item_size + sizeof(ULONG) - 1U) / sizeof(ULONG));
+        if (capacity > 256U / msg_size_words)
+        {
+            return osal::error_code::out_of_resources;
+        }
         TX_QUEUE* q = pool_acquire(tx_queues, tx_queue_used);
         if (q == nullptr)
         {
             return osal::error_code::out_of_resources;
         }
 
-        // ThreadX message size is in 32-bit words.
-        const UINT msg_size_words = static_cast<UINT>((item_size + sizeof(ULONG) - 1U) / sizeof(ULONG));
-
-        const UINT rc = tx_queue_create(q, const_cast<CHAR*>("q"), msg_size_words, buffer,
-                                        static_cast<ULONG>(capacity * msg_size_words * sizeof(ULONG)));
+        const auto idx          = static_cast<std::size_t>(q - tx_queues);
+        tx_queue_item_size[idx] = item_size;
+        const UINT rc           = tx_queue_create(q, const_cast<CHAR*>("q"), msg_size_words, tx_queue_storage[idx],
+                                                  static_cast<ULONG>(capacity * msg_size_words * sizeof(ULONG)));
 
         if (rc != TX_SUCCESS)
         {
@@ -533,7 +565,13 @@ extern "C"
         {
             return osal::error_code::not_initialized;
         }
-        const UINT rc = tx_queue_send(TX_QUEUE_PTR(handle), const_cast<void*>(item), to_tx_ticks(timeout_ticks));
+        if (item == nullptr)
+        {
+            return osal::error_code::invalid_argument;
+        }
+        ULONG message[16]{};
+        std::memcpy(message, item, tx_queue_item_size[TX_QUEUE_PTR(handle) - tx_queues]);
+        const UINT rc = tx_queue_send(TX_QUEUE_PTR(handle), message, to_tx_ticks(timeout_ticks));
         return (rc == TX_SUCCESS) ? osal::ok() : osal::error_code::timeout;
     }
 
@@ -559,7 +597,16 @@ extern "C"
         {
             return osal::error_code::not_initialized;
         }
-        const UINT rc = tx_queue_receive(TX_QUEUE_PTR(handle), item, to_tx_ticks(timeout_ticks));
+        if (item == nullptr)
+        {
+            return osal::error_code::invalid_argument;
+        }
+        ULONG      message[16]{};
+        const UINT rc = tx_queue_receive(TX_QUEUE_PTR(handle), message, to_tx_ticks(timeout_ticks));
+        if (rc == TX_SUCCESS)
+        {
+            std::memcpy(item, message, tx_queue_item_size[TX_QUEUE_PTR(handle) - tx_queues]);
+        }
         return (rc == TX_SUCCESS) ? osal::ok() : osal::error_code::timeout;
     }
 
@@ -581,10 +628,7 @@ extern "C"
         {
             return osal::error_code::not_initialized;
         }
-        const UINT rc = tx_queue_front_send(TX_QUEUE_PTR(handle), item, TX_NO_WAIT);
-        // This actually re-inserts at front — real peek requires custom dequeue.
-        // Substitute: call front send to read, then re-insert.
-        (void)rc;
+        (void)item;
         return osal::error_code::not_supported;
     }
 
@@ -601,9 +645,9 @@ extern "C"
         ULONG      available = 0U;
         ULONG      suspended = 0U;
         TX_THREAD* first     = nullptr;
-        TX_THREAD* next      = nullptr;
-        tx_queue_info_get(const_cast<TX_QUEUE*>(TX_QUEUE_PTR(handle)), nullptr, &enqueued, &available, &suspended,
-                          &first, &next);
+        TX_QUEUE*  next      = nullptr;
+        tx_queue_info_get(const_cast<TX_QUEUE*>(TX_QUEUE_PTR(handle)), nullptr, &enqueued, &available, &first,
+                          &suspended, &next);
         return static_cast<std::size_t>(enqueued);
     }
 
@@ -620,9 +664,9 @@ extern "C"
         ULONG      available = 0U;
         ULONG      suspended = 0U;
         TX_THREAD* first     = nullptr;
-        TX_THREAD* next      = nullptr;
-        tx_queue_info_get(const_cast<TX_QUEUE*>(TX_QUEUE_PTR(handle)), nullptr, &enqueued, &available, &suspended,
-                          &first, &next);
+        TX_QUEUE*  next      = nullptr;
+        tx_queue_info_get(const_cast<TX_QUEUE*>(TX_QUEUE_PTR(handle)), nullptr, &enqueued, &available, &first,
+                          &suspended, &next);
         return static_cast<std::size_t>(available);
     }
 
@@ -658,33 +702,28 @@ extern "C"
                                    osal_timer_callback_t callback, void* arg, osal::tick_t period_ticks,
                                    bool auto_reload) noexcept
     {
-        assert(handle != nullptr && callback != nullptr);
+        if (handle == nullptr || callback == nullptr || period_ticks == 0U || period_ticks == osal::WAIT_FOREVER ||
+            period_ticks > std::numeric_limits<ULONG>::max())
+        {
+            return osal::error_code::invalid_argument;
+        }
+        if (handle->native != nullptr)
+        {
+            return osal::error_code::already_exists;
+        }
         TX_TIMER* t = pool_acquire(tx_timers, tx_timer_used);
         if (t == nullptr)
         {
             return osal::error_code::out_of_resources;
         }
 
-        // Find a context slot.
-        ULONG ctx_idx = OSAL_TX_MAX_TIMERS;
-        for (ULONG i = 0; i < OSAL_TX_MAX_TIMERS; ++i)
-        {
-            if (tx_timer_ctxs[i].fn == nullptr)
-            {
-                ctx_idx = i;
-                break;
-            }
-        }
-        if (ctx_idx == OSAL_TX_MAX_TIMERS)
-        {
-            pool_release(tx_timers, tx_timer_used, t);
-            return osal::error_code::out_of_resources;
-        }
-
-        tx_timer_ctxs[ctx_idx].fn     = callback;
-        tx_timer_ctxs[ctx_idx].arg    = arg;
-        tx_timer_ctxs[ctx_idx].period = static_cast<ULONG>(period_ticks);
-        tx_timer_ctxs[ctx_idx].timer  = t;
+        const auto ctx_idx = static_cast<ULONG>(t - tx_timers);
+        tx_timer_started[ctx_idx].store(false, std::memory_order_relaxed);
+        tx_timer_ctxs[ctx_idx].fn      = callback;
+        tx_timer_ctxs[ctx_idx].arg     = arg;
+        tx_timer_ctxs[ctx_idx].period  = auto_reload ? static_cast<ULONG>(period_ticks) : 0U;
+        tx_timer_ctxs[ctx_idx].timer   = t;
+        tx_timer_ctxs[ctx_idx].initial = static_cast<ULONG>(period_ticks);
 
         const ULONG reschedule = auto_reload ? static_cast<ULONG>(period_ticks) : 0U;
         const UINT  rc = tx_timer_create(t, const_cast<CHAR*>(name != nullptr ? name : "t"), tx_timer_expiry, ctx_idx,
@@ -709,7 +748,15 @@ extern "C"
         {
             return osal::ok();
         }
-        tx_timer_delete(TX_TIMER_PTR(handle));
+        // No SDK-backed callback-dispatch barrier is available for slot reuse.
+        if (tx_timer_started[TX_TIMER_PTR(handle) - tx_timers].load(std::memory_order_acquire))
+        {
+            return osal::error_code::not_supported;
+        }
+        if (tx_timer_delete(TX_TIMER_PTR(handle)) != TX_SUCCESS)
+        {
+            return osal::error_code::unknown;
+        }
         for (auto& ctx : tx_timer_ctxs)
         {
             if (ctx.timer == TX_TIMER_PTR(handle))
@@ -733,8 +780,22 @@ extern "C"
         {
             return osal::error_code::not_initialized;
         }
-        const UINT rc = tx_timer_activate(TX_TIMER_PTR(handle));
-        return (rc == TX_SUCCESS || rc == TX_ACTIVATE_ERROR) ? osal::ok() : osal::error_code::unknown;
+        UINT active = TX_FALSE;
+        if (tx_timer_info_get(TX_TIMER_PTR(handle), nullptr, &active, nullptr, nullptr, nullptr) != TX_SUCCESS)
+        {
+            return osal::error_code::unknown;
+        }
+        if (active == TX_TRUE)
+        {
+            return osal::ok();
+        }
+        const auto& ctx = tx_timer_ctxs[TX_TIMER_PTR(handle) - tx_timers];
+        tx_timer_started[TX_TIMER_PTR(handle) - tx_timers].store(true, std::memory_order_release);
+        if (tx_timer_change(TX_TIMER_PTR(handle), ctx.initial, ctx.period) != TX_SUCCESS)
+        {
+            return osal::error_code::unknown;
+        }
+        return tx_timer_activate(TX_TIMER_PTR(handle)) == TX_SUCCESS ? osal::ok() : osal::error_code::unknown;
     }
 
     /// @brief Disarm a timer via `tx_timer_deactivate`.
@@ -747,8 +808,7 @@ extern "C"
         {
             return osal::error_code::not_initialized;
         }
-        tx_timer_deactivate(TX_TIMER_PTR(handle));
-        return osal::ok();
+        return tx_timer_deactivate(TX_TIMER_PTR(handle)) == TX_SUCCESS ? osal::ok() : osal::error_code::unknown;
     }
 
     /// @brief Stop and re-arm a timer.
@@ -756,7 +816,11 @@ extern "C"
     /// @retval osal::ok()  On success.
     osal::result osal_timer_reset(osal::active_traits::timer_handle_t* handle) noexcept
     {
-        osal_timer_stop(handle);
+        const auto stopped = osal_timer_stop(handle);
+        if (!stopped.ok())
+        {
+            return stopped;
+        }
         return osal_timer_start(handle);
     }
 
@@ -771,12 +835,33 @@ extern "C"
         {
             return osal::error_code::not_initialized;
         }
-        tx_timer_deactivate(TX_TIMER_PTR(handle));
-        // tx_timer_info_get + tx_timer_change for ThreadX >=5.6
-        const UINT rc = tx_timer_change(TX_TIMER_PTR(handle), static_cast<ULONG>(new_period_ticks),
-                                        static_cast<ULONG>(new_period_ticks));
-        tx_timer_activate(TX_TIMER_PTR(handle));
-        return (rc == TX_SUCCESS) ? osal::ok() : osal::error_code::unknown;
+        if (new_period_ticks == 0U || new_period_ticks == osal::WAIT_FOREVER ||
+            new_period_ticks > std::numeric_limits<ULONG>::max())
+        {
+            return osal::error_code::invalid_argument;
+        }
+        auto& ctx    = tx_timer_ctxs[TX_TIMER_PTR(handle) - tx_timers];
+        UINT  active = TX_FALSE;
+        if (tx_timer_info_get(TX_TIMER_PTR(handle), nullptr, &active, nullptr, nullptr, nullptr) != TX_SUCCESS ||
+            tx_timer_deactivate(TX_TIMER_PTR(handle)) != TX_SUCCESS)
+        {
+            return osal::error_code::unknown;
+        }
+        const ULONG next = static_cast<ULONG>(new_period_ticks);
+        const UINT  rc =
+            tx_timer_change(TX_TIMER_PTR(handle), next, ctx.period == 0U ? 0U : static_cast<ULONG>(new_period_ticks));
+        if (rc == TX_SUCCESS)
+        {
+            if (ctx.period != 0U)
+            {
+                ctx.period = static_cast<ULONG>(new_period_ticks);
+            }
+            ctx.initial = static_cast<ULONG>(new_period_ticks);
+            return active != TX_TRUE || tx_timer_activate(TX_TIMER_PTR(handle)) == TX_SUCCESS
+                       ? osal::ok()
+                       : osal::error_code::unknown;
+        }
+        return osal::error_code::unknown;
     }
 
     /// @brief Query whether a timer is active via `tx_timer_info_get`.

@@ -135,6 +135,15 @@ concept backend_traits_spec = backend_tag<Backend> &&
 template<typename Backend>
 concept backend_descriptor = backend_capabilities_spec<Backend> && backend_traits_spec<Backend>;
 
+/// @brief Backend has a safe thread-context implementation.
+template<typename Backend>
+concept thread_backend = backend_descriptor<Backend> &&
+#if defined(OSAL_BM_TEST_SELF_TICK)
+                         true;
+#else
+                         (!std::same_as<Backend, backend_baremetal>);
+#endif
+
 /// @brief Backend has timed queue send/receive operations.
 template<typename Backend>
 concept timed_queue_backend = backend_descriptor<Backend> && capabilities<Backend>::has_timed_queue;
@@ -171,7 +180,7 @@ concept wait_set_backend = backend_descriptor<Backend> && capabilities<Backend>:
 /// @brief Backend can safely hand timer expiry to work_queue submission.
 template<typename Backend>
 concept delayable_work_backend =
-    backend_descriptor<Backend> && capabilities<Backend>::has_timer &&
+    backend_descriptor<Backend> && !std::same_as<Backend, backend_cmsis_rtos2> && capabilities<Backend>::has_timer &&
     (!capabilities<Backend>::timer_callbacks_may_run_in_isr || capabilities<Backend>::has_isr_work_queue_submit);
 
 /// @brief Queue/mailbox element type accepted by the backend C ABI.
