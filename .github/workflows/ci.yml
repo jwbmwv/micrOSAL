@@ -357,8 +357,8 @@ jobs:
 
   # -------------------------------------------------------------------
   # Zephyr backend tests
-  #   • native_sim  — fast Linux process, no emulator              (v3.7 + v4.3)
-  #   • nrf52840dk  — real ARM Cortex-M4F via Renode simulation    (v3.7 + v4.3)
+  #   • native_sim  — fast Linux process, no emulator              (v3.7 LTS + v4.5)
+  #   • nrf52840dk  — real ARM Cortex-M4F via Renode simulation    (v3.7 LTS + v4.5)
   #
   # Rationale for Renode over QEMU:
   #   Renode simulates the full SoC peripheral model (UART, clock, GPIO,
@@ -381,7 +381,7 @@ jobs:
             board: native_sim
             runner: native
             renode_version: ""
-          - zephyr_version: "v4.4.0"
+          - zephyr_version: "v4.5.0"
             zephyr_sdk_version: "1.0.1"
             board: native_sim
             runner: native
@@ -393,7 +393,7 @@ jobs:
             board: nrf52840dk/nrf52840
             runner: renode
             renode_version: "1.16.1"
-          - zephyr_version: "v4.4.0"
+          - zephyr_version: "v4.5.0"
             zephyr_sdk_version: "1.0.1"
             board: nrf52840dk/nrf52840
             runner: renode
@@ -512,7 +512,7 @@ jobs:
 
       # twister full-discovery run on native_sim / latest Zephyr only
       - name: Run twister full sweep (native_sim + latest Zephyr only)
-        if: matrix.runner == 'native' && matrix.zephyr_version == 'v4.4.0'
+        if: matrix.runner == 'native' && matrix.zephyr_version == 'v4.5.0'
         continue-on-error: true
         run: |
           cd zephyrproject

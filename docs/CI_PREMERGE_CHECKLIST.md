@@ -79,7 +79,14 @@ ctest --test-dir build-freertos --output-on-failure
 ### Zephyr
 
 - [ ] Zephyr test lane rerun in isolated west/module context when Zephyr code paths changed.
+- [ ] Both v3.7.0 LTS (SDK 0.16.8) and v4.5.0 (SDK 1.0.1) remain in the
+      `native_sim` and nRF52840 Renode matrix; the advisory discovery sweep follows v4.5.0.
+- [ ] The v4.5.0 workspace uses CMake 3.28+ and Python 3.12+.
 - [ ] Capability-gated behavior remains explicit (for example high-resolution clock and CPU query support).
+
+Use the isolated-workspace commands in
+[Test Coverage](TestCoverage.md#running-the-zephyr-suite). Do not change another
+project's west manifest or present a newer development checkout as v4.5.0 evidence.
 
 ### ThreadX
 

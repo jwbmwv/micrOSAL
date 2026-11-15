@@ -199,6 +199,12 @@ target_link_libraries(myapp PRIVATE MicrOSAL::OSAL)
 
 ### Zephyr (west)
 
+CI targets Zephyr **v3.7.0 LTS** and **v4.5.0** on `native_sim` and
+`nrf52840dk/nrf52840` (Renode). The v4.5.0 lane replaces v4.4.0 and uses
+Zephyr SDK **1.0.1**, Python **3.12+**, and CMake **3.28+**; the LTS lane
+retains SDK **0.16.8**. See the [integration guide](docs/backend_integration.md#zephyr-version-policy)
+and [test instructions](docs/TestCoverage.md#running-the-zephyr-suite).
+
 Place or symlink the repository into the Zephyr workspace modules directory:
 
 ```bash
@@ -262,11 +268,11 @@ ctest --test-dir build-freertos --output-on-failure
 FreeRTOS-Kernel v11 and doctest are fetched automatically via CMake
 `FetchContent`.
 
-### Zephyr (west twister)
+### Zephyr (Twister)
 
 ```bash
 source /path/to/zephyr-env.sh
-west twister -T tests/zephyr -p native_sim \
+"$ZEPHYR_BASE/scripts/twister" -T /path/to/micrOSAL/tests/zephyr -p native_sim \
     --extra-args="EXTRA_ZEPHYR_MODULES=/path/to/micrOSAL"
 ```
 
@@ -317,8 +323,8 @@ toolchain and core support them.
 | FreeRTOS v11 | CTest / doctest | POSIX sim | ✅ static and dynamic allocation modes; 64 cases each |
 | ThreadX v6.4.2 | CTest / doctest | Real SDK Linux/GNU simulation port | ✅ 9 focused cases locally; pinned SDK CI job configured |
 | NuttX (`sim/nsh`) | printf framework | NuttX sim on x86-64 Linux | ✅ 30/30 last recorded rerun |
-| Zephyr (`native_sim`) | west twister / ztest | Native process | ✅ Current suite has 101 cases; CI matrix covers v3.7.0 and v4.4.0 |
-| Zephyr (`nrf52840dk`) | west twister / ztest | Renode | ⚠️ CI matrix covers v3.7.0 and v4.4.0; the latest published pass predates current suite additions |
+| Zephyr (`native_sim`) | west build / Twister / ztest | Native process | ✅ 119/119 cases locally on both v3.7.0 LTS and v4.5.0; CI targets both releases |
+| Zephyr (`nrf52840dk`) | west build / Twister / ztest | Renode | ⚠️ CI targets v3.7.0 LTS and v4.5.0; the latest published Renode pass predates current suite additions |
 | PX5 / VxWorks / Micrium / ChibiOS / embOS / CMSIS-RTOS{,2} / QNX | External SDK or non-hosted integration | External SDK, BSP, simulator, or non-Ubuntu toolchain/environment required | Documented, not GitHub-hosted CI-built |
 
 Several backends intentionally remain out of GitHub-hosted CI because their

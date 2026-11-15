@@ -2,13 +2,13 @@
 /// @file main.cpp
 /// @brief Zephyr ztest suite for MicrOSAL — exercises the Zephyr backend.
 ///
-/// This single-file test covers all major OSAL primitives using Zephyr's
+/// This application covers all major OSAL primitives using Zephyr's
 /// standard ztest framework.  It can be built for any Zephyr-supported
 /// board:
 ///
 ///   west build -b native_sim tests/zephyr
 ///   west build -b qemu_cortex_m3 tests/zephyr
-///   west twister -T tests/zephyr
+///   "$ZEPHYR_BASE/scripts/twister" -T tests/zephyr
 ///
 /// Users can retarget to real hardware by switching the board argument.
 ///

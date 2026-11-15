@@ -393,7 +393,7 @@ of discarding the ceiling contract.
 | FreeRTOS v11 | POSIX simulation doctest suite in CI | It is not a real interrupt or board validation |
 | ThreadX v6.4.2 | Pinned real SDK, full adapter build and focused Linux/GNU-port runtime suite; CI job configured | Linux-port simulation, not board/ISR/SMP sign-off; started-timer reclamation remains unsupported |
 | NuttX main | `sim/nsh` built-in test application in CI | It does not exercise a deployed board configuration |
-| Zephyr v3.7 and v4.4 | `native_sim` and nRF52840 Renode ztest runs in CI | Simulation does not replace physical-device validation |
+| Zephyr v3.7.0 LTS and v4.5.0 | `native_sim` and nRF52840 Renode ztest CI targets; v4.5 replaces v4.4 | Simulation does not replace physical-device validation; see the coverage document for recorded results |
 | PX5, VxWorks, Micrium, ChibiOS, embOS, CMSIS-RTOS v1/v2, and QNX | Documented integration contracts | Required SDKs, BSPs, simulators, or toolchains are not provisioned in GitHub-hosted CI |
 
 The detailed test inventory, known gaps, and backend-specific commands are in

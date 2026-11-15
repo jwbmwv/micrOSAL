@@ -9,7 +9,7 @@ seventeen backends:
 | Backend | Target | File |
 | --- | --- | --- |
 | `FREERTOS` | FreeRTOS ≥ 10.0 (all chip families) | `src/freertos/freertos_backend.cpp` |
-| `ZEPHYR` | Zephyr RTOS ≥ 3.0 (tested with 4.3) | `src/zephyr/zephyr_backend.cpp` |
+| `ZEPHYR` | Zephyr RTOS ≥ 3.0 (CI targets 3.7 LTS and 4.5) | `src/zephyr/zephyr_backend.cpp` |
 | `THREADX` | Azure RTOS ThreadX | `src/threadx/threadx_backend.cpp` |
 | `PX5` | PX5 RTOS (ThreadX superset) | `src/px5/px5_backend.cpp` |
 | `POSIX` | Any POSIX:2008 system | `src/posix/posix_backend.cpp` |

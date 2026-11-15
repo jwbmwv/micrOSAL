@@ -7,7 +7,7 @@
 ///          All kernel objects used (k_mutex, k_sem, k_msgq, k_timer,
 ///          k_event, k_condvar, k_mem_slab) are part of the stable Zephyr
 ///          kernel API available since 3.0.  The CI tests run against
-///          Zephyr 4.3, but no 4.x-only APIs are required.
+///          Zephyr 3.7 LTS and 4.5, but no 4.x-only APIs are required.
 ///
 ///          Kernel object strategy:
 ///          - All Zephyr kernel objects (k_mutex, k_sem, k_msgq, k_timer) are
@@ -1730,14 +1730,14 @@ extern "C"
             return osal::ok();
         }
         auto* wq = static_cast<zephyr_wq_obj_s*>(handle->native);
-        if (k_is_in_isr() || k_current_get() == &wq->workq.thread)
+        if (k_is_in_isr() || k_current_get() == k_work_queue_thread_get(&wq->workq))
         {
             return osal::error_code::not_supported;
         }
         // Drain pending work, plug to stop new submissions.
         (void)k_work_queue_drain(&wq->workq, true);
         // Abort the work queue's internal thread so the pool entry can be reused.
-        k_thread_abort(&wq->workq.thread);
+        k_thread_abort(k_work_queue_thread_get(&wq->workq));
         // Reset the k_work_q so K_WORK_QUEUE_STARTED_BIT is cleared for reuse.
         (void)std::memset(&wq->workq, 0, sizeof(wq->workq));
         zephyr_wq_release(wq);
@@ -1816,7 +1816,7 @@ extern "C"
             return osal::error_code::not_initialized;
         }
         auto* wq = static_cast<zephyr_wq_obj_s*>(handle->native);
-        if (k_is_in_isr() || k_current_get() == &wq->workq.thread)
+        if (k_is_in_isr() || k_current_get() == k_work_queue_thread_get(&wq->workq))
         {
             return osal::error_code::not_supported;
         }
