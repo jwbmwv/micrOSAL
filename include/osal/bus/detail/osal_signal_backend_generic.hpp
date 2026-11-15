@@ -138,9 +138,10 @@ public:
     // ---- publish -----------------------------------------------------------
 
     /// @brief Fans the message out to all active subscriber queues.
+    /// @details Queue sends are non-blocking; acquiring the topic mutex may wait.
     /// @param[in] msg  Message to broadcast (copied into each subscriber queue).
     /// @return @c true if at least one subscriber received the message.
-    /// @blocking Never (uses try_send; drops to full subscriber queues).
+    /// @blocking May wait for the topic mutex; queue sends never wait.
     /// @complexity O(MaxSubscribers).
     [[nodiscard]] bool publish(const T& msg) noexcept
     {
@@ -187,7 +188,7 @@ public:
     /// @param[out] out      Receives the dequeued message on success.
     /// @param[in]  timeout  Maximum wait in ticks; use WAIT_FOREVER to block indefinitely.
     /// @return @c true if a message was received within the timeout.
-    /// @blocking Up to @p timeout.
+    /// @blocking May wait for the topic mutex, then up to @p timeout for the message.
     [[nodiscard]] bool receive(subscriber_id id, T& out, tick_t timeout = WAIT_FOREVER) noexcept
     {
         if (!valid())

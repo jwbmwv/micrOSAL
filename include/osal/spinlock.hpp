@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 /// @file spinlock.hpp
 /// @brief OSAL spinlock — low-level spin-wait primitive
-/// @details Provides osal::spinlock, a non-blocking busy-wait lock intended for
-///          very short critical sections on SMP systems (e.g. protecting a
-///          shared variable whose access takes < 10 cycles).
+/// @details Provides osal::spinlock, a busy-wait lock intended for very short
+///          critical sections on SMP systems (e.g. protecting a shared
+///          variable whose access takes < 10 cycles). On Zephyr SMP,
+///          try_lock() may also spin while another CPU holds the lock.
 ///
 ///          Availability:
 ///          - Native spinlock: capabilities<active_backend>::has_spinlock == true
@@ -40,9 +41,10 @@ extern "C"
     /// @param[in,out] handle Initialised spinlock handle.
     /// @return The backend result; consult its error code if acquisition fails.
     osal::result osal_spinlock_lock(osal::active_traits::spinlock_handle_t* handle) noexcept;
-    /// @brief Attempt to acquire a native spinlock without waiting.
+    /// @brief Attempt to acquire a native spinlock.
     /// @param[in,out] handle Initialised spinlock handle.
-    /// @return true if acquired, false otherwise.
+    /// @return true if acquired, false otherwise; on Zephyr SMP this may spin
+    ///         until another CPU releases the lock.
     bool osal_spinlock_try_lock(osal::active_traits::spinlock_handle_t* handle) noexcept;
     /// @brief Release a native spinlock.
     /// @param[in,out] handle Initialised spinlock handle held by the caller.
@@ -142,12 +144,12 @@ public:
         }
     }
 
-    /// @brief Attempts to acquire the spinlock without spinning.
-    /// @return true if acquired; false if already held or backend unsupported.
-    /// @details Thread-context operation; this is a snapshot attempt and never
-    ///          waits for the lock.
-    /// @complexity O(1)
-    /// @blocking   Never.
+    /// @brief Attempts to acquire the spinlock.
+    /// @return true if acquired; false if unavailable or backend unsupported.
+    /// @details Thread-context operation. On Zephyr SMP, this may spin until
+    ///          another CPU releases the lock.
+    /// @complexity O(1) except on Zephyr SMP, where contention may cause spinning.
+    /// @blocking   May spin on Zephyr SMP while another CPU holds the lock.
     [[nodiscard]] bool try_lock() noexcept
     {
         if constexpr (active_capabilities::has_spinlock)

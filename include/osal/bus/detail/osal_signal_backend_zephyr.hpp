@@ -59,7 +59,7 @@ public:
     /// @brief Registers a new subscriber and returns its ID.
     /// @param[out] out_id  Receives the allocated subscriber ID, or the invalid sentinel on failure.
     /// @return @c true if a free slot was available; @c false when invalid or at capacity.
-    /// @blocking Never (mutex-locked, O(MaxSubscribers) scan).
+    /// @blocking May wait for the topic mutex; then scans O(MaxSubscribers) slots.
     [[nodiscard]] bool subscribe(subscriber_id& out_id) noexcept
     {
         if (!valid())
@@ -116,9 +116,10 @@ public:
     }
 
     /// @brief Fans the message out to all active subscriber queues.
+    /// @details Queue sends are non-blocking; acquiring the topic mutex may wait.
     /// @param[in] msg  Message to broadcast; copied into each accepting subscriber queue.
     /// @return @c true if at least one subscriber received the message.
-    /// @blocking Never (uses non-blocking queue sends; full queues drop this message).
+    /// @blocking May wait for the topic mutex; queue sends never wait.
     /// @complexity O(MaxSubscribers).
     [[nodiscard]] bool publish(const T& msg) noexcept
     {

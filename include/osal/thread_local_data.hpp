@@ -346,10 +346,13 @@ public:
 
     /// @brief Stores a non-owning pointer in this thread's slot.
     /// @param[in] value Pointer value to associate with the current thread; nullptr is allowed.
-    /// @return Success, not_initialized if no key/task is available, or
+    /// @return Success, not_initialized if no key is available or (for native
+    ///         FreeRTOS TLS) no task is current, or
     ///         out_of_resources if the native TLS operation fails.
     /// @details The value is independent for each thread/task. The pointed-to
-    ///          object is not owned; the caller controls its lifetime.
+    ///          object is not owned; the caller controls its lifetime. Native
+    ///          bare-metal TLS uses a shared fallback slot when no valid task
+    ///          index is available.
     result set(void* value) const noexcept
     {
         if (!valid_)
@@ -378,8 +381,10 @@ public:
 
     /// @brief Retrieves this thread's pointer value.
     /// @return The value previously stored by this thread, or nullptr if unset,
-    ///         invalid, or no native task is current.
+    ///         invalid, or (for native FreeRTOS TLS) no task is current.
     /// @details Does not transfer or manage ownership of the pointed-to object.
+    ///          Native bare-metal TLS uses a shared fallback slot when no
+    ///          valid task index is available.
     [[nodiscard]] void* get() const noexcept
     {
         if (!valid_)
