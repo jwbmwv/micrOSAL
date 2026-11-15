@@ -42,22 +42,57 @@ using osal_work_func_t = void (*)(void* arg);
 
 extern "C"
 {
+    /// @brief Create and start a work queue.
+    /// @param[out] handle      Output queue handle.
+    /// @param[in]  stack       Caller-supplied worker-thread stack.
+    /// @param[in]  stack_bytes Stack size in bytes.
+    /// @param[in]  depth       Requested queue depth.
+    /// @param[in]  name        Optional debug name.
+    /// @return The backend result; consult its error code if creation fails.
+    /// @details The stack storage must remain valid while the worker is active.
     osal::result osal_work_queue_create(osal::active_traits::work_queue_handle_t* handle, void* stack,
                                         std::size_t stack_bytes, std::size_t depth, const char* name) noexcept;
 
+    /// @brief Drain and destroy a work queue.
+    /// @param[in,out] handle Queue handle to destroy.
+    /// @return The backend result; consult its error code if shutdown fails.
+    /// @details Call only after submissions are quiesced; destruction may wait
+    ///          for submitted work and must not be called from ISR context.
     osal::result osal_work_queue_destroy(osal::active_traits::work_queue_handle_t* handle) noexcept;
 
+    /// @brief Submit work for execution by the worker.
+    /// @param[in,out] handle Initialised queue handle.
+    /// @param[in]     func   Callback to execute.
+    /// @param[in]     arg    Opaque callback argument.
+    /// @return The backend result; consult its error code if submission fails.
     osal::result osal_work_queue_submit(osal::active_traits::work_queue_handle_t* handle, osal_work_func_t func,
                                         void* arg) noexcept;
 
+    /// @brief Submit work from interrupt context on capable backends.
+    /// @param[in,out] handle Initialised queue handle.
+    /// @param[in]     func   Callback to execute.
+    /// @param[in]     arg    Opaque callback argument.
+    /// @return The backend result; consult its error code if submission fails.
+    /// @warning Use only when the active backend advertises ISR-safe work-queue submission.
     osal::result osal_work_queue_submit_from_isr(osal::active_traits::work_queue_handle_t* handle,
                                                  osal_work_func_t func, void* arg) noexcept;
 
+    /// @brief Wait until submitted work has been processed.
+    /// @param[in,out] handle        Initialised queue handle.
+    /// @param[in]     timeout_ticks Maximum wait in ticks; WAIT_FOREVER waits indefinitely.
+    /// @return The backend result; consult its error code for timeout or other failures.
     osal::result osal_work_queue_flush(osal::active_traits::work_queue_handle_t* handle,
                                        osal::tick_t                              timeout_ticks) noexcept;
 
+    /// @brief Cancel work that has not started.
+    /// @param[in,out] handle Initialised queue handle.
+    /// @return The backend result; consult its error code if cancellation fails.
+    /// @details Work already executing is not cancelled.
     osal::result osal_work_queue_cancel_all(osal::active_traits::work_queue_handle_t* handle) noexcept;
 
+    /// @brief Return the number of queued work items not yet executed.
+    /// @param[in] handle Initialised queue handle.
+    /// @return Current pending count.
     std::size_t osal_work_queue_pending(const osal::active_traits::work_queue_handle_t* handle) noexcept;
 
 }  // extern "C"
@@ -70,13 +105,16 @@ namespace osal
 /// @{
 
 /// @brief Signature for a work item callback.
+/// @param arg Opaque argument supplied with the submission.
+/// @details Callbacks must return normally and should be short; they execute in
+///          the worker thread, except that submission itself may originate in ISR.
 using work_func_t = osal_work_func_t;
 
 /// @brief A single deferrable unit of work.
 struct work_item
 {
-    work_func_t func = nullptr;  ///< Function to execute.
-    void*       arg  = nullptr;  ///< Argument passed to func.
+    work_func_t func = nullptr;  ///< Callback executed by the worker.
+    void*       arg  = nullptr;  ///< Non-owning argument passed to the callback.
 };
 
 // ---------------------------------------------------------------------------
@@ -94,10 +132,10 @@ struct work_item
 ///          @endcode
 struct work_queue_config
 {
-    void*       stack       = nullptr;  ///< Caller-supplied stack for the worker thread.
+    void*       stack       = nullptr;  ///< Caller-supplied stack kept alive while the queue runs.
     std::size_t stack_bytes = 0;        ///< Size of the stack in bytes.
-    std::size_t depth       = 16;       ///< Maximum number of queued work items.
-    const char* name        = "wq";     ///< Human-readable name (for debugging).
+    std::size_t depth       = 16;       ///< Requested maximum queued items; capped by the build limit.
+    const char* name        = "wq";     ///< Optional human-readable debug name.
 };
 
 /// @brief OSAL work queue — deferred execution of callbacks on a dedicated thread.
@@ -115,11 +153,13 @@ public:
     // ---- construction / destruction ----------------------------------------
 
     /// @brief Constructs and starts the work queue.
-    /// @param[in] stack        Caller-supplied stack for the worker thread.
-    /// @param[in] stack_bytes  Size of the stack in bytes.
-    /// @param[in] depth        Maximum number of queued work items; must be > 0 and is capped at
-    ///                     OSAL_WORK_QUEUE_MAX_DEPTH).
-    /// @param[in] name  Human-readable name (for debugging).
+    /// @param[in] stack       Caller-supplied stack for the worker thread.
+    /// @param[in] stack_bytes Size of the stack in bytes.
+    /// @param[in] depth       Requested maximum queued items; capped at
+    ///                        OSAL_WORK_QUEUE_MAX_DEPTH.
+    /// @param[in] name        Optional human-readable debug name.
+    /// @details The stack must remain valid while the queue is running. Check
+    ///          initialization_status() or valid() before submitting work.
     work_queue(void* stack, std::size_t stack_bytes, std::size_t depth = 16, const char* name = "wq") noexcept
         : valid_(false)
     {
@@ -127,9 +167,11 @@ public:
         initialize(stack, stack_bytes, capped, name);
     }
 
-    /// @brief Constructs from an immutable config (config may reside in FLASH).
-    /// @param[in] cfg  Configuration — typically declared @c const.
+    /// @brief Constructs from an immutable configuration descriptor.
+    /// @param[in] cfg Configuration — typically declared @c const.
     /// @complexity O(1)
+    /// @details The descriptor may reside in read-only memory; its worker stack
+    ///          remains caller-owned and must outlive the queue.
     explicit work_queue(const work_queue_config& cfg) noexcept : valid_(false)
     {
         const std::size_t capped = (cfg.depth > OSAL_WORK_QUEUE_MAX_DEPTH) ? OSAL_WORK_QUEUE_MAX_DEPTH : cfg.depth;
@@ -138,21 +180,31 @@ public:
 
     /// @brief Destroys the work queue after draining any already-queued items.
     /// @details The worker thread is signalled to stop once the queue becomes empty,
-    ///          then joined before resources are released.
+    ///          then joined before resources are released. Shutdown is best-effort;
+    ///          inspect shutdown() explicitly when failure recovery is required.
     ~work_queue() noexcept { (void)shutdown(); }
 
-    work_queue(const work_queue&)            = delete;
+    /// @brief Copy construction is disabled; worker and queue state have one owner.
+    work_queue(const work_queue&) = delete;
+    /// @brief Copy assignment is disabled; worker and queue state have one owner.
     work_queue& operator=(const work_queue&) = delete;
-    work_queue(work_queue&&)                 = delete;
-    work_queue& operator=(work_queue&&)      = delete;
+    /// @brief Move construction is disabled; the worker references this object's state.
+    work_queue(work_queue&&) = delete;
+    /// @brief Move assignment is disabled; the worker references this object's state.
+    work_queue& operator=(work_queue&&) = delete;
 
     // ---- submit ------------------------------------------------------------
 
     /// @brief Submits a work item for deferred execution.
-    /// @param[in] func  Function to call on the worker thread.
-    /// @param[in] arg   Argument passed to @p func.
+    /// @param[in] func Function to call on the worker thread.
+    /// @param[in] arg  Argument passed to @p func.
     /// @retval osal::ok()           The work item was submitted.
     /// @retval error_code::overflow The work queue is full.
+    /// @par Other errors
+    /// Initialization and backend errors are returned unchanged.
+    /// @details The callback and argument must remain valid until execution or
+    ///          cancellation. The callback runs in worker-thread context.
+    ///          Use submit_from_isr() rather than this overload from ISR context.
     [[nodiscard]] result submit(work_func_t func, void* arg = nullptr) noexcept
     {
         const result status =
@@ -171,7 +223,14 @@ public:
     }
 
     /// @brief Submits a work item from ISR context.
+    /// @param[in] func Callback to execute in worker-thread context.
+    /// @param[in] arg  Argument passed to @p func.
     /// @retval error_code::not_supported The active backend has no ISR-safe work queue.
+    /// @par Other errors
+    /// Backend errors are returned unchanged.
+    /// @warning Only call from ISR when the active backend advertises ISR-safe
+    ///          work-queue submission. Keep callback and argument alive until
+    ///          the item executes or is cancelled.
     [[nodiscard]] result submit_from_isr(work_func_t func, void* arg = nullptr) noexcept
     {
         return osal_work_queue_submit_from_isr(&handle_, func, arg);
@@ -180,9 +239,16 @@ public:
     // ---- control -----------------------------------------------------------
 
     /// @brief Blocks until all currently-queued items have been executed.
-    /// @param[in] timeout  Maximum time to wait.
-    /// @retval osal::ok()           All queued work completed.
-    /// @retval error_code::timeout  The wait expired.
+    /// @param[in] timeout Maximum wait; negative waits indefinitely and zero
+    ///                    performs a non-blocking check.
+    /// @retval osal::ok()                  All queued work completed.
+    /// @retval error_code::timeout         The wait expired.
+    /// @retval error_code::not_initialized The work queue is not initialized.
+    /// @par Other errors
+    /// Backend errors are returned unchanged.
+    /// @details Thread context only; concurrent submissions may affect the
+    ///          backend's definition of completion. Producers must be quiesced
+    ///          before shutdown or cancel_all().
     [[nodiscard]] result flush(milliseconds timeout = milliseconds{5000}) noexcept
     {
         const tick_t ticks  = (timeout.count() < 0) ? WAIT_FOREVER : clock_utils::ms_to_ticks(timeout);
@@ -199,6 +265,12 @@ public:
     }
 
     /// @brief Cancels all pending (not yet started) items.
+    /// @retval error_code::not_initialized The work queue is not initialized.
+    /// @par Other errors
+    /// Backend errors are returned unchanged.
+    /// @return Success or the backend cancellation error.
+    /// @details Already-running callbacks continue. Keep cancelled item
+    ///          arguments alive if any callback has started.
     [[nodiscard]] result cancel_all() noexcept
     {
         const result status = valid_ ? osal_work_queue_cancel_all(&handle_) : result{error_code::not_initialized};
@@ -213,6 +285,7 @@ public:
     ///          Calling from the worker must return the backend's error, not force
     ///          termination. The destructor performs best-effort shutdown.
     ///          On failure keep this object and all callback arguments alive.
+    /// @return Success if destroyed, otherwise the backend shutdown error.
     [[nodiscard]] result shutdown() noexcept
     {
         if (!valid_)
@@ -230,11 +303,14 @@ public:
         return status;
     }
 
+    /// @brief Alias for shutdown().
+    /// @return Same result as shutdown().
     [[nodiscard]] result close() noexcept { return shutdown(); }
 
     // ---- query -------------------------------------------------------------
 
     /// @brief Returns the number of items currently queued (not yet executed).
+    /// @return Snapshot of queued items; does not include work already executing.
     [[nodiscard]] std::size_t pending() const noexcept
     {
         const auto count = valid_ ? osal_work_queue_pending(&handle_) : 0U;
@@ -243,12 +319,17 @@ public:
     }
 
     /// @brief Returns true if the work queue was successfully initialised.
-    [[nodiscard]] bool   valid() const noexcept { return valid_; }
+    /// @brief Reports whether initialization succeeded and the queue is active.
+    /// @return true while the backend queue is initialized.
+    [[nodiscard]] bool valid() const noexcept { return valid_; }
+    /// @brief Returns the result of initial queue creation.
+    /// @return Initialization result, preserved after shutdown.
     [[nodiscard]] result initialization_status() const noexcept { return initialization_status_; }
 
     /// @brief Approximate last-observed backlog and modulo-2^32 operation counters.
     /// @details ISR submissions are excluded. Backlog/high water here measure
     ///          work items; global in_use/high water measure owned queue handles.
+    /// @return Snapshot of this queue's operation counters and gauges.
     [[nodiscard]] diagnostic_snapshot statistics() const noexcept { return operations_.snapshot(); }
 
 private:

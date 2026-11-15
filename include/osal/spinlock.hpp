@@ -28,11 +28,25 @@
 
 extern "C"
 {
+    /// @brief Create a native spinlock.
+    /// @param[out] handle Handle storage to initialise.
+    /// @return The backend result; consult its error code if creation fails.
     osal::result osal_spinlock_create(osal::active_traits::spinlock_handle_t* handle) noexcept;
+    /// @brief Destroy a native spinlock.
+    /// @param[in,out] handle Handle to destroy.
+    /// @return The backend result; consult its error code if destruction fails.
     osal::result osal_spinlock_destroy(osal::active_traits::spinlock_handle_t* handle) noexcept;
+    /// @brief Acquire a native spinlock, spinning until available.
+    /// @param[in,out] handle Initialised spinlock handle.
+    /// @return The backend result; consult its error code if acquisition fails.
     osal::result osal_spinlock_lock(osal::active_traits::spinlock_handle_t* handle) noexcept;
-    bool         osal_spinlock_try_lock(osal::active_traits::spinlock_handle_t* handle) noexcept;
-    void         osal_spinlock_unlock(osal::active_traits::spinlock_handle_t* handle) noexcept;
+    /// @brief Attempt to acquire a native spinlock without waiting.
+    /// @param[in,out] handle Initialised spinlock handle.
+    /// @return true if acquired, false otherwise.
+    bool osal_spinlock_try_lock(osal::active_traits::spinlock_handle_t* handle) noexcept;
+    /// @brief Release a native spinlock.
+    /// @param[in,out] handle Initialised spinlock handle held by the caller.
+    void osal_spinlock_unlock(osal::active_traits::spinlock_handle_t* handle) noexcept;
 }  // extern "C"
 
 namespace osal
@@ -59,6 +73,8 @@ public:
     static constexpr bool is_supported = supports_requirement<support_requirement::spinlock>;
 
     /// @brief Enforce native spinlock support at compile time.
+    /// @tparam Backend Backend whose spinlock requirement is checked.
+    /// @details Compilation fails if @p Backend does not support spinlocks.
     template<typename Backend = active_backend>
     static consteval void require_support()
     {
@@ -67,7 +83,8 @@ public:
 
     // ---- construction / destruction ----------------------------------------
 
-    /// @brief Default-constructs and initialises the spinlock.
+    /// @brief Constructs and initializes the spinlock when supported.
+    /// @details Check valid() to determine whether initialization succeeded.
     /// @complexity O(1)
     /// @blocking   Never.
     spinlock() noexcept
@@ -78,7 +95,8 @@ public:
         }
     }
 
-    /// @brief Destructor.
+    /// @brief Destroys the initialized spinlock.
+    /// @details The lock must not be held and no thread may still use it.
     ~spinlock() noexcept
     {
         if constexpr (active_capabilities::has_spinlock)
@@ -91,16 +109,24 @@ public:
         }
     }
 
-    spinlock(const spinlock&)            = delete;
+    /// @brief Copy construction is disabled; the native lock has one owner.
+    spinlock(const spinlock&) = delete;
+    /// @brief Copy assignment is disabled; the native lock has one owner.
     spinlock& operator=(const spinlock&) = delete;
-    spinlock(spinlock&&)                 = delete;
-    spinlock& operator=(spinlock&&)      = delete;
+    /// @brief Move construction is disabled; the native lock is not transferable.
+    spinlock(spinlock&&) = delete;
+    /// @brief Move assignment is disabled; the native lock is not transferable.
+    spinlock& operator=(spinlock&&) = delete;
 
     // ---- operations --------------------------------------------------------
 
     /// @brief Acquires the spinlock, busy-waiting until it is free.
-    /// @retval osal::ok()                    The spinlock was acquired.
-    /// @retval error_code::not_supported     The backend does not provide a native spinlock.
+    /// @return Success or not_supported when the active backend has no spinlock;
+    ///         other backend errors may also be returned.
+    /// @details Only for very short thread-context critical sections. Do not
+    ///          use from ISR context; check backend rules before use.
+    /// @retval osal::ok()                The spinlock was acquired.
+    /// @retval error_code::not_supported The backend does not provide a native spinlock.
     /// @warning Do NOT call from interrupt context on all backends.
     /// @complexity O(1) amortised (busy-waits until acquired).
     /// @blocking   Spins until acquired.
@@ -118,6 +144,8 @@ public:
 
     /// @brief Attempts to acquire the spinlock without spinning.
     /// @return true if acquired; false if already held or backend unsupported.
+    /// @details Thread-context operation; this is a snapshot attempt and never
+    ///          waits for the lock.
     /// @complexity O(1)
     /// @blocking   Never.
     [[nodiscard]] bool try_lock() noexcept
@@ -133,6 +161,7 @@ public:
     }
 
     /// @brief Releases the spinlock.
+    /// @details The caller must own the lock. Thread context only.
     /// @complexity O(1)
     /// @blocking   Never.
     void unlock() noexcept
@@ -146,19 +175,27 @@ public:
     // ---- RAII guard --------------------------------------------------------
 
     /// @brief RAII lock guard for spinlock.
-    /// @details Acquires on construction; releases on destruction.
+    /// @details Attempts acquisition on construction and calls unlock() on
+    ///          destruction; acquisition errors are not exposed by this guard.
     class lock_guard
     {
     public:
-        /// @brief Acquires the spinlock.
+        /// @brief Constructs the guard and attempts to acquire the spinlock.
+        /// @param[in,out] sl Lock to acquire and release.
+        /// @details The lock must outlive the guard. Acquisition errors are not
+        ///          exposed by this guard; destruction always calls unlock().
         explicit lock_guard(spinlock& sl) noexcept : sl_(sl) { (void)sl_.lock(); }
-        /// @brief Releases the spinlock.
+        /// @brief Attempts to release the spinlock.
         ~lock_guard() noexcept { sl_.unlock(); }
 
-        lock_guard(const lock_guard&)            = delete;
+        /// @brief Copy construction is disabled to prevent duplicate unlocks.
+        lock_guard(const lock_guard&) = delete;
+        /// @brief Copy assignment is disabled to prevent duplicate unlocks.
         lock_guard& operator=(const lock_guard&) = delete;
-        lock_guard(lock_guard&&)                 = delete;
-        lock_guard& operator=(lock_guard&&)      = delete;
+        /// @brief Move construction is disabled to preserve guard ownership.
+        lock_guard(lock_guard&&) = delete;
+        /// @brief Move assignment is disabled to preserve guard ownership.
+        lock_guard& operator=(lock_guard&&) = delete;
 
     private:
         spinlock& sl_;
@@ -167,6 +204,7 @@ public:
     // ---- query -------------------------------------------------------------
 
     /// @brief Returns true if the spinlock was successfully initialised.
+    /// @return true if the active backend provided and initialized the spinlock.
     [[nodiscard]] bool valid() const noexcept { return valid_; }
 
 private:

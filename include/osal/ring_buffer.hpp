@@ -54,8 +54,8 @@ namespace osal
 /// @{
 
 /// @brief Lock-free single-producer / single-consumer ring buffer.
-/// @tparam T  Element type satisfying @c osal::ring_buffer_element.
-/// @tparam N  Number of usable slots (actual internal array is N+1).
+/// @tparam T Element type satisfying @c osal::ring_buffer_element.
+/// @tparam N Number of usable slots (actual internal array is N+1).
 template<ring_buffer_element T, std::size_t N>
     requires positive_extent<N>
 class ring_buffer
@@ -64,20 +64,29 @@ public:
     // ---- construction ------------------------------------------------------
 
     /// @brief Constructs an empty ring buffer.
+    /// @details No allocation or OS resource acquisition is performed.
     ring_buffer() noexcept = default;
 
+    /// @brief Destroys the ring buffer.
+    /// @details No producer or consumer may access the object after destruction begins.
     ~ring_buffer() noexcept = default;
 
-    ring_buffer(const ring_buffer&)            = delete;
+    /// @brief Copy construction is disabled because producer/consumer indices are unique.
+    ring_buffer(const ring_buffer&) = delete;
+    /// @brief Copy assignment is disabled because producer/consumer indices are unique.
     ring_buffer& operator=(const ring_buffer&) = delete;
-    ring_buffer(ring_buffer&&)                 = delete;
-    ring_buffer& operator=(ring_buffer&&)      = delete;
+    /// @brief Move construction is disabled because the buffer has fixed identity and storage.
+    ring_buffer(ring_buffer&&) = delete;
+    /// @brief Move assignment is disabled because the buffer has fixed identity and storage.
+    ring_buffer& operator=(ring_buffer&&) = delete;
 
     // ---- producer API (single thread only) ---------------------------------
 
     /// @brief Push an item into the buffer.
-    /// @param[in] item  The item to enqueue.
+    /// @param[in] item The item to enqueue.
     /// @return true if enqueued; false if the buffer is full.
+    /// @details Call only from the single designated producer; may be used in
+    ///          ISR context only if the element operations and atomics are safe there.
     bool try_push(const T& item) noexcept
     {
         const std::size_t h    = head_.load(std::memory_order_relaxed);  // NOLINT(cppcoreguidelines-init-variables)
@@ -92,9 +101,11 @@ public:
     }
 
     /// @brief Push up to @p count items into the buffer.
-    /// @param[in] items  Source array of items to enqueue.
-    /// @param[in] count  Number of items to attempt to enqueue.
+    /// @param[in] items Source array of items to enqueue.
+    /// @param[in] count Number of items to attempt to enqueue.
     /// @return Number of items actually enqueued (may be less than @p count).
+    /// @pre If @p count is nonzero, @p items points to at least @p count valid items.
+    /// @details Call only from the single designated producer.
     std::size_t try_push_n(const T* items, std::size_t count) noexcept
     {
         const std::size_t h     = head_.load(std::memory_order_relaxed);  // NOLINT(cppcoreguidelines-init-variables)
@@ -116,16 +127,18 @@ public:
         return n;
     }
 
-    /// @brief Push up to @p items.size() items into the buffer.
-    /// @param[in] items  Span of items to enqueue.
+    /// @brief Push up to the number of items in the span.
+    /// @param[in] items Source span to enqueue.
     /// @return Number of items actually enqueued.
+    /// @details Call only from the single designated producer.
     std::size_t try_push_n(std::span<const T> items) noexcept { return try_push_n(items.data(), items.size()); }
 
     // ---- consumer API (single thread only) ---------------------------------
 
     /// @brief Pop the oldest item from the buffer.
-    /// @param[out] item  Receives the dequeued item.
+    /// @param[out] item Receives the dequeued item.
     /// @return true if an item was dequeued; false if the buffer was empty.
+    /// @details Call only from the single designated consumer.
     bool try_pop(T& item) noexcept
     {
         const std::size_t t = tail_.load(std::memory_order_relaxed);  // NOLINT(cppcoreguidelines-init-variables)
@@ -139,9 +152,11 @@ public:
     }
 
     /// @brief Pop up to @p count items from the buffer.
-    /// @param[out] items  Destination array for dequeued items.
-    /// @param[in] count   Maximum number of items to dequeue.
+    /// @param[out] items Destination array for dequeued items.
+    /// @param[in]  count Maximum number of items to dequeue.
     /// @return Number of items actually dequeued (may be less than @p count).
+    /// @pre If @p count is nonzero, @p items points to writable storage for at least @p count items.
+    /// @details Call only from the single designated consumer.
     std::size_t try_pop_n(T* items, std::size_t count) noexcept
     {
         const std::size_t t     = tail_.load(std::memory_order_relaxed);  // NOLINT(cppcoreguidelines-init-variables)
@@ -163,14 +178,17 @@ public:
         return n;
     }
 
-    /// @brief Pop up to @p items.size() items from the buffer.
-    /// @param[out] items  Span to receive dequeued items.
+    /// @brief Pop up to the number of items the span can hold.
+    /// @param[out] items Destination span for dequeued items.
     /// @return Number of items actually dequeued.
+    /// @details Call only from the single designated consumer.
     std::size_t try_pop_n(std::span<T> items) noexcept { return try_pop_n(items.data(), items.size()); }
 
     /// @brief Peek at the oldest item without removing it.
-    /// @param[out] item  Receives a copy of the head item.
+    /// @param[out] item Receives a copy of the head item.
     /// @return true if an item was available; false if the buffer was empty.
+    /// @details Call only from the designated consumer; concurrent consumer
+    ///          operations are not supported.
     bool peek(T& item) const noexcept
     {
         const std::size_t t = tail_.load(std::memory_order_relaxed);  // NOLINT(cppcoreguidelines-init-variables)
@@ -185,6 +203,7 @@ public:
     // ---- query (safe from either thread) -----------------------------------
 
     /// @brief Returns the number of items currently in the buffer.
+    /// @return A concurrently sampled count between zero and capacity().
     /// @note  This is a snapshot; the value may be stale by the time
     ///        the caller acts on it.
     [[nodiscard]] std::size_t size() const noexcept
@@ -199,31 +218,39 @@ public:
     }
 
     /// @brief Returns the number of free slots.
+    /// @return A snapshot of available slots; producer/consumer activity may
+    ///         change the value immediately.
     [[nodiscard]] std::size_t free() const noexcept { return N - size(); }
 
-    /// @brief Returns true if the buffer is empty.
+    /// @brief Returns whether the buffer appears empty.
+    /// @return A concurrent snapshot, not a reservation or synchronization operation.
     [[nodiscard]] bool empty() const noexcept
     {
         return head_.load(std::memory_order_acquire) == tail_.load(std::memory_order_acquire);
     }
 
-    /// @brief Returns true if the buffer is full.
+    /// @brief Returns whether the buffer appears full.
+    /// @return A concurrent snapshot, not a reservation or synchronization operation.
     [[nodiscard]] bool full() const noexcept
     {
         return increment(head_.load(std::memory_order_acquire)) == tail_.load(std::memory_order_acquire);
     }
 
     /// @brief Compile-time capacity (number of usable slots).
+    /// @return The template capacity @p N.
     static constexpr std::size_t capacity() noexcept { return N; }
 
     /// @brief Discard all items.  Must be called from the consumer thread
     ///        (or when no concurrent access is happening).
+    /// @details Not safe concurrently with another consumer or reset operation.
     void reset() noexcept { tail_.store(head_.load(std::memory_order_relaxed), std::memory_order_release); }
 
 private:
     static constexpr std::size_t kCapacity = N + 1;  // one sentinel slot
 
     /// @brief Advance an index, wrapping around.
+    /// @param[in] idx Index in the internal range [0, N].
+    /// @return The next index, wrapping to zero.
     static constexpr std::size_t increment(std::size_t idx) noexcept
     {
         OSAL_ASSUME(idx < kCapacity);
@@ -231,6 +258,9 @@ private:
     }
 
     /// @brief Branchless min without pulling in <algorithm>.
+    /// @param[in] a First value.
+    /// @param[in] b Second value.
+    /// @return The smaller value.
     static constexpr std::size_t min_of(std::size_t a, std::size_t b) noexcept { return (a < b) ? a : b; }
 
     T                        buf_[kCapacity]{};

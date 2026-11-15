@@ -144,18 +144,8 @@ static void pool_bitmap_free(emulated_pool_obj* p, std::size_t idx) noexcept
 
 // --- public extern "C" functions -------------------------------------------
 
-/// @brief Create an emulated fixed-size memory pool backed by caller-supplied storage.
-/// @details Uses a bitmap to track free blocks and a counting semaphore for timed
-///          allocation.  No dynamic allocation is performed by the pool itself.
-/// @param[out] handle      Output handle; populated on success.
-/// @param[in] buffer       Caller-supplied backing storage of at least @p buf_bytes bytes.
-/// @param[in] buf_bytes    Total size of @p buffer in bytes; must be >= `block_size * block_count`.
-/// @param[in] block_size   Size of each allocation block in bytes.
-/// @param[in] block_count  Number of blocks in the pool; must not exceed `OSAL_EMULATED_MPOOL_MAX_BLOCKS`.
-/// @param[in] name         Optional human-readable name (ignored by the emulation).
-/// @retval osal::ok()                    On success.
-/// @retval error_code::invalid_argument  For bad parameters.
-/// @retval error_code::out_of_resources  If the pool or internal semaphore cannot be created.
+// Uses a bitmap to track free blocks and a counting semaphore for timed
+// allocation.  No dynamic allocation is performed by the pool itself.
 osal::result osal_memory_pool_create(osal::active_traits::memory_pool_handle_t* handle, void* buffer,
                                      std::size_t buf_bytes, std::size_t block_size, std::size_t block_count,
                                      const char* /*name*/) noexcept
@@ -207,9 +197,6 @@ osal::result osal_memory_pool_create(osal::active_traits::memory_pool_handle_t* 
     return osal::ok();
 }
 
-/// @brief Destroy an emulated memory pool and release its pool slot.
-/// @param[in,out] handle  Handle to destroy; silently ignored if null or uninitialized.
-/// @retval osal::ok()  Always.
 osal::result osal_memory_pool_destroy(osal::active_traits::memory_pool_handle_t* handle) noexcept
 {
     if (!handle || !handle->native) [[unlikely]]
@@ -225,12 +212,8 @@ osal::result osal_memory_pool_destroy(osal::active_traits::memory_pool_handle_t*
     return osal::ok();
 }
 
-/// @brief Allocate one block from the pool (non-blocking).
-/// @details Attempts a non-blocking semaphore take and, if successful, claims the
-///          first free bitmap slot.
-/// @param[in] handle  Pool handle.
-/// @return Pointer to the allocated block on success, or `nullptr` if the pool is
-///         exhausted or @p handle is null.
+// Attempts a non-blocking semaphore take and, if successful, claims the
+// first free bitmap slot.
 void* osal_memory_pool_allocate(osal::active_traits::memory_pool_handle_t* handle) noexcept
 {
     if (!handle || !handle->native) [[unlikely]]
@@ -259,12 +242,6 @@ void* osal_memory_pool_allocate(osal::active_traits::memory_pool_handle_t* handl
     return pool->buffer + idx * pool->block_size;
 }
 
-/// @brief Allocate one block from the pool, blocking up to @p timeout_ticks.
-/// @param[in] handle         Pool handle.
-/// @param[in] timeout_ticks  Maximum ticks to wait for a free block;
-///                      use `osal::WAIT_FOREVER` to block indefinitely.
-/// @return Pointer to the allocated block on success, or `nullptr` on timeout
-///         or if @p handle is null.
 void* osal_memory_pool_allocate_timed(osal::active_traits::memory_pool_handle_t* handle,
                                       osal::tick_t                               timeout_ticks) noexcept
 {
@@ -293,13 +270,8 @@ void* osal_memory_pool_allocate_timed(osal::active_traits::memory_pool_handle_t*
     return pool->buffer + idx * pool->block_size;
 }
 
-/// @brief Return a previously allocated block to the pool.
-/// @details Validates that @p block is pointer-aligned within the pool's backing
-///          buffer and not already free (double-free detection).
-/// @param[in] handle  Pool handle.
-/// @param[in] block   Pointer previously returned by `osal_memory_pool_allocate[_timed]`.
-/// @retval osal::ok()                    On success.
-/// @retval error_code::invalid_argument  For a bad pointer or double-free, or if @p handle is null.
+// Validates that block is pointer-aligned within the pool's backing
+// buffer and not already free (double-free detection).
 osal::result osal_memory_pool_deallocate(osal::active_traits::memory_pool_handle_t* handle, void* block) noexcept
 {
     if (!handle || !handle->native || !block) [[unlikely]]
@@ -341,9 +313,6 @@ osal::result osal_memory_pool_deallocate(osal::active_traits::memory_pool_handle
     return osal::ok();
 }
 
-/// @brief Query the number of currently free blocks in the pool.
-/// @param[in] handle  Pool handle (const).
-/// @return Number of free blocks, or 0 if @p handle is null.
 std::size_t osal_memory_pool_available(const osal::active_traits::memory_pool_handle_t* handle) noexcept
 {
     if (!handle || !handle->native) [[unlikely]]

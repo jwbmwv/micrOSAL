@@ -65,10 +65,14 @@ public:
     }
 
     /// @brief Construct a delayable work item.
-    /// @param[in] queue  Target work queue used to execute the callback.
-    /// @param[in] func   Callback invoked when the delay expires.
-    /// @param[in] arg    Opaque pointer passed back to @p func.
-    /// @param[in] name   Optional debug name for the backing timer.
+    /// @param[in] queue Target work queue used to execute the callback.
+    /// @param[in] func  Callback invoked when the delay expires.
+    /// @param[in] arg   Opaque pointer passed back to @p func.
+    /// @param[in] name  Optional debug name for the backing timer.
+    /// @details The queue, callback, and argument must remain valid until all
+    ///          submitted work completes and the item is closed. Check valid()
+    ///          before scheduling. Timer expiration hands work to the queue;
+    ///          the callback itself runs in worker-thread context.
     delayable_work(work_queue& queue, work_func_t func, void* arg = nullptr, const char* name = "dw") noexcept
         : queue_(&queue), func_(func), arg_(arg),
           timer_{timer_thunk, this, milliseconds{1}, timer_mode::one_shot, name},
@@ -78,7 +82,10 @@ public:
     {
     }
 
-    /// @brief Close before member storage is destroyed; abort if cleanup fails.
+    /// @brief Closes the item before member storage is destroyed.
+    /// @details If close cannot safely reclaim the timer or outstanding work,
+    ///          destruction aborts rather than leave a callback referencing
+    ///          destroyed storage. See close() for recovery requirements.
     ~delayable_work() noexcept
     {
         const result closed = close(milliseconds{-1});
@@ -88,17 +95,22 @@ public:
         }
     }
 
-    delayable_work(const delayable_work&)            = delete;
+    /// @brief Copy construction is disabled; timer and callback state are uniquely owned.
+    delayable_work(const delayable_work&) = delete;
+    /// @brief Copy assignment is disabled; timer and callback state are uniquely owned.
     delayable_work& operator=(const delayable_work&) = delete;
-    delayable_work(delayable_work&&)                 = delete;
-    delayable_work& operator=(delayable_work&&)      = delete;
+    /// @brief Move construction is disabled because queued callbacks retain this object's address.
+    delayable_work(delayable_work&&) = delete;
+    /// @brief Move assignment is disabled because queued callbacks retain this object's address.
+    delayable_work& operator=(delayable_work&&) = delete;
 
     /// @brief Arm the work item to run after @p delay.
-    /// @param[in] delay  Delay before the callback is submitted to the queue.
-    ///              Zero or negative delays enqueue immediately.
-    /// @retval error_code::ok             The callback was scheduled successfully.
+    /// @param[in] delay Delay before the callback is submitted to the queue.
+    ///                  Zero or negative delays enqueue immediately.
+    /// @retval error_code::ok              The callback was scheduled successfully.
     /// @retval error_code::not_initialized The helper was not initialized successfully.
     /// @retval error_code::already_exists  A delay or queued callback is already pending.
+    /// @retval error_code::would_block     The timer/work queue cannot accept the submission now.
     /// @par Propagated errors
     /// Errors from the backing timer or work queue are propagated unchanged.
     result schedule(milliseconds delay) noexcept
@@ -119,8 +131,8 @@ public:
     }
 
     /// @brief Replace any currently armed delay with a new one.
-    /// @param[in] delay  New delay before queue submission.
-    /// @retval error_code::ok             The callback was rescheduled successfully.
+    /// @param[in] delay New delay before queue submission.
+    /// @retval error_code::ok              The callback was rescheduled successfully.
     /// @retval error_code::not_initialized The helper was not initialized successfully.
     /// @retval error_code::would_block     The callback is queued or already executing.
     /// @par Propagated errors
@@ -160,7 +172,7 @@ public:
     }
 
     /// @brief Cancel an armed delay before it reaches the work queue.
-    /// @retval error_code::ok             The item was idle or its timer was stopped.
+    /// @retval error_code::ok              The item was idle or its timer was stopped.
     /// @retval error_code::not_initialized The helper was not initialized successfully.
     /// @retval error_code::would_block     The callback is queued or already running.
     /// @par Propagated errors
@@ -195,8 +207,8 @@ public:
     }
 
     /// @brief Wait until the item becomes idle.
-    /// @param[in] timeout  Maximum time to wait. A negative value waits forever.
-    /// @retval error_code::ok             The item became idle.
+    /// @param[in] timeout Maximum time to wait. A negative value waits forever.
+    /// @retval error_code::ok              The item became idle.
     /// @retval error_code::not_initialized The helper was not initialized successfully.
     /// @retval error_code::timeout         The deadline expired before the item became idle.
     /// @par Deferred errors
@@ -234,6 +246,8 @@ public:
     ///          use application-lifetime storage there. Idempotent after success.
     /// @param[in] timeout Maximum drain wait; negative waits forever. Does not bound
     ///                    the backend's synchronous timer destruction.
+    /// @par Other errors
+    /// Timer and deferred-dispatch errors are returned unchanged; consult the backend result.
     /// @return Timer-close errors, timeout, or a deferred dispatch error, otherwise ok.
     ///         A deferred dispatch error is reported only after safe reclamation;
     ///         it does not make destruction fatal.

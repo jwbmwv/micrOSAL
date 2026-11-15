@@ -44,18 +44,21 @@ struct version_info
     std::uint16_t minor;  ///< Minor version component.
     std::uint16_t patch;  ///< Patch version component.
 
-    /// @brief Returns the version encoded as (major * 10000 + minor * 100 + patch).
+    /// @brief Encodes the version as @c major * 10000 + @c minor * 100 + @c patch.
+    /// @return The numeric version value.
     [[nodiscard]] constexpr std::uint32_t number() const noexcept
     {
         return static_cast<std::uint32_t>(major) * 10000U + static_cast<std::uint32_t>(minor) * 100U +
                static_cast<std::uint32_t>(patch);
     }
 
-    /// @brief Returns the version as a string literal, e.g. "0.1.2".
+    /// @brief Returns the version as a dotted string literal, for example @c "0.1.2".
+    /// @return Pointer to a null-terminated string with static storage duration.
     [[nodiscard]] static constexpr const char* string() noexcept { return MICRO_OSAL_VERSION_STRING; }
 };
 
 /// @brief Returns the library version at compile-time.
+/// @return The major, minor, and patch components of this library version.
 /// @code
 ///   constexpr auto v = osal::version();
 ///   static_assert(v.major == 0 && v.minor == 1 && v.patch == 2);

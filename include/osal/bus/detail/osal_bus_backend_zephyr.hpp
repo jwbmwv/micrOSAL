@@ -53,23 +53,40 @@ public:
     using value_type                      = T;
     static constexpr std::size_t capacity = Capacity;
 
+    /// @brief Initializes the native message queue in this object's storage.
     osal_bus() noexcept
     {
         k_msgq_init(&queue_, reinterpret_cast<char*>(storage_), sizeof(T), Capacity);
         valid_ = true;
     }
 
+    /// @brief Reports whether the native queue is initialized.
+    /// @return @c true after successful construction.
     [[nodiscard]] bool valid() const noexcept { return valid_; }
 
+    /// @brief Attempts to enqueue an item without waiting.
+    /// @param[in] item  Item copied into the channel if accepted.
+    /// @return @c true if enqueued; @c false if the queue is full.
     bool try_send(const T& item) noexcept { return k_msgq_put(&queue_, &item, K_NO_WAIT) == 0; }
 
+    /// @brief Enqueues an item, waiting up to the specified number of ticks.
+    /// @param[in] item           Item copied into the channel if accepted.
+    /// @param[in] timeout_ticks  Maximum wait; @c NO_WAIT polls and @c WAIT_FOREVER waits indefinitely.
+    /// @return @c true if enqueued; @c false on timeout or another queue failure.
     bool send(const T& item, tick_t timeout_ticks = WAIT_FOREVER) noexcept
     {
         return k_msgq_put(&queue_, &item, zephyr_bus_detail::to_zephyr_timeout(timeout_ticks)) == 0;
     }
 
+    /// @brief Attempts to dequeue an item without waiting.
+    /// @param[out] out  Receives the item when one is available.
+    /// @return @c true if an item was received; @c false if the queue is empty.
     bool try_receive(T& out) noexcept { return k_msgq_get(&queue_, &out, K_NO_WAIT) == 0; }
 
+    /// @brief Dequeues an item, waiting up to the specified number of ticks.
+    /// @param[out] out           Receives the item when successful.
+    /// @param[in]  timeout_ticks Maximum wait; @c NO_WAIT polls and @c WAIT_FOREVER waits indefinitely.
+    /// @return @c true if an item was received; @c false on timeout or another queue failure.
     bool receive(T& out, tick_t timeout_ticks = WAIT_FOREVER) noexcept
     {
         return k_msgq_get(&queue_, &out, zephyr_bus_detail::to_zephyr_timeout(timeout_ticks)) == 0;
@@ -105,14 +122,30 @@ public:
     using value_type                      = T;
     static constexpr std::size_t capacity = Capacity;
 
+    /// @brief Reports whether the delegated queue was initialized.
+    /// @return @c true when channel operations can use the queue.
     [[nodiscard]] bool valid() const noexcept { return impl_.valid(); }
 
+    /// @brief Attempts to enqueue an item without waiting.
+    /// @param[in] item  Item copied into the channel if accepted.
+    /// @return @c true if enqueued; @c false if invalid or full.
     bool try_send(const T& item) noexcept { return impl_.try_send(item); }
 
+    /// @brief Enqueues an item, waiting up to the specified number of ticks.
+    /// @param[in] item           Item copied into the channel if accepted.
+    /// @param[in] timeout_ticks  Maximum wait; @c NO_WAIT polls and @c WAIT_FOREVER waits indefinitely.
+    /// @return @c true if enqueued; @c false on timeout or another queue failure.
     bool send(const T& item, tick_t timeout_ticks = WAIT_FOREVER) noexcept { return impl_.send(item, timeout_ticks); }
 
+    /// @brief Attempts to dequeue an item without waiting.
+    /// @param[out] out  Receives the item when one is available.
+    /// @return @c true if an item was received; @c false if invalid or empty.
     bool try_receive(T& out) noexcept { return impl_.try_receive(out); }
 
+    /// @brief Dequeues an item, waiting up to the specified number of ticks.
+    /// @param[out] out           Receives the item when successful.
+    /// @param[in]  timeout_ticks Maximum wait; @c NO_WAIT polls and @c WAIT_FOREVER waits indefinitely.
+    /// @return @c true if an item was received; @c false on timeout or another queue failure.
     bool receive(T& out, tick_t timeout_ticks = WAIT_FOREVER) noexcept { return impl_.receive(out, timeout_ticks); }
 
 private:

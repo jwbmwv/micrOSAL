@@ -48,6 +48,7 @@ namespace osal
 ///          - No dynamic allocation.
 ///          - Optional blocking receive per subscriber.
 ///          - Thread-safe subscribe / unsubscribe via osal::mutex.
+/// @note Operations use a mutex and are not ISR-safe.
 template<queue_element T, std::size_t MaxSubscribers, std::size_t PerSubCapacity>
     requires(MaxSubscribers > 0U && PerSubCapacity > 0U)
 class osal_signal<T, MaxSubscribers, PerSubCapacity, bus_backend_generic>
@@ -55,6 +56,8 @@ class osal_signal<T, MaxSubscribers, PerSubCapacity, bus_backend_generic>
 public:
     using value_type = T;
 
+    /// @brief Reports whether the topic mutex and every subscriber queue initialized.
+    /// @return @c true when the topic is ready for operations.
     [[nodiscard]] bool valid() const noexcept
     {
         if (!mutex_.valid())
@@ -74,8 +77,9 @@ public:
     // ---- subscribe / unsubscribe -------------------------------------------
 
     /// @brief Registers a new subscriber and returns its ID.
-    /// @param[out] out_id  Receives the allocated subscriber_id on success.
-    /// @return true if a free slot was available; false when at capacity.
+    /// @param[out] out_id  Receives the allocated subscriber ID, or the invalid sentinel on failure.
+    /// @return @c true if a free slot was available; @c false when invalid, at capacity,
+    ///         or no usable subscriber ID can be formed.
     /// @blocking Never (mutex-locked, O(MaxSubscribers) scan).
     [[nodiscard]] bool subscribe(subscriber_id& out_id) noexcept
     {
@@ -107,8 +111,8 @@ public:
     }
 
     /// @brief Removes a subscriber by ID.
-    /// @param[in] id  Subscriber ID obtained from subscribe().
-    /// @return true if removed; false if invalid or a receive is still in progress.
+    /// @param[in]  id  Subscriber ID obtained from subscribe() on this topic.
+    /// @return @c true if removed; @c false if invalid or a receive is still in progress.
     [[nodiscard]] bool unsubscribe(subscriber_id id) noexcept
     {
         if (!valid())
@@ -135,7 +139,7 @@ public:
 
     /// @brief Fans the message out to all active subscriber queues.
     /// @param[in] msg  Message to broadcast (copied into each subscriber queue).
-    /// @return true if at least one subscriber received the message.
+    /// @return @c true if at least one subscriber received the message.
     /// @blocking Never (uses try_send; drops to full subscriber queues).
     /// @complexity O(MaxSubscribers).
     [[nodiscard]] bool publish(const T& msg) noexcept
@@ -159,9 +163,10 @@ public:
     // ---- receive -----------------------------------------------------------
 
     /// @brief Non-blocking receive for a specific subscriber.
-    /// @param[in] id    Subscriber ID.
+    /// @param[in]  id   Subscriber ID obtained from subscribe() on this topic.
     /// @param[out] out  Receives the dequeued message on success.
-    /// @return true if a message was available.
+    /// @return @c true if a message was available.
+    /// @blocking Never.
     [[nodiscard]] bool try_receive(subscriber_id id, T& out) noexcept
     {
         if (!valid())
@@ -178,10 +183,11 @@ public:
     }
 
     /// @brief Blocking receive with optional timeout.
-    /// @param[in] id       Subscriber ID.
-    /// @param[out] out     Receives the dequeued message on success.
-    /// @param[in] timeout  Maximum wait in ticks; use WAIT_FOREVER to block indefinitely.
-    /// @return true if a message was received within the timeout.
+    /// @param[in]  id       Subscriber ID obtained from subscribe() on this topic.
+    /// @param[out] out      Receives the dequeued message on success.
+    /// @param[in]  timeout  Maximum wait in ticks; use WAIT_FOREVER to block indefinitely.
+    /// @return @c true if a message was received within the timeout.
+    /// @blocking Up to @p timeout.
     [[nodiscard]] bool receive(subscriber_id id, T& out, tick_t timeout = WAIT_FOREVER) noexcept
     {
         if (!valid())
@@ -208,6 +214,7 @@ public:
     // ---- query -------------------------------------------------------------
 
     /// @brief Returns the current number of active subscribers.
+    /// @return Active subscriber count, or zero when the topic is invalid.
     [[nodiscard]] std::size_t subscriber_count() const noexcept
     {
         if (!valid())
@@ -219,9 +226,11 @@ public:
     }
 
     /// @brief Returns the compile-time maximum subscriber count.
+    /// @return The value of @c MaxSubscribers.
     static constexpr std::size_t max_subscribers() noexcept { return MaxSubscribers; }
 
     /// @brief Returns the compile-time per-subscriber queue capacity.
+    /// @return The value of @c PerSubCapacity.
     static constexpr std::size_t per_subscriber_capacity() noexcept { return PerSubCapacity; }
 
 private:
@@ -244,6 +253,7 @@ private:
         osal_bus<T, PerSubCapacity, bus_backend_generic> queue_{};
     };
 
+    /// @brief Derives this instance's identifier salt so IDs are scoped to a topic object.
     [[nodiscard]] subscriber_id subscriber_cookie_() const noexcept
     {
         constexpr auto mix = static_cast<subscriber_id>(0x9E3779B97F4A7C15ULL);
@@ -256,6 +266,7 @@ private:
         return generation * subscriber_id_span_ + static_cast<subscriber_id>(slot_index) + 1U;
     }
 
+    /// @brief Combines the per-instance salt, slot index, and generation into an opaque ID.
     [[nodiscard]] subscriber_id encode_subscriber_id_(std::size_t             slot_index,
                                                       subscriber_generation_t generation) const noexcept
     {
@@ -278,6 +289,8 @@ private:
         return unpack_subscriber_counter_(packed_id) / subscriber_id_span_;
     }
 
+    /// @brief Validates the ID encoding and extracts a candidate slot index.
+    /// @return @c MaxSubscribers when @p id cannot encode a valid slot.
     [[nodiscard]] std::size_t slot_index_from_id_(subscriber_id id) const noexcept
     {
         if (id == invalid_subscriber_id)
@@ -294,6 +307,7 @@ private:
         return slot_index_from_packed_subscriber_id_(packed_id);
     }
 
+    /// @brief Checks whether an ID identifies the active generation in a slot.
     [[nodiscard]] bool subscriber_id_matches_slot_(subscriber_id id, std::size_t slot_index) const noexcept
     {
         if (slot_index >= MaxSubscribers || !slots_[slot_index].in_use_ || id == invalid_subscriber_id)
@@ -311,6 +325,7 @@ private:
                generation_from_packed_subscriber_id_(packed_id) == slots_[slot_index].generation_;
     }
 
+    /// @brief Advances a slot generation so IDs from an earlier registration are rejected.
     void advance_subscriber_generation_(std::size_t slot_index) noexcept
     {
         auto& generation = slots_[slot_index].generation_;
@@ -321,6 +336,7 @@ private:
         }
     }
 
+    /// @brief Produces a non-sentinel identifier for a slot's current generation.
     [[nodiscard]] subscriber_id ensure_subscriber_id_(std::size_t slot_index) noexcept
     {
         subscriber_id id = encode_subscriber_id_(slot_index, slots_[slot_index].generation_);

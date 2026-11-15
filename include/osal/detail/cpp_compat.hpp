@@ -105,6 +105,9 @@ public:
     }
     [[nodiscard]] static constexpr size_type capacity() noexcept { return N; }
 
+    /// @brief Appends a copy unless the fixed capacity is already full.
+    /// @param[in] value  Value to append.
+    /// @return @c true if appended; @c false without modification when full.
     constexpr bool push_back(const T& value) noexcept
     {
 #if defined(__cpp_lib_inplace_vector) && __cpp_lib_inplace_vector >= 202406L
@@ -119,6 +122,9 @@ public:
 #endif
     }
 
+    /// @brief Appends a moved value unless the fixed capacity is already full.
+    /// @param[in,out] value  Value to move into the container.
+    /// @return @c true if appended; @c false without modification when full.
     constexpr bool push_back(T&& value) noexcept
     {
 #if defined(__cpp_lib_inplace_vector) && __cpp_lib_inplace_vector >= 202406L
@@ -133,6 +139,9 @@ public:
 #endif
     }
 
+    /// @brief Sets the number of active elements within the compile-time capacity.
+    /// @param[in] count  Requested element count.
+    /// @return @c true if resized; @c false without modification when @p count exceeds capacity.
     constexpr bool resize(size_type count) noexcept
     {
         if (count > N)

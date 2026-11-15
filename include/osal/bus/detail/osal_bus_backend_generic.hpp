@@ -41,8 +41,12 @@ public:
     static constexpr std::size_t capacity   = Capacity;
     static constexpr std::size_t value_size = sizeof(T);
 
+    /// @brief Creates a bounded channel using its compile-time backing storage.
+    /// @details The queue is initialized during construction; use valid() to
+    ///          detect backend initialization failure. Construct after OS startup.
     osal_bus() noexcept { valid_ = osal_queue_create(&handle_, storage_, value_size, Capacity).ok(); }
 
+    /// @brief Destroys the channel and releases its backend queue when initialized.
     ~osal_bus() noexcept
     {
         if (valid_)
@@ -52,22 +56,42 @@ public:
         }
     }
 
-    osal_bus(const osal_bus&)            = delete;
+    /// @brief Copy construction is disabled because the channel owns queue storage.
+    osal_bus(const osal_bus&) = delete;
+    /// @brief Copy assignment is disabled because the channel owns queue storage.
     osal_bus& operator=(const osal_bus&) = delete;
-    osal_bus(osal_bus&&)                 = delete;
-    osal_bus& operator=(osal_bus&&)      = delete;
+    /// @brief Move construction is disabled because the backend queue refers to this object's storage.
+    osal_bus(osal_bus&&) = delete;
+    /// @brief Move assignment is disabled because the backend queue refers to this object's storage.
+    osal_bus& operator=(osal_bus&&) = delete;
 
+    /// @brief Reports whether backend queue initialization succeeded.
+    /// @return @c true when send and receive operations can use the queue.
     [[nodiscard]] bool valid() const noexcept { return valid_; }
 
+    /// @brief Attempts to enqueue an item without waiting.
+    /// @param[in] item  Item copied into the channel if accepted.
+    /// @return @c true if enqueued; @c false if invalid or full.
     bool try_send(const T& item) noexcept { return osal_queue_send(&handle_, &item, NO_WAIT).ok(); }
 
+    /// @brief Enqueues an item, waiting up to the specified number of ticks.
+    /// @param[in] item           Item copied into the channel if accepted.
+    /// @param[in] timeout_ticks  Maximum wait; @c NO_WAIT polls and @c WAIT_FOREVER waits indefinitely.
+    /// @return @c true if enqueued; @c false on timeout or another queue failure.
     bool send(const T& item, tick_t timeout_ticks = WAIT_FOREVER) noexcept
     {
         return osal_queue_send(&handle_, &item, timeout_ticks).ok();
     }
 
+    /// @brief Attempts to dequeue an item without waiting.
+    /// @param[out] out  Receives the item when one is available.
+    /// @return @c true if an item was received; @c false if invalid or empty.
     bool try_receive(T& out) noexcept { return osal_queue_receive(&handle_, &out, NO_WAIT).ok(); }
 
+    /// @brief Dequeues an item, waiting up to the specified number of ticks.
+    /// @param[out] out           Receives the item when successful.
+    /// @param[in]  timeout_ticks Maximum wait; @c NO_WAIT polls and @c WAIT_FOREVER waits indefinitely.
+    /// @return @c true if an item was received; @c false on timeout or another queue failure.
     bool receive(T& out, tick_t timeout_ticks = WAIT_FOREVER) noexcept
     {
         return osal_queue_receive(&handle_, &out, timeout_ticks).ok();
@@ -77,6 +101,7 @@ private:
     template<typename U, std::size_t MaxSignalSubscribers, std::size_t SignalPerSubCapacity, typename BackendTag>
     friend class osal_signal;
 
+    /// @brief Discards queued entries before a subscriber slot is reused.
     void purge() noexcept
     {
         if (!valid_)

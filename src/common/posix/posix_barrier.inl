@@ -23,13 +23,6 @@
 // Barrier (native — pthread_barrier_t)
 // ---------------------------------------------------------------------------
 
-/// @brief Creates a POSIX barrier via @c pthread_barrier_init.
-/// @param[out] handle  Output handle; populated on success.
-/// @param[in] count    Number of threads that must call wait() before any are released.
-///               Must be >= 1.
-/// @retval osal::ok()                    On success.
-/// @retval error_code::invalid_argument  If null or @p count == 0.
-/// @retval error_code::out_of_resources  On alloc failure.
 osal::result osal_barrier_create(osal::active_traits::barrier_handle_t* handle, unsigned count) noexcept
 {
     if (!handle || count == 0U)
@@ -51,9 +44,6 @@ osal::result osal_barrier_create(osal::active_traits::barrier_handle_t* handle, 
     return osal::ok();
 }
 
-/// @brief Destroys a POSIX barrier via @c pthread_barrier_destroy.
-/// @param[in,out] handle  Handle to destroy; silently ignored if null.
-/// @retval osal::ok()  Always.
 osal::result osal_barrier_destroy(osal::active_traits::barrier_handle_t* handle) noexcept
 {
     if (!handle || !handle->native)
@@ -66,16 +56,11 @@ osal::result osal_barrier_destroy(osal::active_traits::barrier_handle_t* handle)
     return osal::ok();
 }
 
-/// @brief Waits at a POSIX barrier via @c pthread_barrier_wait.
-/// @details Blocks until @c count threads have called this function.  The
-///          last (Nth) arriving thread receives
-///          @c error_code::barrier_serial (matching
-///          @c PTHREAD_BARRIER_SERIAL_THREAD semantics); all other threads
-///          receive @c osal::ok().
-/// @param[in] handle  Handle of the barrier.
-/// @retval osal::ok()                   For all but one thread.
-/// @retval error_code::barrier_serial   For the "serial" thread.
-/// @retval error_code::not_initialized  If the handle is null.
+// Blocks until count threads have called this function.  The
+// last (Nth) arriving thread receives
+// error_code::barrier_serial (matching
+// PTHREAD_BARRIER_SERIAL_THREAD semantics); all other threads
+// receive osal::ok().
 osal::result osal_barrier_wait(osal::active_traits::barrier_handle_t* handle) noexcept
 {
     if (!handle || !handle->native)

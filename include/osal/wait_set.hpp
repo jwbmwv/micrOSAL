@@ -36,21 +36,37 @@
 
 extern "C"
 {
+    /// @brief Create a backend wait-set.
+    /// @param[out] handle Handle storage to initialise.
+    /// @return The backend result; consult its error code if creation fails.
     osal::result osal_wait_set_create(osal::active_traits::wait_set_handle_t* handle) noexcept;
 
+    /// @brief Destroy a backend wait-set.
+    /// @param[in,out] handle Handle to destroy.
+    /// @return The backend result; consult its error code if destruction fails.
     osal::result osal_wait_set_destroy(osal::active_traits::wait_set_handle_t* handle) noexcept;
 
+    /// @brief Add a native object to the backend wait-set.
+    /// @param[in,out] handle   Initialised wait-set handle.
+    /// @param[in]     fd_or_id Native file descriptor or backend object identifier.
+    /// @param[in]     events   Readiness event bitmask.
+    /// @return The backend result; consult its error code if the object cannot be added.
     osal::result osal_wait_set_add(osal::active_traits::wait_set_handle_t* handle, int fd_or_id,
                                    std::uint32_t events) noexcept;
 
+    /// @brief Remove a native object from the backend wait-set.
+    /// @param[in,out] handle   Initialised wait-set handle.
+    /// @param[in]     fd_or_id Native file descriptor or backend object identifier.
+    /// @return The backend result; consult its error code if the object cannot be removed.
     osal::result osal_wait_set_remove(osal::active_traits::wait_set_handle_t* handle, int fd_or_id) noexcept;
 
     /// @brief Waits until at least one monitored object is ready.
-    /// @param[in]  handle     Wait-set handle.
-    /// @param[out] fds_ready  Caller-allocated array receiving ready file descriptors.
-    /// @param[in]  max_ready  Size of @p fds_ready.
-    /// @param[out] n_ready    Number of file descriptors written to @p fds_ready.
-    /// @param[in]  timeout    Maximum wait in OSAL ticks.
+    /// @param[in,out] handle    Initialised wait-set handle.
+    /// @param[out]    fds_ready Caller-allocated array receiving ready identifiers.
+    /// @param[in]     max_ready Capacity of @p fds_ready.
+    /// @param[out]    n_ready   Receives the number of identifiers written.
+    /// @param[in]     timeout   Maximum wait in ticks; WAIT_FOREVER waits indefinitely.
+    /// @return The backend result; consult its error code for timeout or other failures.
     osal::result osal_wait_set_wait(osal::active_traits::wait_set_handle_t* handle, int* fds_ready,
                                     std::size_t max_ready, std::size_t* n_ready, osal::tick_t timeout) noexcept;
 
@@ -83,6 +99,8 @@ public:
     static constexpr bool is_supported = supports_requirement<support_requirement::wait_set>;
 
     /// @brief Enforce native wait-set support at compile time.
+    /// @tparam Backend Backend whose wait-set requirement is checked.
+    /// @details Compilation fails if @p Backend does not provide wait-set support.
     template<typename Backend = active_backend>
     static consteval void require_support()
     {
@@ -92,6 +110,8 @@ public:
     // ---- construction / destruction ----------------------------------------
 
     /// @brief Constructs and initialises the wait-set.
+    /// @details On unsupported backends construction creates a valid stub; use
+    ///          is_supported or require_support() to check capability.
     wait_set() noexcept
     {
         if constexpr (wait_set_backend<active_backend>)
@@ -106,7 +126,8 @@ public:
         }
     }
 
-    /// @brief Destructs the wait-set.
+    /// @brief Destroys the backend wait-set when one was initialized.
+    /// @details All concurrent wait/add/remove operations must have ended.
     ~wait_set() noexcept
     {
         if (valid_)
@@ -119,18 +140,28 @@ public:
         }
     }
 
-    wait_set(const wait_set&)            = delete;
+    /// @brief Copy construction is disabled; the wait-set handle has one owner.
+    wait_set(const wait_set&) = delete;
+    /// @brief Copy assignment is disabled; the wait-set handle has one owner.
     wait_set& operator=(const wait_set&) = delete;
-    wait_set(wait_set&&)                 = delete;
-    wait_set& operator=(wait_set&&)      = delete;
+    /// @brief Move construction is disabled; the wait-set handle is not transferable.
+    wait_set(wait_set&&) = delete;
+    /// @brief Move assignment is disabled; the wait-set handle is not transferable.
+    wait_set& operator=(wait_set&&) = delete;
 
     // ---- membership --------------------------------------------------------
 
     /// @brief Adds an object to the wait-set.
-    /// @param[in] fd_or_id  File descriptor (POSIX/Linux) or object ID.
-    /// @param[in] events    Bitmask from osal::wait_events.
-    /// @retval osal::ok()           The object was added successfully.
-    /// @retval error_code::overflow The wait-set is full.
+    /// @param[in] fd_or_id File descriptor (POSIX/Linux) or object ID.
+    /// @param[in] events   Bitmask from osal::wait_events.
+    /// @retval error_code::not_supported The active backend has no native wait-set support.
+    /// @par Other errors
+    /// Backend errors are returned unchanged.
+    /// @details The identifier must refer to an object valid for the backend;
+    ///          event support and identifier semantics are backend-specific.
+    ///          Do not assume add/remove are safe concurrently with wait().
+    /// @retval osal::ok()                The object was added successfully.
+    /// @retval error_code::overflow      The wait-set is full.
     result add(int fd_or_id, std::uint32_t events = wait_events::readable) noexcept
     {
         if constexpr (wait_set_backend<active_backend>)
@@ -143,7 +174,10 @@ public:
     }
 
     /// @brief Removes an object from the wait-set.
-    /// @param[in] fd_or_id  Object to remove.
+    /// @param[in] fd_or_id Object to remove.
+    /// @retval error_code::not_supported The active backend has no native wait-set support.
+    /// @par Other errors
+    /// Backend errors are returned unchanged.
     result remove(int fd_or_id) noexcept
     {
         if constexpr (wait_set_backend<active_backend>)
@@ -157,13 +191,18 @@ public:
     // ---- wait --------------------------------------------------------------
 
     /// @brief Blocks until at least one monitored object is ready.
-    /// @param[out] ready_ids  Caller-supplied buffer for ready IDs.
-    /// @param[in] max_ready   Capacity of ready_ids.
-    /// @param[out] n_ready    Number of ready IDs written on success.
-    /// @param[in] timeout     Maximum wait time (negative = forever).
-    /// @retval osal::ok()                    At least one object is ready.
-    /// @retval error_code::timeout           The wait expired.
-    /// @retval error_code::not_supported     The active backend has no native wait-set support.
+    /// @param[out] ready_ids Caller-supplied buffer for ready IDs.
+    /// @param[in]  max_ready Capacity of ready_ids.
+    /// @param[out] n_ready   Number of ready IDs written on success.
+    /// @param[in]  timeout   Maximum wait time (negative = forever).
+    /// @retval osal::ok()                At least one object is ready.
+    /// @retval error_code::timeout       The wait expired.
+    /// @retval error_code::not_supported The active backend has no native wait-set support.
+    /// @par Other errors
+    /// Backend errors are returned unchanged.
+    /// @details Results are readiness snapshots; the caller owns the monitored
+    ///          objects and output storage. This operation is thread-context-only;
+    ///          zero timeout polls once and negative timeout waits indefinitely.
     /// @complexity O(n) where n is number of monitored objects.
     /// @blocking   Potentially blocking.
     result wait(int* ready_ids, std::size_t max_ready, std::size_t& n_ready,  // NOLINT(readability-non-const-parameter)
@@ -181,7 +220,11 @@ public:
         return error_code::not_supported;
     }
 
-    /// @brief Span-based wait overload for fixed-capacity caller buffers.
+    /// @brief Wait using a span as the caller-owned ready-ID buffer.
+    /// @param[out] ready_ids Caller-owned output span.
+    /// @param[out] n_ready   Receives the number of identifiers written.
+    /// @param[in]  timeout   Maximum wait; a negative duration waits indefinitely.
+    /// @return Same result and error contract as the pointer-based wait overload.
     result wait(std::span<int> ready_ids, std::size_t& n_ready, milliseconds timeout = milliseconds{-1}) noexcept
     {
         return wait(ready_ids.data(), ready_ids.size(), n_ready, timeout);
@@ -190,6 +233,7 @@ public:
     // ---- query -------------------------------------------------------------
 
     /// @brief Returns true if the wait-set was successfully initialised.
+    /// @return true when native initialization succeeded or the unsupported stub is active.
     [[nodiscard]] bool valid() const noexcept { return valid_; }
 
 private:

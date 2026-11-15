@@ -29,16 +29,24 @@
 extern "C"
 {
     /// @brief Returns the monotonic time in milliseconds since an arbitrary epoch.
+    /// @return Non-decreasing elapsed milliseconds.
     std::int64_t osal_clock_monotonic_ms() noexcept;
     /// @brief Returns the system time in milliseconds since Unix epoch (if available).
+    /// @return Wall-clock milliseconds, or monotonic milliseconds when unsupported.
     std::int64_t osal_clock_system_ms() noexcept;
     /// @brief Returns the RTOS tick count.
+    /// @return Backend tick counter; rollover follows the backend and tick_t width.
     osal::tick_t osal_clock_ticks() noexcept;
     /// @brief Returns the duration of one RTOS tick in microseconds.
+    /// @return Backend tick period in microseconds.
     std::uint32_t osal_clock_tick_period_us() noexcept;
     /// @brief Returns the backend high-resolution time source in nanoseconds.
+    /// @pre The active backend advertises high-resolution clock support.
+    /// @return Backend high-resolution timestamp in nanoseconds.
     std::int64_t osal_clock_high_resolution_ns() noexcept;
     /// @brief Returns the nominal resolution of the backend high-resolution source in nanoseconds.
+    /// @pre The active backend advertises high-resolution clock support.
+    /// @return Nominal source resolution in nanoseconds.
     std::int64_t osal_clock_high_resolution_resolution_ns() noexcept;
 }  // extern "C"
 
@@ -65,6 +73,8 @@ struct high_resolution_clock
     static constexpr bool is_supported = supports_requirement<support_requirement::high_resolution_clock>;
 
     /// @brief Enforce high-resolution clock support at compile time.
+    /// @tparam Backend  Backend whose high-resolution clock capability is checked.
+    /// @details Compilation fails if the selected backend lacks this capability.
     template<typename Backend = active_backend>
     static consteval void require_support()
     {
@@ -72,9 +82,11 @@ struct high_resolution_clock
     }
 
     /// @brief Returns the current timestamp using the best available draft source.
+    /// @return Native high-resolution time, or promoted monotonic time when unsupported.
     static time_point now() noexcept;
 
     /// @brief Returns the nominal resolution of the draft source.
+    /// @return Native source resolution, or the backend tick period when unsupported.
     static duration resolution() noexcept;
 };
 
@@ -106,6 +118,7 @@ inline TimePoint saturating_add(TimePoint base, typename TimePoint::duration del
 ///          expiry and remaining-time queries. The default public alias is
 ///          @c osal::monotonic_deadline; @c high_resolution_deadline uses
 ///          @c high_resolution_clock and inherits its support/fallback semantics.
+/// @tparam Clock  Steady chrono-compatible clock used to measure expiry.
 template<typename Clock>
 class basic_deadline
 {
@@ -116,11 +129,16 @@ public:
     using duration   = typename clock::duration;
     using time_point = typename clock::time_point;
 
+    /// @brief Constructs an already-expired deadline at time_point::min().
     constexpr basic_deadline() noexcept = default;
 
     /// @brief Creates a deadline relative to @c clock::now().
-    /// @details Positive durations are rounded up to the clock resolution so a
-    ///          non-zero timeout never expires early due to truncation.
+    /// @details Positive durations are rounded up to the clock's duration unit.
+    ///          Addition saturates at time_point::max(); non-positive durations expire now.
+    /// @tparam Rep     Timeout representation.
+    /// @tparam Period  Timeout unit.
+    /// @param[in] timeout  Duration before expiry.
+    /// @return Deadline measured from the current clock reading.
     template<typename Rep, typename Period>
     static basic_deadline after(std::chrono::duration<Rep, Period> timeout) noexcept
     {
@@ -133,27 +151,39 @@ public:
     }
 
     /// @brief Creates a deadline that expires at an absolute time point.
+    /// @param[in] when  Absolute expiry on this deadline's clock.
+    /// @return Deadline with the supplied expiry.
     static constexpr basic_deadline at(time_point when) noexcept { return basic_deadline{when}; }
 
     /// @brief Returns true when the deadline has expired.
+    /// @return Whether the current clock reading reaches or exceeds expiry.
     bool expired() const noexcept { return expired(clock::now()); }
 
     /// @brief Returns true when the provided time point reaches or exceeds the deadline.
+    /// @param[in] now  Clock reading to compare with expiry.
+    /// @return Whether @p now reaches or exceeds expiry.
     constexpr bool expired(time_point now) const noexcept { return now >= expiry_; }
 
     /// @brief Returns the remaining time until expiry, saturating at zero.
+    /// @return Non-negative time remaining from the current clock reading.
     duration remaining() const noexcept { return remaining(clock::now()); }
 
     /// @brief Returns the remaining time from a supplied time point.
+    /// @param[in] now  Clock reading from which to measure remaining time.
+    /// @return Time until expiry, or zero when already expired.
     constexpr duration remaining(time_point now) const noexcept
     {
         return expired(now) ? duration::zero() : (expiry_ - now);
     }
 
     /// @brief Returns the absolute expiry time.
+    /// @return Stored expiry on this deadline's clock.
     constexpr time_point expires_at() const noexcept { return expiry_; }
 
     /// @brief Restarts the deadline relative to @c clock::now().
+    /// @tparam Rep     Timeout representation.
+    /// @tparam Period  Timeout unit.
+    /// @param[in] timeout  New relative timeout, rounded and saturated as in after().
     template<typename Rep, typename Period>
     void restart(std::chrono::duration<Rep, Period> timeout) noexcept
     {
@@ -271,6 +301,7 @@ struct clock_utils
     }
 
     /// @brief Returns current tick count.
+    /// @return Backend tick counter; rollover follows tick_t and the backend.
     static tick_t now_ticks() noexcept { return osal_clock_ticks(); }
 };
 

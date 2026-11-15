@@ -17,12 +17,17 @@ namespace osal
 class wait_signal
 {
 public:
+    /// @brief Whether this backend supports the blocking producer-notification channel.
     static constexpr bool is_supported =
         timed_semaphore_backend<active_backend> && !std::is_same_v<active_backend, backend_baremetal>;
+    /// @brief Whether ISR notifications can be implemented safely and lock-free.
     static constexpr bool isr_notification_supported =
         is_supported && capabilities<active_backend>::has_isr_semaphore &&
         std::atomic<std::uint32_t>::is_always_lock_free && std::atomic<error_code>::is_always_lock_free;
 
+    /// @brief Constructs the signal and its bounded semaphore when supported.
+    /// @details Check status() or valid() before use. At most one consumer may
+    ///          wait concurrently; producers may notify after updating state.
     wait_signal() noexcept
     {
         if constexpr (is_supported)
@@ -41,6 +46,8 @@ public:
         }
     }
     /// @brief Best-effort destruction; caller must quiesce waiters and producers.
+    /// @details Keep the signal alive until all producer and waiter operations
+    ///          have ended.
     ~wait_signal() noexcept
     {
         if (status_.ok())
@@ -54,22 +61,40 @@ public:
             }
         }
     }
-    wait_signal(const wait_signal&)               = delete;
-    wait_signal& operator=(const wait_signal&)    = delete;
-    wait_signal(wait_signal&&)                    = delete;
-    wait_signal&         operator=(wait_signal&&) = delete;
-    [[nodiscard]] bool   valid() const noexcept { return status().ok(); }
+    /// @brief Copy construction is disabled; the semaphore and consumer ownership are unique.
+    wait_signal(const wait_signal&) = delete;
+    /// @brief Copy assignment is disabled; the semaphore and consumer ownership are unique.
+    wait_signal& operator=(const wait_signal&) = delete;
+    /// @brief Move construction is disabled to keep registrations tied to this signal.
+    wait_signal(wait_signal&&) = delete;
+    /// @brief Move assignment is disabled to keep registrations tied to this signal.
+    wait_signal& operator=(wait_signal&&) = delete;
+    /// @brief Reports whether initialization and any recorded notification are successful.
+    /// @return true when status() is successful.
+    [[nodiscard]] bool valid() const noexcept { return status().ok(); }
+    /// @brief Returns initialization status or the first recorded notification failure.
+    /// @return Current signal status; unsupported or backend errors are preserved.
     [[nodiscard]] result status() const noexcept
     {
         return status_.ok() ? result{failure_.load(std::memory_order_acquire)} : status_;
     }
+    /// @brief Enforce the blocking-semaphore backend requirement at compile time.
+    /// @tparam Backend Backend whose timed-semaphore support is checked.
+    /// @details Compilation fails for backends without timed blocking semaphores
+    ///          and for bare-metal.
     template<typename Backend = active_backend>
     static constexpr void require_support() noexcept
     {
         static_assert(timed_semaphore_backend<Backend> && !std::is_same_v<Backend, backend_baremetal>,
                       "wait_signal requires native blocking timed semaphore support, not bare-metal spin waits");
     }
+    /// @brief Notify the waiting consumer that observed state may have changed.
+    /// @return Success, not_initialized, or a backend semaphore error.
+    /// @details Call after updating the state tested by the consumer's predicate.
     [[nodiscard]] result notify() noexcept { return notify_impl(false); }
+    /// @brief Notify the waiting consumer from ISR context when supported.
+    /// @return Success, not_supported, or a backend semaphore error.
+    /// @warning Use only from ISR context when isr_notification_supported is true.
     [[nodiscard]] result notify_from_isr() noexcept
     {
         if constexpr (isr_notification_supported)
@@ -78,9 +103,14 @@ public:
         }
         return error_code::not_supported;
     }
+    /// @brief Returns the current notification generation.
+    /// @return Monotonically incrementing 32-bit generation snapshot; it may wrap.
     [[nodiscard]] std::uint32_t generation() const noexcept { return generation_.load(std::memory_order_acquire); }
 
     /// @brief Claims exclusive consumer ownership; release after the wait.
+    /// @return Success, an initialization/recorded failure, or already_exists
+    ///         if another consumer owns the wait.
+    /// @details Pair a successful claim with end_wait() on every exit path.
     result begin_wait() noexcept
     {
         if (!status().ok())
@@ -89,9 +119,17 @@ public:
         }
         return waiting_.test_and_set(std::memory_order_acquire) ? result{error_code::already_exists} : ok();
     }
+    /// @brief Releases the exclusive consumer claim.
+    /// @details Must be called by the consumer that successfully called begin_wait().
     void end_wait() noexcept { waiting_.clear(std::memory_order_release); }
 
     /// @brief Internal wake wait, called only by the owning consumer.
+    /// @param[in] observed Generation captured before checking readiness.
+    /// @param[in] timeout  Maximum wait; negative waits indefinitely.
+    /// @return Success if the generation changed or a semaphore wake occurred;
+    ///         otherwise the semaphore/backend result.
+    /// @details Intended for wait_until_ready and only while this consumer owns
+    ///          the wait. The signal must remain alive.
     result wait_for_change(std::uint32_t observed, milliseconds timeout) noexcept
     {
         if (!status().ok())
@@ -140,6 +178,17 @@ private:
 /// @brief Event-driven cancellable wait on a nonblocking readiness predicate.
 /// @details Signal/source/predicate state must outlive this call. Producers must
 ///          notify after every change that can make the predicate true.
+/// @tparam Predicate Nothrow callable returning bool when invoked as an lvalue.
+/// @param[in,out] signal  Signal used to claim the consumer and receive producer wakes.
+/// @param[in]     ready   Readiness predicate, repeatedly invoked in place.
+/// @param[in]     timeout Maximum wait; negative means no deadline.
+/// @param[in]     token   Optional cooperative cancellation token.
+/// @return Success when ready, cancelled when stop is requested, timeout at the
+///         deadline, or a propagated signal/callback-registration error.
+/// @details Only one consumer may use @p signal at a time. The predicate must
+///          be non-blocking and safe to call repeatedly. Producer updates must
+///          be followed by notify(); the observed state and @p signal must
+///          outlive the call.
 template<typename Predicate>
     requires std::is_nothrow_invocable_r_v<bool, Predicate&>
 // The predicate is repeatedly invoked in place, never forwarded or consumed.

@@ -33,23 +33,57 @@ using osal_timer_callback_t = void (*)(void* arg);
 
 extern "C"
 {
+    /// @brief Creates a stopped backend timer.
+    /// @param[out] handle        Receives the native timer handle.
+    /// @param[in]  name          Optional debug name; follow backend name-lifetime requirements.
+    /// @param[in]  cb            Non-null expiry callback; must not block.
+    /// @param[in]  arg           Callback context; keep alive until successful destruction.
+    /// @param[in]  period_ticks  Positive period in backend ticks.
+    /// @param[in]  auto_reload   Whether the timer repeats after expiry.
+    /// @return Success or the backend creation/capability error.
+    /// @note Thread context only; callbacks use the backend timer thread or ISR context.
     // NOLINTNEXTLINE(readability-inconsistent-declaration-parameter-name)
     osal::result osal_timer_create(osal::active_traits::timer_handle_t* handle, const char* name,
                                    osal_timer_callback_t cb, void* arg, osal::tick_t period_ticks,
                                    bool auto_reload) noexcept;
 
+    /// @brief Stops and attempts to reclaim a backend timer.
+    /// @param[in,out] handle  Timer handle to release.
+    /// @pre Other users have quiesced; follow backend thread/callback-context restrictions.
+    /// @return Success or a quiescence/capability/backend error; failure retains ownership.
+    /// @note Keep callback context and handle storage alive on failure.
     osal::result osal_timer_destroy(osal::active_traits::timer_handle_t* handle) noexcept;
 
+    /// @brief Starts a backend timer.
+    /// @param[in,out] handle  Initialised timer handle.
+    /// @return Success or the backend start error.
+    /// @note Thread context only; starting can make later reclamation unsupported.
     osal::result osal_timer_start(osal::active_traits::timer_handle_t* handle) noexcept;
 
+    /// @brief Stops a backend timer without destroying its handle.
+    /// @param[in,out] handle  Initialised timer handle.
+    /// @return Success or the backend stop error; success alone does not guarantee callback drainage.
+    /// @note Thread context only.
     osal::result osal_timer_stop(osal::active_traits::timer_handle_t* handle) noexcept;
 
+    /// @brief Restarts a backend timer's period.
+    /// @param[in,out] handle  Initialised timer handle.
+    /// @return Success or the backend reset error.
+    /// @note Thread context only.
     osal::result osal_timer_reset(osal::active_traits::timer_handle_t* handle) noexcept;
 
+    /// @brief Changes a backend timer period while preserving mode and active state.
+    /// @param[in,out] handle  Initialised timer handle.
+    /// @param[in]     p       Positive replacement period in backend ticks.
+    /// @return Success, not_supported if the contract cannot be honored, or another backend error.
+    /// @note Thread context only; active timers begin a new interval.
     osal::result
     osal_timer_set_period(osal::active_traits::timer_handle_t* handle,
                           osal::tick_t p) noexcept;  // NOLINT(readability-inconsistent-declaration-parameter-name)
 
+    /// @brief Samples whether a backend timer is active.
+    /// @param[in] handle  Initialised timer handle.
+    /// @return Observed activity; this is not a callback-quiescence guarantee.
     bool osal_timer_is_active(const osal::active_traits::timer_handle_t* handle) noexcept;
 
 }  // extern "C"
@@ -115,6 +149,8 @@ public:
 #endif
 
     /// @brief Enforce timer support at compile time.
+    /// @tparam Backend  Backend whose timer support is checked.
+    /// @details Compilation fails if the selected backend lacks timer support.
     template<typename Backend = active_backend>
     static consteval void require_support()
     {
@@ -129,6 +165,10 @@ public:
     /// @param[in] period    Timer period.
     /// @param[in] mode      one_shot or periodic.
     /// @param[in] name      Debug name (may be nullptr).
+    /// @details Null callbacks or non-positive periods leave the timer invalid.
+    ///          Inspect initialization_status() for validation/capability/backend errors.
+    /// @note Callbacks must not block and may run in ISR context. Keep the callback
+    ///       argument alive until close() succeeds; check can_reclaim_after_start.
     /// @complexity O(1)
     timer(osal_timer_callback_t callback, void* arg, milliseconds period, timer_mode mode = timer_mode::one_shot,
           const char* name = nullptr) noexcept
@@ -152,19 +192,28 @@ public:
     /// @complexity O(1)
     explicit timer(const timer_config& cfg) noexcept : timer(cfg.callback, cfg.arg, cfg.period, cfg.mode, cfg.name) {}
 
-    /// @brief Destructs the timer (stops if active).
+    /// @brief Attempts close(), discarding cleanup errors.
+    /// @pre Other users have quiesced. Explicitly handle close() failures before
+    ///      destroying this object or its callback context.
     ~timer() noexcept { (void)close(); }
 
-    timer(const timer&)            = delete;
+    /// @brief Copy construction is disabled.
+    timer(const timer&) = delete;
+    /// @brief Copy assignment is disabled.
     timer& operator=(const timer&) = delete;
-    timer(timer&&)                 = delete;
-    timer& operator=(timer&&)      = delete;
+    /// @brief Move construction is disabled.
+    timer(timer&&) = delete;
+    /// @brief Move assignment is disabled.
+    timer& operator=(timer&&) = delete;
 
     // ---- control -----------------------------------------------------------
 
     /// @brief Starts the timer.
-    /// @retval osal::ok()                The timer was started successfully.
-    /// @retval error_code::not_supported Timers are unavailable on the active backend.
+    /// @retval osal::ok()                   The timer was started successfully.
+    /// @retval error_code::not_supported    Timers are unavailable on the active backend.
+    /// @retval error_code::not_initialized  The timer is invalid on a timer-capable backend.
+    /// @return Otherwise the backend start error.
+    /// @note Thread context only; starting may prevent subsequent reclamation.
     [[nodiscard]] result start() noexcept
     {
         if constexpr (timer_backend<active_backend>)
@@ -179,6 +228,10 @@ public:
     }
 
     /// @brief Stops the timer.
+    /// @retval error_code::not_supported    Timers are unavailable on the active backend.
+    /// @retval error_code::not_initialized  The timer is invalid on a timer-capable backend.
+    /// @return Otherwise the backend stop result.
+    /// @note Thread context only. Stopping alone does not prove callback drainage or reclaimability.
     [[nodiscard]] result stop() noexcept
     {
         if constexpr (timer_backend<active_backend>)
@@ -193,6 +246,10 @@ public:
     }
 
     /// @brief Resets the timer (restarts its period from now).
+    /// @retval error_code::not_supported    Timers are unavailable on the active backend.
+    /// @retval error_code::not_initialized  The timer is invalid on a timer-capable backend.
+    /// @return Otherwise the backend reset result.
+    /// @note Thread context only.
     [[nodiscard]] result reset() noexcept
     {
         if constexpr (timer_backend<active_backend>)
@@ -211,6 +268,11 @@ public:
     ///          interval at the new period. One-shot/periodic mode is preserved.
     ///          Backends unable to guarantee this contract return not_supported.
     /// @param[in] period  New period.
+    /// @retval error_code::invalid_argument  The period is not positive.
+    /// @retval error_code::not_initialized   The timer is invalid on a timer-capable backend.
+    /// @retval error_code::not_supported     Timers or this period-change contract are unsupported.
+    /// @return Otherwise the backend period-change result.
+    /// @note Thread context only.
     [[nodiscard]] result set_period(milliseconds period) noexcept
     {
         if (period.count() <= 0)
@@ -232,13 +294,18 @@ public:
     // ---- query -------------------------------------------------------------
 
     /// @brief Returns true if the timer was successfully created.
-    [[nodiscard]] bool   valid() const noexcept { return valid_; }
+    /// @return Whether this object currently owns a valid timer.
+    [[nodiscard]] bool valid() const noexcept { return valid_; }
+    /// @brief Reports the original validation/creation result.
+    /// @return Initialization status, unchanged by later operations or close().
     [[nodiscard]] result initialization_status() const noexcept { return initialization_status_; }
 
     /// @brief Stops and destroys the timer; a destroy failure retains ownership.
     /// @details Destruction itself stops the timer. Call only from thread context
     ///          after quiescing other users; the destructor remains best-effort.
     ///          On failure keep this object and its callback context alive.
+    /// @return Success if already closed or destroyed, otherwise the backend destruction error.
+    /// @note Consult can_reclaim_after_start before starting timers whose storage must be reclaimed.
     [[nodiscard]] result close() noexcept
     {
         if (!valid_)
@@ -255,6 +322,8 @@ public:
         return status;
     }
     /// @brief Returns true if the timer is currently running.
+    /// @return Observed backend activity, or false for an invalid/unsupported timer.
+    /// @note An inactive timer can still have an in-flight callback; use close() for reclamation.
     [[nodiscard]] bool is_active() const noexcept
     {
         if constexpr (timer_backend<active_backend>)

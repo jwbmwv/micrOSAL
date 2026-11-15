@@ -21,10 +21,12 @@
 #include <cstdint>
 
 #ifndef OSAL_THREAD_LOCAL_MAX_KEYS
+/// @brief Maximum emulated keys or native slots reserved by this header.
 #define OSAL_THREAD_LOCAL_MAX_KEYS 16U
 #endif
 
 #ifndef OSAL_THREAD_LOCAL_USE_NATIVE
+/// @brief Select native TLS where supported when set to a nonzero value.
 #define OSAL_THREAD_LOCAL_USE_NATIVE 0
 #endif
 
@@ -58,8 +60,11 @@
 
 #if OSAL_THREAD_LOCAL_USE_NATIVE_BAREMETAL
 #ifndef OSAL_BAREMETAL_MAX_TASKS
+/// @brief Number of task-indexed TLS slots reserved for bare-metal tasks.
 #define OSAL_BAREMETAL_MAX_TASKS 8U
 #endif
+/// @brief Obtain the current bare-metal task index for thread-local storage.
+/// @return Nonnegative task index, or a negative value when no task is active.
 extern "C" int osal_baremetal_current_task_index() noexcept;
 #endif
 
@@ -280,6 +285,9 @@ private:
 class thread_local_data
 {
 public:
+    /// @brief Acquires a thread-local key or native TLS slot.
+    /// @details Check valid() before use. Values stored in this key are
+    ///          non-owning pointers; this object does not manage their lifetime.
     thread_local_data() noexcept
 #if OSAL_THREAD_LOCAL_USE_NATIVE_PTHREAD
         : valid_(pthread_key_create(&native_key_, nullptr) == 0)
@@ -295,6 +303,8 @@ public:
 #endif
     }
 
+    /// @brief Releases the acquired TLS key or native slot.
+    /// @details Stored pointer values are not destroyed or otherwise reclaimed.
     ~thread_local_data() noexcept
     {
         if (valid_)
@@ -309,11 +319,17 @@ public:
         }
     }
 
-    thread_local_data(const thread_local_data&)            = delete;
+    /// @brief Copy construction is disabled; the TLS key has one owner.
+    thread_local_data(const thread_local_data&) = delete;
+    /// @brief Copy assignment is disabled; the TLS key has one owner.
     thread_local_data& operator=(const thread_local_data&) = delete;
-    thread_local_data(thread_local_data&&)                 = delete;
-    thread_local_data& operator=(thread_local_data&&)      = delete;
+    /// @brief Move construction is disabled; the TLS key is not transferable.
+    thread_local_data(thread_local_data&&) = delete;
+    /// @brief Move assignment is disabled; the TLS key is not transferable.
+    thread_local_data& operator=(thread_local_data&&) = delete;
 
+    /// @brief Reports whether this build selects a native TLS implementation.
+    /// @return true for selected pthread, FreeRTOS, or bare-metal TLS paths.
     [[nodiscard]] static constexpr bool uses_native_backend() noexcept
     {
 #if OSAL_THREAD_LOCAL_USE_NATIVE_PTHREAD || OSAL_THREAD_LOCAL_USE_NATIVE_FREERTOS || \
@@ -324,8 +340,16 @@ public:
 #endif
     }
 
+    /// @brief Reports whether a key or native slot was successfully acquired.
+    /// @return true when this object is usable.
     [[nodiscard]] bool valid() const noexcept { return valid_; }
 
+    /// @brief Stores a non-owning pointer in this thread's slot.
+    /// @param[in] value Pointer value to associate with the current thread; nullptr is allowed.
+    /// @return Success, not_initialized if no key/task is available, or
+    ///         out_of_resources if the native TLS operation fails.
+    /// @details The value is independent for each thread/task. The pointed-to
+    ///          object is not owned; the caller controls its lifetime.
     result set(void* value) const noexcept
     {
         if (!valid_)
@@ -352,6 +376,10 @@ public:
         return osal::ok();
     }
 
+    /// @brief Retrieves this thread's pointer value.
+    /// @return The value previously stored by this thread, or nullptr if unset,
+    ///         invalid, or no native task is current.
+    /// @details Does not transfer or manage ownership of the pointed-to object.
     [[nodiscard]] void* get() const noexcept
     {
         if (!valid_)

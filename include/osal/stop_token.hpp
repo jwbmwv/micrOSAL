@@ -10,6 +10,7 @@
 #include <cstdlib>
 
 #ifndef OSAL_STOP_SOURCE_MAX_CALLBACKS
+/// @brief Maximum simultaneous callback registrations on one stop_source.
 #define OSAL_STOP_SOURCE_MAX_CALLBACKS 16U
 #endif
 
@@ -23,9 +24,16 @@ class stop_callback;
 class stop_token
 {
 public:
+    /// @brief Constructs an empty token that cannot request cancellation.
     constexpr stop_token() noexcept = default;
-    [[nodiscard]] bool   stop_possible() const noexcept { return source_ != nullptr; }
-    [[nodiscard]] bool   stop_requested() const noexcept;
+    /// @brief Reports whether this token refers to a stop source.
+    /// @return true if a source was associated with this token.
+    [[nodiscard]] bool stop_possible() const noexcept { return source_ != nullptr; }
+    /// @brief Reports whether the associated source has requested stopping.
+    /// @return true if stop was requested; false for an empty token.
+    [[nodiscard]] bool stop_requested() const noexcept;
+    /// @brief Reports the associated source's initialization or operational status.
+    /// @return Source status, or success for an empty token.
     [[nodiscard]] result status() const noexcept;
 
 private:
@@ -41,6 +49,9 @@ private:
 class stop_source
 {
 public:
+    /// @brief Constructs a cancellation source and its synchronization state.
+    /// @details Check initialization_status() or status() before use. Source
+    ///          operations are thread-context-only.
     stop_source() noexcept
         : metadata_{mutex_config{mutex_type::normal, mutex::supports_protocol(mutex_protocol::priority_inheritance)
                                                          ? mutex_protocol::priority_inheritance
@@ -53,6 +64,9 @@ public:
             completion_created_    = initialization_status_.ok();
         }
     }
+    /// @brief Destroys the source's condition variable.
+    /// @details The source must outlive every token, callback, and concurrent
+    ///          operation referring to it.
     ~stop_source() noexcept
     {
         if (completion_created_)
@@ -60,21 +74,43 @@ public:
             (void)osal_condvar_destroy(&completion_);
         }
     }
-    stop_source(const stop_source&)                   = delete;
-    stop_source& operator=(const stop_source&)        = delete;
-    stop_source(stop_source&&)                        = delete;
-    stop_source&             operator=(stop_source&&) = delete;
+    /// @brief Copy construction is disabled; source state has a unique owner.
+    stop_source(const stop_source&) = delete;
+    /// @brief Copy assignment is disabled; source state has a unique owner.
+    stop_source& operator=(const stop_source&) = delete;
+    /// @brief Move construction is disabled because tokens and callbacks borrow this address.
+    stop_source(stop_source&&) = delete;
+    /// @brief Move assignment is disabled because tokens and callbacks borrow this address.
+    stop_source& operator=(stop_source&&) = delete;
+    /// @brief Creates a borrowed token referring to this source.
+    /// @return Token whose validity is bounded by the source lifetime.
     [[nodiscard]] stop_token get_token() noexcept { return stop_token{this}; }
-    [[nodiscard]] bool       stop_requested() const noexcept { return stopped_.load(std::memory_order_acquire); }
-    [[nodiscard]] result     initialization_status() const noexcept { return initialization_status_; }
-    [[nodiscard]] result     status() const noexcept
+    /// @brief Reports whether stop has been requested.
+    /// @return Current atomic stop state.
+    [[nodiscard]] bool stop_requested() const noexcept { return stopped_.load(std::memory_order_acquire); }
+    /// @brief Returns the result of source initialization.
+    /// @return Initialization result.
+    [[nodiscard]] result initialization_status() const noexcept { return initialization_status_; }
+    /// @brief Returns initialization status or the first recorded operational failure.
+    /// @return Current source status.
+    [[nodiscard]] result status() const noexcept
     {
         return initialization_status_.ok() ? result{failure_.load(std::memory_order_acquire)} : initialization_status_;
     }
+    /// @brief Reports whether the source is ready and has no recorded failure.
+    /// @return true when status() is successful.
     [[nodiscard]] bool valid() const noexcept { return status().ok(); }
-    /// @brief Checked request; reports primitive errors separately from a repeated request.
+    /// @brief Request cooperative stop and report whether this was the first request.
+    /// @param[out] first_request Set true only when this call first requested stop.
+    /// @return Success or a synchronization/initialization error.
+    /// @details Callbacks execute synchronously outside the source lock, in the
+    ///          requesting thread. Repeated requests succeed with
+    ///          @p first_request false. Not ISR-safe.
     result request_stop(bool& first_request) noexcept;
-    /// @brief Compatibility request; consult status() when it returns false.
+    /// @brief Request stop, returning true only for the first successful request.
+    /// @return true if this call first requested stop; false for repeated requests
+    ///         or operational failure.
+    /// @details Consult status() to distinguish a repeated request from an error.
     bool request_stop() noexcept
     {
         bool first_request = false;
@@ -134,8 +170,17 @@ inline result stop_token::status() const noexcept
 class stop_callback
 {
 public:
+    /// @brief Callback function signature invoked on a stop request.
     using callback_type = void (*)(void*) noexcept;
 
+    /// @brief Register a callback to run when its source requests stop.
+    /// @param[in] token    Borrowed token identifying the source; may be empty.
+    /// @param[in] callback Non-null callback to invoke.
+    /// @param[in] argument Opaque value passed to @p callback.
+    /// @details The source and argument must remain alive through callback
+    ///          execution and registration close. If stopping was already
+    ///          requested, the callback is invoked synchronously before
+    ///          construction returns. Check status() for registration failure.
     stop_callback(stop_token token, callback_type callback, void* argument) noexcept
         : source_(token.source_), callback_(callback), argument_(argument)
     {
@@ -188,9 +233,10 @@ public:
         status_ = source_->unlock();
     }
 
-    /// @brief Wait for safe unregistering; abort on a backend cleanup error.
+    /// @brief Unregisters and waits for callback completion.
     /// @details Use close(timeout) and keep the registration, source and argument
     ///          alive on failure when recovery is required before destruction.
+    ///          Aborts if the no-argument close operation fails.
     ~stop_callback() noexcept
     {
         if (!close().ok())
@@ -199,7 +245,11 @@ public:
         }
     }
 
-    /// @brief Checked unregister; failure retains the registration for retry.
+    /// @brief Unregister and wait for any active callback to finish.
+    /// @param[in] timeout Maximum wait; negative waits indefinitely.
+    /// @return Success, timeout, or a source/condition-variable error.
+    /// @details On failure the registration and its source/argument must remain
+    ///          alive; retry close() or keep them alive until destruction.
     [[nodiscard]] result close(milliseconds timeout = milliseconds{-1}) noexcept
     {
         if (source_ == nullptr)
@@ -251,10 +301,16 @@ public:
         return unlocked;
     }
 
-    stop_callback(const stop_callback&)             = delete;
-    stop_callback& operator=(const stop_callback&)  = delete;
-    stop_callback(stop_callback&&)                  = delete;
-    stop_callback&       operator=(stop_callback&&) = delete;
+    /// @brief Copy construction is disabled; callback registration is uniquely owned.
+    stop_callback(const stop_callback&) = delete;
+    /// @brief Copy assignment is disabled; callback registration is uniquely owned.
+    stop_callback& operator=(const stop_callback&) = delete;
+    /// @brief Move construction is disabled because the source links to this object's address.
+    stop_callback(stop_callback&&) = delete;
+    /// @brief Move assignment is disabled because the source links to this object's address.
+    stop_callback& operator=(stop_callback&&) = delete;
+    /// @brief Returns the status established during callback registration.
+    /// @return Success or the registration/initialization error.
     [[nodiscard]] result status() const noexcept { return status_; }
 
 private:

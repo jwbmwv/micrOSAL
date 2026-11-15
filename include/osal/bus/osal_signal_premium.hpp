@@ -69,6 +69,7 @@ namespace osal
 /// @details Observer callbacks (type @c observer_fn) are stored in a static
 ///          array of size @c MaxSubscribers.  On publish() the base LCD
 ///          fan-out runs first, followed by all registered observer callbacks.
+/// @note Observer and routing management use mutexes and are not ISR-safe.
 template<typename T, std::size_t MaxSubscribers, std::size_t PerSubCapacity,
          typename BackendTag = MICROSAL_DEFAULT_BACKEND_TAG>
     requires queue_element<T> && (MaxSubscribers > 0U) && (PerSubCapacity > 0U)
@@ -95,9 +96,12 @@ public:
     // ---- observer management -----------------------------------------------
 
     /// @brief Registers a callback observer.
-    /// @param[in] fn  Function pointer to invoke on each publish.
-    /// @return true if the observer was registered; false when the observer
-    ///         table is full or @p fn is nullptr.
+    /// @param[in] fn  Non-null function pointer invoked during each publish.
+    /// @return @c true if the observer was registered; @c false when the
+    ///         table is full, the topic is invalid, or @p fn is null.
+    /// @note Observers run synchronously in the publishing caller's context.
+    ///       They must not block or throw. A callback already snapshotted by a
+    ///       concurrent publish may still run after it is unsubscribed.
     [[nodiscard]] bool subscribe_observer(observer_fn fn) noexcept
     {
         if (fn == nullptr)
@@ -115,8 +119,9 @@ public:
     }
 
     /// @brief Removes a previously registered callback observer.
-    /// @param[in] fn  The function pointer to remove.
-    /// @return true if found and removed; false if not registered.
+    /// @param[in] fn  Function pointer to remove.
+    /// @return @c true if found and removed; @c false if null, invalid, or not registered.
+    /// @note A callback already snapshotted by a concurrent publish may still run.
     [[nodiscard]] bool unsubscribe_observer(observer_fn fn) noexcept
     {
         if (fn == nullptr)
@@ -144,6 +149,7 @@ public:
     }
 
     /// @brief Returns the number of registered observer callbacks.
+    /// @return Current observer count, or zero when observer state is invalid.
     [[nodiscard]] std::size_t observer_count() const noexcept
     {
         if constexpr (uses_backend_native_observers_)
@@ -158,9 +164,10 @@ public:
 
     // ---- enhanced publish --------------------------------------------------
 
-    /// @brief Publishes a message to queue-subscribers AND observer callbacks.
-    /// @param[in] msg  Message to broadcast.
-    /// @return true if at least one queue-subscriber or observer received it.
+    /// @brief Publishes a message to queue subscribers and observer callbacks.
+    /// @param[in] msg  Message broadcast to subscriber queues and observers.
+    /// @return @c true if at least one queue subscriber accepted it or an observer was invoked.
+    /// @note Observer callbacks run synchronously in this caller's context and must not block or throw.
     [[nodiscard]] bool publish(const T& msg) noexcept
     {
         bool any = base_type::publish(msg);
@@ -175,11 +182,11 @@ public:
         return any;
     }
 
-    /// @brief Compatibility copying overload; does not transfer pointer ownership.
-    /// @param[in] ptr  Borrowed message pointer. Must not be nullptr.
+    /// @brief Publishes a message through a borrowed pointer by copying its value.
+    /// @param[in] ptr  Non-null pointer to a message that remains valid for this call.
     /// @details Use zero_copy_signal::publish_zero_copy(producer_loan&&) for
     ///          ownership-preserving transport; this overload always copies.
-    /// @return true on success.
+    /// @return @c true if a queue subscriber or observer accepted the copied message.
     [[nodiscard]] bool publish_zero_copy(T* ptr) noexcept
     {
         if (ptr == nullptr)
@@ -191,7 +198,12 @@ public:
 
     // ---- typed routing ----------------------------------------------------
 
-    /// Borrow registry until unbind_registry() succeeds; registry must outlive routing.
+    /// @brief Binds a typed registry for subsequent ID-based routing.
+    /// @tparam MaxTopics  Maximum topic registrations in the registry type.
+    /// @param[in] registry  Registry borrowed until unbind_registry() succeeds.
+    /// @return @c true if bound; @c false if either object is invalid, routing is active,
+    ///         or another registry is already bound.
+    /// @pre The registry must outlive this binding and all routing calls.
     template<std::size_t MaxTopics>
     [[nodiscard]] bool bind_registry(topic_registry<T, MaxTopics>& registry) noexcept
     {
@@ -206,6 +218,8 @@ public:
         return true;
     }
 
+    /// @brief Removes the currently bound registry.
+    /// @return @c true if unbound; @c false if the routing mutex is invalid or dispatch is active.
     [[nodiscard]] bool unbind_registry() noexcept
     {
         if (!route_mutex_.valid())
@@ -218,6 +232,12 @@ public:
         return true;
     }
 
+    /// @brief Routes a message directly through the supplied registry.
+    /// @tparam MaxTopics  Maximum topic registrations in the registry type.
+    /// @param[in] registry  Registry used for this dispatch; borrowed only for this call.
+    /// @param[in] dest      Destination topic identifier.
+    /// @param[in] msg       Message passed to the destination.
+    /// @return The status returned by the registry dispatch.
     template<std::size_t MaxTopics>
     [[nodiscard]] route_status route_to(topic_registry<T, MaxTopics>& registry, signal_id dest, const T& msg) noexcept
     {
@@ -225,10 +245,11 @@ public:
     }
 
     /// @brief Routes a message to another topic by ID.
-    /// @details Dispatches through the borrowed registry installed by bind_registry().
+    /// @details Dispatches synchronously through the borrowed registry installed by bind_registry().
     /// @param[in] dest  Destination topic ID (see signal_id).
     /// @param[in] msg   Message to route.
-    /// @return true only when the destination accepted the message.
+    /// @return @c true only when the destination accepted the message.
+    /// @pre The bound registry remains alive until unbind_registry() succeeds.
     [[nodiscard]] bool route_to(signal_id dest, const T& msg) noexcept
     {
         if (!route_mutex_.valid())
@@ -278,7 +299,8 @@ private:
     }
 
     /// @brief Invokes all registered observers with @p msg.
-    /// @return true if at least one observer was called.
+    /// @param[in] msg  Message passed by reference to each registered observer.
+    /// @return @c true if at least one observer was called.
     bool invoke_observers(const T& msg) noexcept
     {
         if (!observer_mutex_.valid())

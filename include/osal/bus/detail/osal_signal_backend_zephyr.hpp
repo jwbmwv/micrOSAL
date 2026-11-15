@@ -43,6 +43,7 @@ namespace osal
 /// @details Uses a direct Zephyr-backed queue per subscriber slot so the
 ///          public MicrOSAL publish / receive contract matches the generic
 ///          implementation while avoiding the generic C queue ABI layer.
+/// @note Operations use a mutex and are not ISR-safe.
 template<queue_element T, std::size_t MaxSubscribers, std::size_t PerSubCapacity>
     requires(MaxSubscribers > 0U && PerSubCapacity > 0U)
 class osal_signal<T, MaxSubscribers, PerSubCapacity, bus_backend_zephyr>
@@ -51,8 +52,14 @@ public:
     using value_type  = T;
     using observer_fn = void (*)(const T&) noexcept;
 
+    /// @brief Reports whether the topic mutex initialized.
+    /// @return @c true when the topic is ready for operations.
     [[nodiscard]] bool valid() const noexcept { return mutex_.valid(); }
 
+    /// @brief Registers a new subscriber and returns its ID.
+    /// @param[out] out_id  Receives the allocated subscriber ID, or the invalid sentinel on failure.
+    /// @return @c true if a free slot was available; @c false when invalid or at capacity.
+    /// @blocking Never (mutex-locked, O(MaxSubscribers) scan).
     [[nodiscard]] bool subscribe(subscriber_id& out_id) noexcept
     {
         if (!valid())
@@ -82,6 +89,9 @@ public:
         return false;
     }
 
+    /// @brief Removes a subscriber by ID.
+    /// @param[in] id  Subscriber ID obtained from subscribe() on this topic.
+    /// @return @c true if removed; @c false if invalid or a receive is still in progress.
     [[nodiscard]] bool unsubscribe(subscriber_id id) noexcept
     {
         if (!valid())
@@ -105,6 +115,11 @@ public:
         return true;
     }
 
+    /// @brief Fans the message out to all active subscriber queues.
+    /// @param[in] msg  Message to broadcast; copied into each accepting subscriber queue.
+    /// @return @c true if at least one subscriber received the message.
+    /// @blocking Never (uses non-blocking queue sends; full queues drop this message).
+    /// @complexity O(MaxSubscribers).
     [[nodiscard]] bool publish(const T& msg) noexcept
     {
         if (!valid())
@@ -123,6 +138,10 @@ public:
         return any;
     }
 
+    /// @brief Attempts a non-blocking receive for one subscriber.
+    /// @param[in]  id   Subscriber ID obtained from subscribe() on this topic.
+    /// @param[out] out  Receives the message when one is available.
+    /// @return @c true if a message was received.
     [[nodiscard]] bool try_receive(subscriber_id id, T& out) noexcept
     {
         if (!valid())
@@ -139,6 +158,12 @@ public:
         return slots_[slot_index].queue_.try_receive(out);
     }
 
+    /// @brief Receives a message for one subscriber, waiting up to the timeout.
+    /// @param[in]  id       Subscriber ID obtained from subscribe() on this topic.
+    /// @param[out] out      Receives the message when successful.
+    /// @param[in]  timeout  Maximum wait in ticks; WAIT_FOREVER waits indefinitely.
+    /// @return @c true if a message was received within the timeout.
+    /// @pre The subscriber must remain registered for the duration of this call.
     [[nodiscard]] bool receive(subscriber_id id, T& out, tick_t timeout = WAIT_FOREVER) noexcept
     {
         if (!valid())
@@ -162,6 +187,10 @@ public:
         return received;
     }
 
+    /// @brief Registers a native observer callback.
+    /// @param[in] fn  Non-null callback invoked synchronously during observer publication.
+    /// @return @c true if registered; @c false for a null callback, invalid topic, or full observer table.
+    /// @note The callback must not block or throw.
     [[nodiscard]] bool native_subscribe_observer(observer_fn fn) noexcept
     {
         if ((fn == nullptr) || !valid())
@@ -179,6 +208,9 @@ public:
         return true;
     }
 
+    /// @brief Removes a previously registered native observer callback.
+    /// @param[in] fn  Callback pointer to remove; must be non-null.
+    /// @return @c true if found and removed; @c false otherwise.
     [[nodiscard]] bool native_unsubscribe_observer(observer_fn fn) noexcept
     {
         if ((fn == nullptr) || !valid())
@@ -200,6 +232,8 @@ public:
         return false;
     }
 
+    /// @brief Returns the number of registered native observer callbacks.
+    /// @return Observer count, or zero when the topic is invalid.
     [[nodiscard]] std::size_t native_observer_count() const noexcept
     {
         if (!valid())
@@ -210,6 +244,10 @@ public:
         return observer_count_;
     }
 
+    /// @brief Invokes a snapshot of all registered native observer callbacks.
+    /// @param[in] msg  Message passed by reference to each callback.
+    /// @return @c true if at least one observer was registered when the snapshot was taken.
+    /// @note Callbacks run synchronously in the caller's context and must not block or throw.
     [[nodiscard]] bool native_publish_observers(const T& msg) noexcept
     {
         if (!valid())
@@ -238,6 +276,8 @@ public:
         return any;
     }
 
+    /// @brief Returns the current number of active subscribers.
+    /// @return Active subscriber count, or zero when the topic is invalid.
     [[nodiscard]] std::size_t subscriber_count() const noexcept
     {
         if (!valid())
@@ -248,8 +288,12 @@ public:
         return subscriber_count_;
     }
 
+    /// @brief Returns the compile-time maximum subscriber count.
+    /// @return The value of @c MaxSubscribers.
     static constexpr std::size_t max_subscribers() noexcept { return MaxSubscribers; }
 
+    /// @brief Returns the compile-time capacity of each subscriber queue.
+    /// @return The value of @c PerSubCapacity.
     static constexpr std::size_t per_subscriber_capacity() noexcept { return PerSubCapacity; }
 
 private:
@@ -270,6 +314,7 @@ private:
         osal_bus<T, PerSubCapacity, bus_backend_zephyr> queue_{};
     };
 
+    /// @brief Derives this instance's identifier salt so IDs are scoped to a topic object.
     [[nodiscard]] subscriber_id subscriber_cookie_() const noexcept
     {
         constexpr auto mix = static_cast<subscriber_id>(0x9E3779B97F4A7C15ULL);
@@ -282,6 +327,7 @@ private:
         return generation * subscriber_id_span_ + static_cast<subscriber_id>(slot_index) + 1U;
     }
 
+    /// @brief Combines the per-instance salt, slot index, and generation into an opaque ID.
     [[nodiscard]] subscriber_id encode_subscriber_id_(std::size_t             slot_index,
                                                       subscriber_generation_t generation) const noexcept
     {
@@ -304,6 +350,8 @@ private:
         return unpack_subscriber_counter_(packed_id) / subscriber_id_span_;
     }
 
+    /// @brief Validates the ID encoding and extracts a candidate slot index.
+    /// @return @c MaxSubscribers when @p id cannot encode a valid slot.
     [[nodiscard]] std::size_t slot_index_from_id_(subscriber_id id) const noexcept
     {
         if (id == invalid_subscriber_id)
@@ -320,6 +368,7 @@ private:
         return slot_index_from_packed_subscriber_id_(packed_id);
     }
 
+    /// @brief Checks whether an ID identifies the active generation in a slot.
     [[nodiscard]] bool subscriber_id_matches_slot_(subscriber_id id, std::size_t slot_index) const noexcept
     {
         if (slot_index >= MaxSubscribers || !slots_[slot_index].in_use_ || id == invalid_subscriber_id)
@@ -337,6 +386,7 @@ private:
                generation_from_packed_subscriber_id_(packed_id) == slots_[slot_index].generation_;
     }
 
+    /// @brief Advances a slot generation so IDs from an earlier registration are rejected.
     void advance_subscriber_generation_(std::size_t slot_index) noexcept
     {
         auto& generation = slots_[slot_index].generation_;
@@ -347,6 +397,7 @@ private:
         }
     }
 
+    /// @brief Produces a non-sentinel identifier for a slot's current generation.
     [[nodiscard]] subscriber_id ensure_subscriber_id_(std::size_t slot_index) noexcept
     {
         subscriber_id id = encode_subscriber_id_(slot_index, slots_[slot_index].generation_);

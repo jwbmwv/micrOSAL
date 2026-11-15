@@ -154,17 +154,8 @@ static void wq_worker_entry(void* arg) noexcept
 
 // --- public extern "C" functions -------------------------------------------
 
-/// @brief Create an emulated work queue backed by a dedicated OSAL thread.
-/// @details Spawns a worker thread that dequeues and executes submitted work items
-///          in FIFO order.  The ring buffer capacity is capped at `OSAL_EMULATED_WQ_MAX_DEPTH`.
-/// @param[out] handle      Output handle; populated on success.
-/// @param[in] stack        Stack buffer for the worker thread.
-/// @param[in] stack_bytes  Size of @p stack in bytes.
-/// @param[in] depth        Maximum pending items; must be <= `OSAL_EMULATED_WQ_MAX_DEPTH`.
-/// @param[in] name         Optional thread name passed to `osal_thread_create`.
-/// @retval osal::ok()                    On success.
-/// @retval error_code::invalid_argument  If @p handle is null or @p depth exceeds the maximum.
-/// @retval error_code::out_of_resources  If the pool or worker thread cannot be created.
+// Spawns a worker thread that dequeues and executes submitted work items
+// in FIFO order.  The ring buffer capacity is capped at `OSAL_EMULATED_WQ_MAX_DEPTH`.
 osal::result osal_work_queue_create(osal::active_traits::work_queue_handle_t* handle, void* stack,
                                     std::size_t stack_bytes, std::size_t depth, const char* name) noexcept
 {
@@ -231,11 +222,8 @@ osal::result osal_work_queue_create(osal::active_traits::work_queue_handle_t* ha
     return osal::ok();
 }
 
-/// @brief Destroy an emulated work queue.
-/// @details Signals the worker thread to stop (after draining remaining items),
-///          joins it, and releases all resources.
-/// @param[in,out] handle  Handle to destroy; silently ignored if null.
-/// @retval osal::ok()  Always.
+// Signals the worker thread to stop (after draining remaining items),
+// joins it, and releases all resources.
 osal::result osal_work_queue_destroy(osal::active_traits::work_queue_handle_t* handle) noexcept
 {
     if (!handle || !handle->native) [[unlikely]]
@@ -259,14 +247,6 @@ osal::result osal_work_queue_destroy(osal::active_traits::work_queue_handle_t* h
     return osal::ok();
 }
 
-/// @brief Submit a work item to the queue (task context).
-/// @param[in] handle  Queue handle.
-/// @param[in] func    Work function to execute; must not be null.
-/// @param[in] arg     Opaque argument passed to @p func.
-/// @retval osal::ok()                    On success.
-/// @retval error_code::invalid_argument  If @p func is null.
-/// @retval error_code::overflow          If the ring buffer is full.
-/// @retval error_code::not_initialized   If @p handle is null.
 osal::result osal_work_queue_submit(osal::active_traits::work_queue_handle_t* handle, osal_work_func_t func,
                                     void* arg) noexcept
 {
@@ -295,27 +275,16 @@ osal::result osal_work_queue_submit(osal::active_traits::work_queue_handle_t* ha
     return osal::ok();
 }
 
-/// @brief Submit a work item from ISR context — not supported by this emulation.
-/// @details The emulated work queue uses a mutex internally, which is not ISR-safe.
-///          Always returns `error_code::not_supported`.
-/// @param[in] handle  Ignored.
-/// @param[in] func    Ignored.
-/// @param[in] arg     Ignored.
-/// @retval error_code::not_supported  Always.
+// The emulated work queue uses a mutex internally, which is not ISR-safe.
+// Always returns `error_code::not_supported`.
 osal::result osal_work_queue_submit_from_isr(osal::active_traits::work_queue_handle_t* /*handle*/,
                                              osal_work_func_t /*func*/, void* /*arg*/) noexcept
 {
     return osal::error_code::not_supported;
 }
 
-/// @brief Wait until all currently queued or executing items have been executed.
-/// @details Captures the last live work-item sequence at call time and waits until execution
-///          reaches that frontier. Items canceled after the flush starts do not satisfy it.
-/// @param[in] handle   Queue handle.
-/// @param[in] timeout  Maximum ticks to wait; use `osal::WAIT_FOREVER` for indefinite.
-/// @retval osal::ok()                   Once flushed.
-/// @retval error_code::timeout          On expiry.
-/// @retval error_code::not_initialized  If null.
+// Captures the last live work-item sequence at call time and waits until execution
+// reaches that frontier. Items canceled after the flush starts do not satisfy it.
 osal::result osal_work_queue_flush(osal::active_traits::work_queue_handle_t* handle, osal::tick_t timeout) noexcept
 {
     if (!handle || !handle->native) [[unlikely]]
@@ -369,12 +338,8 @@ osal::result osal_work_queue_flush(osal::active_traits::work_queue_handle_t* han
     return osal::ok();
 }
 
-/// @brief Discard all pending (not yet started) work items.
-/// @details Atomically resets the ring buffer head/tail and drains the counting
-///          semaphore so the worker will not wake for the discarded items.
-/// @param[in] handle  Queue handle.
-/// @retval osal::ok()                   On success.
-/// @retval error_code::not_initialized  If null.
+// Atomically resets the ring buffer head/tail and drains the counting
+// semaphore so the worker will not wake for the discarded items.
 osal::result osal_work_queue_cancel_all(osal::active_traits::work_queue_handle_t* handle) noexcept
 {
     if (!handle || !handle->native) [[unlikely]]

@@ -208,7 +208,7 @@ static emu_ef_waiter* emu_ef_claim_waiter_slot(emu_ef_obj* ef, std::size_t& slot
     return nullptr;
 }
 
-/// @brief Wake waiters whose predicates match the new bit state (task context).
+// Uses task-context notification APIs for waiters whose predicates match.
 static void emu_ef_wake_matching(emu_ef_obj* ef, osal::event_bits_t bits) noexcept
 {
     if (ef->waiter_count.load(std::memory_order_acquire) == 0U)
@@ -219,7 +219,7 @@ static void emu_ef_wake_matching(emu_ef_obj* ef, osal::event_bits_t bits) noexce
     emu_ef_wake_matching_common(ef, bits, false);
 }
 
-/// @brief Wake waiters whose predicates match the new bit state (ISR context).
+// ISR variant uses only ISR-safe notification APIs.
 static void emu_ef_wake_matching_isr(emu_ef_obj* ef, osal::event_bits_t bits) noexcept
 {
     if (ef->waiter_count.load(std::memory_order_acquire) == 0U)
@@ -230,7 +230,7 @@ static void emu_ef_wake_matching_isr(emu_ef_obj* ef, osal::event_bits_t bits) no
     emu_ef_wake_matching_common(ef, bits, true);
 }
 
-/// @brief Timed event-flags wait helper (shared by wait_any and wait_all).
+// Shared timed-wait path for wait_any and wait_all.
 static osal::result emu_ef_wait(emu_ef_obj* ef, osal::event_bits_t wait_bits, osal::event_bits_t* actual,
                                 bool clear_on_exit, bool all, osal::tick_t timeout) noexcept
 {
@@ -391,11 +391,6 @@ static osal::result emu_ef_wait(emu_ef_obj* ef, osal::event_bits_t wait_bits, os
 
 // --- public extern "C" functions -------------------------------------------
 
-/// @brief Create an emulated event-flags group.
-/// @param[out] handle  Output handle; populated on success.
-/// @retval osal::ok()                    On success.
-/// @retval error_code::invalid_argument  If @p handle is null.
-/// @retval error_code::out_of_resources  If the pool or internal semaphores are exhausted.
 osal::result osal_event_flags_create(osal::active_traits::event_flags_handle_t* handle) noexcept
 {
     if (!handle) [[unlikely]]
@@ -450,9 +445,6 @@ osal::result osal_event_flags_create(osal::active_traits::event_flags_handle_t* 
     return osal::ok();
 }
 
-/// @brief Destroy an emulated event-flags group and release its pool slot.
-/// @param[in,out] handle  Handle to destroy; silently ignored if null or already destroyed.
-/// @retval osal::ok()  Always.
 osal::result osal_event_flags_destroy(osal::active_traits::event_flags_handle_t* handle) noexcept
 {
     if (!handle || !handle->native) [[unlikely]]
@@ -471,13 +463,8 @@ osal::result osal_event_flags_destroy(osal::active_traits::event_flags_handle_t*
     return osal::ok();
 }
 
-/// @brief Set (OR) the specified bits in the event-flags group.
-/// @details Wakes only the waiters whose predicates can be satisfied by the
-///          updated bit state.
-/// @param[in] handle  Event-flags handle.
-/// @param[in] bits    Bit mask to OR into the current flags.
-/// @retval osal::ok()                   On success.
-/// @retval error_code::not_initialized  If null.
+// Wakes only the waiters whose predicates can be satisfied by the
+// updated bit state.
 osal::result osal_event_flags_set(osal::active_traits::event_flags_handle_t* handle, osal::event_bits_t bits) noexcept
 {
     if (!handle || !handle->native) [[unlikely]]
@@ -492,11 +479,6 @@ osal::result osal_event_flags_set(osal::active_traits::event_flags_handle_t* han
     return osal::ok();
 }
 
-/// @brief Clear (AND-invert) the specified bits in the event-flags group.
-/// @param[in] handle  Event-flags handle.
-/// @param[in] bits    Bit mask to clear.
-/// @retval osal::ok()                   On success.
-/// @retval error_code::not_initialized  If null.
 osal::result osal_event_flags_clear(osal::active_traits::event_flags_handle_t* handle, osal::event_bits_t bits) noexcept
 {
     if (!handle || !handle->native) [[unlikely]]
@@ -510,9 +492,6 @@ osal::result osal_event_flags_clear(osal::active_traits::event_flags_handle_t* h
     return osal::ok();
 }
 
-/// @brief Read the current flag bits without blocking (atomic read).
-/// @param[in] handle  Event-flags handle (const).
-/// @return Current bit pattern, or 0 if @p handle is null.
 osal::event_bits_t osal_event_flags_get(const osal::active_traits::event_flags_handle_t* handle) noexcept
 {
     if (!handle || !handle->native) [[unlikely]]
@@ -522,16 +501,6 @@ osal::event_bits_t osal_event_flags_get(const osal::active_traits::event_flags_h
     return static_cast<const emu_ef_obj*>(handle->native)->bits.load(std::memory_order_acquire);
 }
 
-/// @brief Wait until any of the specified bits are set (OR-wait).
-/// @param[in] handle         Event-flags handle.
-/// @param[in] wait_bits      Bit mask to wait for (any bit is sufficient).
-/// @param[out] actual        If non-null, receives the flag value at the time of wakeup.
-/// @param[in] clear_on_exit  If true, the matched bits are cleared before returning.
-/// @param[in] timeout        Maximum ticks to wait; use `osal::WAIT_FOREVER` for indefinite.
-/// @retval osal::ok()                   When matched.
-/// @retval error_code::would_block      If `NO_WAIT` and no bits set.
-/// @retval error_code::timeout          On expiry.
-/// @retval error_code::not_initialized  If null.
 osal::result osal_event_flags_wait_any(osal::active_traits::event_flags_handle_t* handle, osal::event_bits_t wait_bits,
                                        osal::event_bits_t* actual, bool clear_on_exit, osal::tick_t timeout) noexcept
 {
@@ -542,16 +511,6 @@ osal::result osal_event_flags_wait_any(osal::active_traits::event_flags_handle_t
     return emu_ef_wait(static_cast<emu_ef_obj*>(handle->native), wait_bits, actual, clear_on_exit, false, timeout);
 }
 
-/// @brief Wait until all of the specified bits are set (AND-wait).
-/// @param[in] handle         Event-flags handle.
-/// @param[in] wait_bits      Bit mask to wait for (all bits must be set).
-/// @param[out] actual        If non-null, receives the flag value at the time of wakeup.
-/// @param[in] clear_on_exit  If true, the matched bits are cleared before returning.
-/// @param[in] timeout        Maximum ticks to wait; use `osal::WAIT_FOREVER` for indefinite.
-/// @retval osal::ok()                   When all matched.
-/// @retval error_code::would_block      If `NO_WAIT`.
-/// @retval error_code::timeout          On expiry.
-/// @retval error_code::not_initialized  If null.
 osal::result osal_event_flags_wait_all(osal::active_traits::event_flags_handle_t* handle, osal::event_bits_t wait_bits,
                                        osal::event_bits_t* actual, bool clear_on_exit, osal::tick_t timeout) noexcept
 {
@@ -562,14 +521,8 @@ osal::result osal_event_flags_wait_all(osal::active_traits::event_flags_handle_t
     return emu_ef_wait(static_cast<emu_ef_obj*>(handle->native), wait_bits, actual, clear_on_exit, true, timeout);
 }
 
-/// @brief Set bits from ISR context (atomic OR + ISR-safe semaphore give).
-/// @details Backends without `has_isr_event_flags == true` reject this call with
-///          `error_code::not_supported` rather than silently degrading the wakeup semantics.
-/// @param[in] handle  Event-flags handle.
-/// @param[in] bits    Bit mask to OR into the current flags.
-/// @retval osal::ok()                   On success.
-/// @retval error_code::not_supported    When ISR event flags are unavailable.
-/// @retval error_code::not_initialized  If null.
+// Backends without `has_isr_event_flags == true` reject this call with
+// `error_code::not_supported` rather than silently degrading the wakeup semantics.
 osal::result osal_event_flags_set_isr(osal::active_traits::event_flags_handle_t* handle,
                                       osal::event_bits_t                         bits) noexcept
 {

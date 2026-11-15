@@ -44,18 +44,32 @@
 
 extern "C"
 {
+    /// @brief Create a condition variable.
+    /// @param[out] handle Handle storage to initialise.
+    /// @return The backend result; consult its error code if creation fails.
     osal::result osal_condvar_create(osal::active_traits::condvar_handle_t* handle) noexcept;
 
+    /// @brief Destroy a condition variable.
+    /// @param[in,out] handle Handle to destroy.
+    /// @return The backend result; consult its error code if destruction fails.
     osal::result osal_condvar_destroy(osal::active_traits::condvar_handle_t* handle) noexcept;
 
     /// @brief Atomically unlock @p mutex and block until signalled, then re-lock.
+    /// @param[in,out] handle        Initialised condition-variable handle.
+    /// @param[in,out] mutex         Initialised mutex held by the calling thread.
+    /// @param[in]     timeout_ticks Maximum wait in ticks; WAIT_FOREVER waits indefinitely.
+    /// @return The backend result, including any backend-specific wait failure.
     osal::result osal_condvar_wait(osal::active_traits::condvar_handle_t* handle,
                                    osal::active_traits::mutex_handle_t* mutex, osal::tick_t timeout_ticks) noexcept;
 
     /// @brief Wake one waiting thread.
+    /// @param[in,out] handle Initialised condition-variable handle.
+    /// @return The backend result; consult its error code if notification fails.
     osal::result osal_condvar_notify_one(osal::active_traits::condvar_handle_t* handle) noexcept;
 
     /// @brief Wake all waiting threads.
+    /// @param[in,out] handle Initialised condition-variable handle.
+    /// @return The backend result; consult its error code if notification fails.
     osal::result osal_condvar_notify_all(osal::active_traits::condvar_handle_t* handle) noexcept;
 
 }  // extern "C"
@@ -81,10 +95,12 @@ class condvar  // NOLINT(cppcoreguidelines-pro-type-member-init,hicpp-member-ini
 public:
     // ---- construction / destruction ----------------------------------------
 
-    /// @brief Constructs a condition variable.
+    /// @brief Constructs and initializes a condition variable.
+    /// @details Check valid() before relying on the condition variable.
     condvar() noexcept = default;  // NOLINT(cppcoreguidelines-pro-type-member-init,hicpp-member-init)
 
-    /// @brief Destroys the condition variable.
+    /// @brief Destroys the condition variable if initialization succeeded.
+    /// @details No threads may be waiting on it when its lifetime ends.
     ~condvar() noexcept
     {
         if (valid_)
@@ -94,22 +110,34 @@ public:
         }
     }
 
-    condvar(const condvar&)            = delete;
+    /// @brief Copy construction is disabled; the native handle has one owner.
+    condvar(const condvar&) = delete;
+    /// @brief Copy assignment is disabled; the native handle has one owner.
     condvar& operator=(const condvar&) = delete;
-    condvar(condvar&&)                 = delete;
-    condvar& operator=(condvar&&)      = delete;
+    /// @brief Move construction is disabled; the native handle is not transferable.
+    condvar(condvar&&) = delete;
+    /// @brief Move assignment is disabled; the native handle is not transferable.
+    condvar& operator=(condvar&&) = delete;
 
     // ---- wait --------------------------------------------------------------
 
     /// @brief Atomically unlock @p m and block until notified, then re-lock.
-    /// @param[in] m  The mutex that the caller holds.  Must be locked.
+    /// @param[in,out] m The mutex held by the calling thread; it is released
+    ///                  while waiting and reacquired before return.
+    /// @details Thread context only. The mutex and condition variable must
+    ///          remain alive for the duration of the wait.
     void wait(mutex& m) noexcept { (void)osal_condvar_wait(&handle_, m.native_handle(), WAIT_FOREVER); }
 
     /// @brief Waits until @p pred returns true, re-checking after each wakeup.
     /// @details Provides built-in protection against spurious wakeups.
     ///          Equivalent to: @code while (!pred()) cv.wait(m); @endcode
-    /// @param[in] m     The mutex the caller holds.
-    /// @param[in] pred  Callable with signature @c bool().  Evaluated under @p m.
+    /// @param[in,out] m    The mutex held by the calling thread; released while
+    ///                     waiting and reacquired before return.
+    /// @param[in]     pred Callable with signature @c bool(), evaluated under @p m.
+    /// @tparam Predicate   A predicate satisfying @c wait_predicate.
+    /// @details The condition variable and mutex must outlive the wait. Thread
+    ///          context only; a non-positive duration checks the predicate once.
+    ///          The predicate is re-evaluated after each wake.
     template<wait_predicate Predicate>
     void wait(mutex& m, Predicate pred) noexcept(noexcept(pred()))
     {
@@ -120,9 +148,14 @@ public:
     }
 
     /// @brief Timed wait — block until notified or @p timeout expires.
-    /// @param[in] m        The mutex that the caller holds.
-    /// @param[in] timeout  Maximum time to wait.
-    /// @return true if notified; false on timeout.
+    /// @param[in,out] m       The mutex held by the calling thread; released
+    ///                        while waiting and reacquired before return.
+    /// @param[in]     timeout Maximum wait; a non-positive duration does not wait.
+    /// @return true if the backend wait succeeds; false if it reports timeout
+    ///         or another failure.
+    /// @details Thread context only; the mutex and condition variable must
+    ///          remain alive for the duration of the wait. There is no ISR
+    ///          notification overload or ISR-safety guarantee.
     bool wait_for(mutex& m, milliseconds timeout) noexcept
     {
         const tick_t ticks = clock_utils::ms_to_ticks(timeout);
@@ -132,10 +165,12 @@ public:
     /// @brief Timed wait with predicate — returns true if @p pred is satisfied.
     /// @details Loops until @p pred is true or the total deadline is reached.
     ///          Protects against spurious wakeups.
-    /// @param[in] m        The mutex the caller holds.
-    /// @param[in] timeout  Maximum total wait time.
-    /// @param[in] pred     Callable with signature @c bool().  Evaluated under @p m.
-    /// @return true if @p pred was satisfied; false if the timeout expired first.
+    /// @param[in,out] m       The mutex held by the calling thread; released
+    ///                        while waiting and reacquired before return.
+    /// @param[in]     timeout Maximum total wait; a non-positive duration checks the predicate once.
+    /// @param[in]     pred    Callable with signature @c bool(), evaluated under @p m.
+    /// @tparam Predicate       A predicate satisfying @c wait_predicate.
+    /// @return true if @p pred was satisfied; false if the timeout or a condition-variable wait failed.
     template<wait_predicate Predicate>
     bool wait_for(mutex& m, milliseconds timeout, Predicate pred) noexcept(noexcept(pred()))
     {
@@ -155,10 +190,13 @@ public:
     }
 
     /// @brief Waits until an absolute deadline.
-    /// @param[in] m         The mutex the caller holds.
-    /// @param[in] deadline  Absolute monotonic time point.
+    /// @param[in,out] m        The mutex held by the calling thread; released
+    ///                         while waiting and reacquired before return.
+    /// @param[in]     deadline Absolute monotonic time point.
     /// @return true if notified before the deadline; false on timeout.
-    /// @details Loops internally so that tick-count saturation (for unreasonably
+    /// @details Thread context only; the mutex and condition variable must
+    ///          remain alive for the duration of the wait. Loops internally so
+    ///          that tick-count saturation (for unreasonably
     ///          large deadlines) does not cause premature false-timeout returns.
     bool wait_until(mutex& m, monotonic_clock::time_point deadline) noexcept
     {
@@ -180,10 +218,16 @@ public:
     }
 
     /// @brief Waits until an absolute deadline with predicate.
-    /// @param[in] m         The mutex the caller holds.
-    /// @param[in] deadline  Absolute monotonic time point.
-    /// @param[in] pred      Callable with signature @c bool().  Evaluated under @p m.
-    /// @return true if @p pred was satisfied before the deadline; false otherwise.
+    /// @param[in,out] m        The mutex held by the calling thread; released
+    ///                         while waiting and reacquired before return.
+    /// @param[in]     deadline Absolute monotonic time point.
+    /// @param[in]     pred     Callable with signature @c bool(), evaluated under @p m.
+    /// @tparam Predicate        A predicate satisfying @c wait_predicate.
+    /// @return true if @p pred is true when checked; false when the relative wait
+    ///         derived from @p deadline expires.
+    /// @details The implementation uses the remaining duration at entry and
+    ///          delegates to wait_for(); the mutex and condition variable must
+    ///          outlive the call. Thread context only.
     template<wait_predicate Predicate>
     bool wait_until(mutex& m, monotonic_clock::time_point deadline, Predicate pred) noexcept(noexcept(pred()))
     {
@@ -194,14 +238,18 @@ public:
     // ---- notify ------------------------------------------------------------
 
     /// @brief Wake one thread waiting on this condition variable.
+    /// @details May be called from thread context to notify a waiter. A
+    ///          notification is not retained when no thread is waiting.
     void notify_one() noexcept { (void)osal_condvar_notify_one(&handle_); }
 
     /// @brief Wake all threads waiting on this condition variable.
+    /// @details May be called from thread context to notify all current waiters.
     void notify_all() noexcept { (void)osal_condvar_notify_all(&handle_); }
 
     // ---- query -------------------------------------------------------------
 
     /// @brief Returns true if the condition variable was successfully created.
+    /// @return true if backend initialization succeeded.
     [[nodiscard]] bool valid() const noexcept { return valid_; }
 
 private:

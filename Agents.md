@@ -225,3 +225,47 @@ A change is done only when all are true:
   - `CMakeLists.txt`
   - `Doxyfile`
 - Run release verification commands after the synchronized update.
+
+## 25) Doxygen Function Headers
+
+> **Document WHAT/contract at the declaration. Document WHY/HOW at the definition.**
+
+### Placement and Detail
+
+- **Public API declarations:** full Doxygen documentation. Include a brief
+  description, template and function parameters, return values/error codes,
+  and applicable contract details such as preconditions, ownership/lifetime,
+  timeout behavior, capability requirements, and thread/ISR restrictions.
+- **Protected API declarations:** Doxygen when part of an extension/inheritance
+  contract.
+- **Private declarations:** brief Doxygen/comments only where the purpose is
+  not self-evident.
+- **Definitions:** no duplicated API Doxygen. Comment algorithmic choices,
+  hardware quirks, concurrency reasoning, workarounds, and non-obvious
+  implementation constraints.
+- **Header-only/template/`constexpr` code:** when the declaration and definition
+  are the same entity, put the full required Doxygen block immediately above
+  it; apply the visibility rules above.
+
+### Alignment Within Each Function's Doxygen Block
+
+- Align all `@param` names vertically, allowing for different direction tags
+  such as `[in]`, `[out]`, and `[in,out]`.
+- Align all parameter descriptions vertically in their own column.
+- Align all `@retval` return-code names vertically.
+- Align all return-code descriptions vertically in their own column.
+- Use spaces, not tabs. Choose padding per function, not across the whole file.
+  Align wrapped description lines with the description column they continue.
+- Parameter names must match the declaration; document only applicable return
+  values/error codes. Do not invent parameters or return codes for alignment.
+
+Illustrative alignment:
+
+```cpp
+/// @brief Copy bytes into caller-owned storage.
+/// @param[in]     source       Source bytes.
+/// @param[out]    destination  Destination storage.
+/// @param[in,out] count        Requested bytes on entry; copied bytes on return.
+/// @retval osal::error_code::ok                All requested bytes were copied.
+/// @retval osal::error_code::invalid_argument  A required argument is invalid.
+```

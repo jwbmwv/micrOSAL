@@ -90,13 +90,11 @@ vx_sem_slot* vx_sem_find(SEM_ID id) noexcept
 // Helpers
 // ---------------------------------------------------------------------------
 
-/// @brief Map OSAL priority [0=lowest, 255=highest] to VxWorks priority [255=lowest, 0=highest].
 constexpr int osal_to_vx_priority(osal::priority_t p) noexcept
 {
     return 255 - static_cast<int>(p);
 }
 
-/// @brief Convert OSAL tick count to VxWorks tick count.
 int to_vx_ticks(osal::tick_t t) noexcept
 {
     if (t == osal::WAIT_FOREVER)
@@ -202,8 +200,6 @@ extern "C"
     // Clock
     // ---------------------------------------------------------------------------
 
-    /// @brief Return elapsed milliseconds from a monotonic clock.
-    /// @return Monotonic time in milliseconds since an arbitrary epoch.
     std::int64_t osal_clock_monotonic_ms() noexcept
     {
         struct timespec ts
@@ -213,8 +209,6 @@ extern "C"
         return static_cast<std::int64_t>(ts.tv_sec) * 1000LL + static_cast<std::int64_t>(ts.tv_nsec) / 1'000'000LL;
     }
 
-    /// @brief Return wall-clock time in milliseconds since the Unix epoch.
-    /// @return System (real) time in milliseconds.
     std::int64_t osal_clock_system_ms() noexcept
     {
         struct timespec ts
@@ -224,15 +218,11 @@ extern "C"
         return static_cast<std::int64_t>(ts.tv_sec) * 1000LL + static_cast<std::int64_t>(ts.tv_nsec) / 1'000'000LL;
     }
 
-    /// @brief Return the raw RTOS tick counter.
-    /// @return Current tick count cast to `osal::tick_t`.
     osal::tick_t osal_clock_ticks() noexcept
     {
         return static_cast<osal::tick_t>(tickGet());
     }
 
-    /// @brief Return the period of one RTOS tick in microseconds.
-    /// @return Microseconds per tick (derived from `sysClkRateGet()`).
     std::uint32_t osal_clock_tick_period_us() noexcept
     {
         const int rate = sysClkRateGet();
@@ -243,15 +233,6 @@ extern "C"
     // Thread
     // ---------------------------------------------------------------------------
 
-    /// @brief Spawn a VxWorks task via `taskSpawn`.
-    /// @param[out] handle      Output handle; `handle->native` stores the task ID.
-    /// @param[in] entry        Task entry function.
-    /// @param[in] arg          Argument passed to @p entry.
-    /// @param[in] priority     OSAL priority (converted via `osal_to_vx_priority`).
-    /// @param[in] stack_bytes  Stack size in bytes passed to `taskSpawn`.
-    /// @param[in] name         Optional task name.
-    /// @retval osal::ok()                    On success.
-    /// @retval error_code::out_of_resources  On `taskSpawn` failure.
     osal::result osal_thread_create(osal::active_traits::thread_handle_t* handle, void (*entry)(void*), void* arg,
                                     osal::priority_t   priority, osal::affinity_t /*affinity*/, void* /*stack*/,
                                     osal::stack_size_t stack_bytes, const char* name) noexcept
@@ -275,11 +256,6 @@ extern "C"
         return osal::ok();
     }
 
-    /// @brief Delete a VxWorks task via `taskDelete` (no true join available).
-    /// @param[in] handle   Thread handle.
-    /// @param[in] timeout  Ignored; VxWorks has no blocking join primitive.
-    /// @retval osal::ok()                   On success.
-    /// @retval error_code::not_initialized  If @p handle is null.
     osal::result osal_thread_join(osal::active_traits::thread_handle_t* handle, osal::tick_t /*timeout*/) noexcept
     {
         // VxWorks does not have taskJoin; delete the task.
@@ -293,9 +269,6 @@ extern "C"
         return osal::ok();
     }
 
-    /// @brief Detach a thread (clears the handle; fire-and-forget).
-    /// @param[in] handle  Thread handle.
-    /// @retval osal::ok()  Always.
     osal::result osal_thread_detach(osal::active_traits::thread_handle_t* handle) noexcept
     {
         if (handle != nullptr)
@@ -305,11 +278,6 @@ extern "C"
         return osal::ok();
     }
 
-    /// @brief Change a running task's priority via `taskPrioritySet`.
-    /// @param[in] handle    Thread handle.
-    /// @param[in] priority  New OSAL priority.
-    /// @retval osal::ok()           On success.
-    /// @retval error_code::unknown  On kernel error.
     osal::result osal_thread_set_priority(osal::active_traits::thread_handle_t* handle,
                                           osal::priority_t                      priority) noexcept
     {
@@ -321,8 +289,6 @@ extern "C"
         return (taskPrioritySet(tid, osal_to_vx_priority(priority)) == OK) ? osal::ok() : osal::error_code::unknown;
     }
 
-    /// @brief Set CPU affinity — not supported on all VxWorks configurations.
-    /// @return `not_supported` always.
     osal::result osal_thread_set_affinity(osal::active_traits::thread_handle_t* /*handle*/,
                                           osal::affinity_t /*affinity*/) noexcept
     {
@@ -330,30 +296,23 @@ extern "C"
         return osal::error_code::not_supported;
     }
 
-    /// @brief Suspend a thread — not supported in this VxWorks build.
-    /// @return `not_supported` always.
     osal::result osal_thread_suspend(osal::active_traits::thread_handle_t* handle) noexcept
     {
         (void)handle;
         return osal::error_code::not_supported;
     }
 
-    /// @brief Resume a thread — not supported in this VxWorks build.
-    /// @return `not_supported` always.
     osal::result osal_thread_resume(osal::active_traits::thread_handle_t* handle) noexcept
     {
         (void)handle;
         return osal::error_code::not_supported;
     }
 
-    /// @brief Yield the CPU by calling `taskDelay(0)`.
     void osal_thread_yield() noexcept
     {
         taskDelay(0);
     }
 
-    /// @brief Sleep for @p ms milliseconds using `taskDelay`.
-    /// @param[in] ms  Milliseconds to sleep (converted to ticks via `sysClkRateGet`).
     void osal_thread_sleep_ms(std::uint32_t ms) noexcept
     {
         const int rate  = sysClkRateGet();
@@ -369,10 +328,6 @@ extern "C"
     // Mutex (semMCreate — priority inheritance + recursive)
     // ---------------------------------------------------------------------------
 
-    /// @brief Create a mutex via `semMCreate` with priority inheritance.
-    /// @param[out] handle  Output handle; stores the `SEM_ID`.
-    /// @retval osal::ok()                    On success.
-    /// @retval error_code::out_of_resources  On failure.
     osal::result osal_mutex_create(osal::active_traits::mutex_handle_t* handle, bool /*recursive*/) noexcept
     {
         // semMCreate with SEM_INVERSION_SAFE enables priority inheritance.
@@ -386,9 +341,6 @@ extern "C"
         return osal::ok();
     }
 
-    /// @brief Delete a mutex semaphore via `semDelete`.
-    /// @param[in] handle  Mutex handle.
-    /// @retval osal::ok()  Always.
     osal::result osal_mutex_destroy(osal::active_traits::mutex_handle_t* handle) noexcept
     {
         if (handle == nullptr || handle->native == nullptr)
@@ -400,11 +352,6 @@ extern "C"
         return osal::ok();
     }
 
-    /// @brief Acquire the mutex via `semTake`.
-    /// @param[in] handle         Mutex handle.
-    /// @param[in] timeout_ticks  OSAL tick timeout (converted to VxWorks ticks).
-    /// @retval osal::ok()           On success.
-    /// @retval error_code::timeout  On expiry.
     osal::result osal_mutex_lock(osal::active_traits::mutex_handle_t* handle, osal::tick_t timeout_ticks) noexcept
     {
         if (handle == nullptr || handle->native == nullptr)
@@ -415,19 +362,11 @@ extern "C"
         return (rc == OK) ? osal::ok() : osal::error_code::timeout;
     }
 
-    /// @brief Try to acquire the mutex without blocking.
-    /// @param[in] handle  Mutex handle.
-    /// @retval osal::ok()           If acquired immediately.
-    /// @retval error_code::timeout  Otherwise.
     osal::result osal_mutex_try_lock(osal::active_traits::mutex_handle_t* handle) noexcept
     {
         return osal_mutex_lock(handle, osal::NO_WAIT);
     }
 
-    /// @brief Release the mutex via `semGive`.
-    /// @param[in] handle  Mutex handle.
-    /// @retval osal::ok()             On success.
-    /// @retval error_code::not_owner  If the calling task does not own it.
     osal::result osal_mutex_unlock(osal::active_traits::mutex_handle_t* handle) noexcept
     {
         if (handle == nullptr || handle->native == nullptr)
@@ -441,11 +380,6 @@ extern "C"
     // Semaphore (semCCreate — counting semaphore)
     // ---------------------------------------------------------------------------
 
-    /// @brief Create a counting semaphore via `semCCreate`.
-    /// @param[out] handle        Output handle.
-    /// @param[in] initial_count  Starting count.
-    /// @retval osal::ok()                    On success.
-    /// @retval error_code::out_of_resources  On failure.
     osal::result osal_semaphore_create(osal::active_traits::semaphore_handle_t* handle, unsigned initial_count,
                                        unsigned max_count) noexcept
     {
@@ -480,9 +414,6 @@ extern "C"
         return osal::ok();
     }
 
-    /// @brief Delete a counting semaphore via `semDelete`.
-    /// @param[in] handle  Semaphore handle.
-    /// @retval osal::ok()  Always.
     osal::result osal_semaphore_destroy(osal::active_traits::semaphore_handle_t* handle) noexcept
     {
         if (handle == nullptr || handle->native == nullptr)
@@ -500,10 +431,6 @@ extern "C"
         return osal::ok();
     }
 
-    /// @brief Increment the semaphore count via `semGive`.
-    /// @param[in] handle  Semaphore handle.
-    /// @retval osal::ok()           On success.
-    /// @retval error_code::unknown  On kernel error.
     osal::result osal_semaphore_give(osal::active_traits::semaphore_handle_t* handle) noexcept
     {
         if (handle == nullptr || handle->native == nullptr)
@@ -528,19 +455,11 @@ extern "C"
         return osal::ok();
     }
 
-    /// @brief Increment the semaphore from ISR context (`semGive` is ISR-safe).
-    /// @param[in] handle  Semaphore handle.
-    /// @retval osal::ok()  On success.
     osal::result osal_semaphore_give_isr(osal::active_traits::semaphore_handle_t* handle) noexcept
     {
         return osal_semaphore_give(handle);  // semGive is ISR-safe in VxWorks
     }
 
-    /// @brief Decrement the semaphore count, blocking up to @p timeout_ticks.
-    /// @param[in] handle         Semaphore handle.
-    /// @param[in] timeout_ticks  OSAL tick timeout.
-    /// @retval osal::ok()           On success.
-    /// @retval error_code::timeout  On expiry.
     osal::result osal_semaphore_take(osal::active_traits::semaphore_handle_t* handle,
                                      osal::tick_t                             timeout_ticks) noexcept
     {
@@ -556,10 +475,6 @@ extern "C"
         return (rc == OK) ? osal::ok() : osal::error_code::timeout;
     }
 
-    /// @brief Try to decrement the semaphore without blocking.
-    /// @param[in] handle  Semaphore handle.
-    /// @retval osal::ok()           If decremented immediately.
-    /// @retval error_code::timeout  Otherwise.
     osal::result osal_semaphore_try_take(osal::active_traits::semaphore_handle_t* handle) noexcept
     {
         return osal_semaphore_take(handle, osal::NO_WAIT);
@@ -569,12 +484,6 @@ extern "C"
     // Queue (msgQCreate)
     // ---------------------------------------------------------------------------
 
-    /// @brief Create a VxWorks message queue via `msgQCreate`.
-    /// @param[out] handle    Output handle.
-    /// @param[in] item_size  Message size in bytes.
-    /// @param[in] capacity   Maximum number of messages.
-    /// @retval osal::ok()                    On success.
-    /// @retval error_code::out_of_resources  On failure.
     osal::result osal_queue_create(osal::active_traits::queue_handle_t* handle, void* /*buffer*/, std::size_t item_size,
                                    std::size_t capacity) noexcept
     {
@@ -606,9 +515,6 @@ extern "C"
         return osal::ok();
     }
 
-    /// @brief Delete a message queue via `msgQDelete`.
-    /// @param[in] handle  Queue handle.
-    /// @retval osal::ok()  Always.
     osal::result osal_queue_destroy(osal::active_traits::queue_handle_t* handle) noexcept
     {
         if (handle == nullptr || handle->native == nullptr)
@@ -622,12 +528,6 @@ extern "C"
         return osal::ok();
     }
 
-    /// @brief Send a message to the queue via `msgQSend`.
-    /// @param[in] handle         Queue handle.
-    /// @param[in] item           Pointer to message data.
-    /// @param[in] timeout_ticks  OSAL tick timeout.
-    /// @retval osal::ok()           On success.
-    /// @retval error_code::timeout  If the queue is full.
     osal::result osal_queue_send(osal::active_traits::queue_handle_t* handle, const void* item,
                                  osal::tick_t timeout_ticks) noexcept
     {
@@ -641,21 +541,11 @@ extern "C"
         return (rc == OK) ? osal::ok() : osal::error_code::timeout;
     }
 
-    /// @brief Send a message from ISR context (no-wait).
-    /// @param[in] handle  Queue handle.
-    /// @param[in] item    Pointer to message data.
-    /// @retval osal::ok()  On success.
     osal::result osal_queue_send_isr(osal::active_traits::queue_handle_t* handle, const void* item) noexcept
     {
         return osal_queue_send(handle, item, osal::NO_WAIT);
     }
 
-    /// @brief Receive a message from the queue via `msgQReceive`.
-    /// @param[in] handle         Queue handle.
-    /// @param[in] item           Buffer to receive the message into.
-    /// @param[in] timeout_ticks  OSAL tick timeout.
-    /// @retval osal::ok()           On success.
-    /// @retval error_code::timeout  If no message within the deadline.
     osal::result osal_queue_receive(osal::active_traits::queue_handle_t* handle, void* item,
                                     osal::tick_t timeout_ticks) noexcept
     {
@@ -669,18 +559,11 @@ extern "C"
         return (rc != ERROR) ? osal::ok() : osal::error_code::timeout;
     }
 
-    /// @brief Receive a message from ISR context (no-wait).
-    /// @param[in] handle  Queue handle.
-    /// @param[in] item    Buffer to receive the message into.
-    /// @retval osal::ok()           On success.
-    /// @retval error_code::timeout  If the queue is empty.
     osal::result osal_queue_receive_isr(osal::active_traits::queue_handle_t* handle, void* item) noexcept
     {
         return osal_queue_receive(handle, item, osal::NO_WAIT);
     }
 
-    /// @brief Peek at the next message without removing it — not supported on VxWorks.
-    /// @return `not_supported` always.
     osal::result osal_queue_peek(osal::active_traits::queue_handle_t* handle, void* /*item*/,
                                  osal::tick_t /*timeout*/) noexcept
     {
@@ -688,9 +571,6 @@ extern "C"
         return osal::error_code::not_supported;  // VxWorks msgQ has no peek
     }
 
-    /// @brief Query the number of messages in the queue via `msgQNumMsgs`.
-    /// @param[in] handle  Queue handle (const).
-    /// @return Number of messages currently queued.
     std::size_t osal_queue_count(const osal::active_traits::queue_handle_t* handle) noexcept
     {
         if (handle == nullptr || handle->native == nullptr)
@@ -702,8 +582,6 @@ extern "C"
         return (count > 0) ? static_cast<std::size_t>(count) : 0U;
     }
 
-    /// @brief Query remaining queue capacity — not directly queryable on VxWorks.
-    /// @return 0 always.
     std::size_t osal_queue_free(const osal::active_traits::queue_handle_t* handle) noexcept
     {
         if (handle == nullptr || handle->native == nullptr)
@@ -724,14 +602,6 @@ extern "C"
     // Timer (watchdog — wdCreate / wdStart / wdCancel)
     // ---------------------------------------------------------------------------
 
-    /// @brief Create a VxWorks watchdog timer.
-    /// @param[out] handle       Output handle; stores an index into `vx_timer_ctxs`.
-    /// @param[in] callback      Function invoked when the timer fires.
-    /// @param[in] arg           Argument passed to @p callback.
-    /// @param[in] period_ticks  Period in OSAL ticks.
-    /// @param[in] auto_reload   `true` for a periodic timer; `false` for one-shot.
-    /// @retval osal::ok()                    On success.
-    /// @retval error_code::out_of_resources  If no slot or `wdCreate` fails.
     osal::result osal_timer_create(osal::active_traits::timer_handle_t* handle, const char* /*name*/,
                                    osal_timer_callback_t callback, void* arg, osal::tick_t period_ticks,
                                    bool auto_reload) noexcept
@@ -781,9 +651,6 @@ extern "C"
         return osal::ok();
     }
 
-    /// @brief Cancel and delete a watchdog timer; recycles the context slot.
-    /// @param[in] handle  Timer handle.
-    /// @retval osal::ok()  Always.
     osal::result osal_timer_destroy(osal::active_traits::timer_handle_t* handle) noexcept
     {
         if (handle == nullptr || handle->native == nullptr)
@@ -812,10 +679,6 @@ extern "C"
         return osal::ok();
     }
 
-    /// @brief Arm the watchdog timer via `wdStart`.
-    /// @param[in] handle  Timer handle.
-    /// @retval osal::ok()                   On success.
-    /// @retval error_code::not_initialized  If the handle is invalid.
     osal::result osal_timer_start(osal::active_traits::timer_handle_t* handle) noexcept
     {
         if (handle == nullptr)
@@ -841,10 +704,6 @@ extern "C"
         return (rc == OK) ? osal::ok() : osal::error_code::unknown;
     }
 
-    /// @brief Disarm the watchdog timer via `wdCancel`.
-    /// @param[in] handle  Timer handle.
-    /// @retval osal::ok()                   On success.
-    /// @retval error_code::not_initialized  If the handle is invalid.
     osal::result osal_timer_stop(osal::active_traits::timer_handle_t* handle) noexcept
     {
         if (handle == nullptr)
@@ -871,9 +730,6 @@ extern "C"
         return osal::ok();
     }
 
-    /// @brief Stop then re-arm the watchdog timer.
-    /// @param[in] handle  Timer handle.
-    /// @retval osal::ok()  On success.
     osal::result osal_timer_reset(osal::active_traits::timer_handle_t* handle) noexcept
     {
         const auto stopped = osal_timer_stop(handle);
@@ -884,11 +740,6 @@ extern "C"
         return osal_timer_start(handle);
     }
 
-    /// @brief Change the period stored in the context; re-arm to apply.
-    /// @param[in] handle            Timer handle.
-    /// @param[in] new_period_ticks  New period in OSAL ticks.
-    /// @retval osal::ok()                   On success.
-    /// @retval error_code::not_initialized  If the handle is invalid.
     osal::result osal_timer_set_period(osal::active_traits::timer_handle_t* handle,
                                        osal::tick_t                         new_period_ticks) noexcept
     {
@@ -919,10 +770,7 @@ extern "C"
         return osal::ok();
     }
 
-    /// @brief Query whether a watchdog timer is active.
-    /// @note A shadow flag tracks explicit start/stop and one-shot expiry.
-    /// @param[in] handle  Timer handle (const).
-    /// @return `true` if the watchdog appears active, `false` otherwise.
+    // Note: A shadow flag tracks explicit start/stop and one-shot expiry.
     bool osal_timer_is_active(const osal::active_traits::timer_handle_t* handle) noexcept
     {
         if (handle == nullptr)
@@ -942,35 +790,24 @@ extern "C"
     // Wait-set (select() on VxWorks I/O)
     // ---------------------------------------------------------------------------
 
-    /// @brief Create a wait-set — not supported in this VxWorks build.
-    /// @return `not_supported` always.
     osal::result osal_wait_set_create(osal::active_traits::wait_set_handle_t* handle) noexcept
     {
         (void)handle;
         return osal::error_code::not_supported;
     }
-    /// @brief Destroy a wait-set — not supported.
-    /// @return `not_supported` always.
     osal::result osal_wait_set_destroy(osal::active_traits::wait_set_handle_t* handle) noexcept
     {
         (void)handle;
         return osal::error_code::not_supported;
     }
-    /// @brief Add a fd to a wait-set — not supported.
-    /// @return `not_supported` always.
     osal::result osal_wait_set_add(osal::active_traits::wait_set_handle_t*, int, std::uint32_t) noexcept
     {
         return osal::error_code::not_supported;
     }
-    /// @brief Remove a fd from a wait-set — not supported.
-    /// @return `not_supported` always.
     osal::result osal_wait_set_remove(osal::active_traits::wait_set_handle_t*, int) noexcept
     {
         return osal::error_code::not_supported;
     }
-    /// @brief Block on a wait-set — not supported.
-    /// @param[out] n  Set to 0 if non-null.
-    /// @return `not_supported` always.
     osal::result osal_wait_set_wait(osal::active_traits::wait_set_handle_t*, int*, std::size_t, std::size_t* n,
                                     osal::tick_t) noexcept
     {
@@ -985,10 +822,6 @@ extern "C"
     // Condition variable (native — VxWorks condVarLib)
     // ---------------------------------------------------------------------------
 
-    /// @brief Create a condition variable via `condVarCreate`.
-    /// @param[out] handle  Output handle.
-    /// @retval osal::ok()                    On success.
-    /// @retval error_code::out_of_resources  On failure.
     osal::result osal_condvar_create(osal::active_traits::condvar_handle_t* handle) noexcept
     {
         if (handle == nullptr)
@@ -1004,9 +837,6 @@ extern "C"
         return osal::ok();
     }
 
-    /// @brief Delete a condition variable via `condVarDelete`.
-    /// @param[in] handle  Condvar handle.
-    /// @retval osal::ok()  Always.
     osal::result osal_condvar_destroy(osal::active_traits::condvar_handle_t* handle) noexcept
     {
         if (handle == nullptr || handle->native == nullptr)
@@ -1018,12 +848,6 @@ extern "C"
         return osal::ok();
     }
 
-    /// @brief Atomically release @p mutex and wait on the condition variable via `condVarWait`.
-    /// @param[in] handle   Condvar handle.
-    /// @param[in] mutex    Mutex to release during wait.
-    /// @param[in] timeout  OSAL tick timeout.
-    /// @retval osal::ok()           On signal.
-    /// @retval error_code::timeout  On expiry.
     osal::result osal_condvar_wait(osal::active_traits::condvar_handle_t* handle,
                                    osal::active_traits::mutex_handle_t* mutex, osal::tick_t timeout) noexcept
     {
@@ -1037,9 +861,6 @@ extern "C"
         return (rc == OK) ? osal::ok() : osal::error_code::timeout;
     }
 
-    /// @brief Wake one waiting thread via `condVarSignal`.
-    /// @param[in] handle  Condvar handle.
-    /// @retval osal::ok()  On success.
     osal::result osal_condvar_notify_one(osal::active_traits::condvar_handle_t* handle) noexcept
     {
         if (handle == nullptr || handle->native == nullptr)
@@ -1050,9 +871,6 @@ extern "C"
         return osal::ok();
     }
 
-    /// @brief Wake all waiting threads via `condVarBroadcast`.
-    /// @param[in] handle  Condvar handle.
-    /// @retval osal::ok()  On success.
     osal::result osal_condvar_notify_all(osal::active_traits::condvar_handle_t* handle) noexcept
     {
         if (handle == nullptr || handle->native == nullptr)

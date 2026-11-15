@@ -32,13 +32,8 @@
 // Condition variable (native — pthread_cond_t)
 // -------------------------------------------------------------------------
 
-/// @brief Create a POSIX condition variable using `CLOCK_MONOTONIC` if available.
-/// @details Allocates a heap `pthread_cond_t` and initialises it via
-///          `cond_init_monotonic()` (supplied by the including backend).
-/// @param[out] handle  Output handle; populated on success.
-/// @retval osal::ok()                    On success.
-/// @retval error_code::invalid_argument  If null.
-/// @retval error_code::out_of_resources  On allocation or init failure.
+// Allocates a heap `pthread_cond_t` and initialises it via
+// `cond_init_monotonic()` (supplied by the including backend).
 osal::result osal_condvar_create(osal::active_traits::condvar_handle_t* handle) noexcept
 {
     if (!handle)
@@ -59,9 +54,6 @@ osal::result osal_condvar_create(osal::active_traits::condvar_handle_t* handle) 
     return osal::ok();
 }
 
-/// @brief Destroy a POSIX condition variable.
-/// @param[in,out] handle  Handle to destroy; silently ignored if null.
-/// @retval osal::ok()  Always.
 osal::result osal_condvar_destroy(osal::active_traits::condvar_handle_t* handle) noexcept
 {
     if (!handle || !handle->native)
@@ -74,15 +66,8 @@ osal::result osal_condvar_destroy(osal::active_traits::condvar_handle_t* handle)
     return osal::ok();
 }
 
-/// @brief Atomically release @p mutex and block on the condvar until notified or timeout.
-/// @details Delegates to `pthread_cond_wait` (infinite) or `pthread_cond_timedwait`
-///          with an absolute deadline derived from `OSAL_POSIX_COND_ABS(timeout)`.
-/// @param[in] handle   Condvar handle.
-/// @param[in] mutex    Mutex currently held; released during wait.
-/// @param[in] timeout  Maximum ticks to wait; use `osal::WAIT_FOREVER` for indefinite.
-/// @retval osal::ok()                   On notification.
-/// @retval error_code::timeout          On expiry.
-/// @retval error_code::not_initialized  If either handle is null.
+// Delegates to `pthread_cond_wait` (infinite) or `pthread_cond_timedwait`
+// with an absolute deadline derived from `OSAL_POSIX_COND_ABS(timeout)`.
 osal::result osal_condvar_wait(osal::active_traits::condvar_handle_t* handle,
                                osal::active_traits::mutex_handle_t* mutex, osal::tick_t timeout) noexcept
 {
@@ -103,10 +88,6 @@ osal::result osal_condvar_wait(osal::active_traits::condvar_handle_t* handle,
     return (rc == 0) ? osal::ok() : osal::error_code::timeout;
 }
 
-/// @brief Wake one waiting thread via `pthread_cond_signal`.
-/// @param[in] handle  Condvar handle.
-/// @retval osal::ok()                   On success.
-/// @retval error_code::not_initialized  If null.
 osal::result osal_condvar_notify_one(osal::active_traits::condvar_handle_t* handle) noexcept
 {
     if (!handle || !handle->native)
@@ -117,10 +98,6 @@ osal::result osal_condvar_notify_one(osal::active_traits::condvar_handle_t* hand
     return osal::ok();
 }
 
-/// @brief Wake all waiting threads via `pthread_cond_broadcast`.
-/// @param[in] handle  Condvar handle.
-/// @retval osal::ok()                   On success.
-/// @retval error_code::not_initialized  If null.
 osal::result osal_condvar_notify_all(osal::active_traits::condvar_handle_t* handle) noexcept
 {
     if (!handle || !handle->native)

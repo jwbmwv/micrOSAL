@@ -102,7 +102,7 @@ template<typename NativeThreadId>
     return static_cast<osal::priority_t>(((clamped_priority - min_p) * osal::PRIORITY_HIGHEST) / (max_p - min_p));
 }
 
-/// @brief Determine the best clock for condvars.
+// Determine the best clock for condvars.
 /// macOS lacks pthread_condattr_setclock, so fall back to CLOCK_REALTIME.
 #if defined(__APPLE__) || !defined(_POSIX_MONOTONIC_CLOCK)
 constexpr clockid_t kCondClock = CLOCK_REALTIME;
@@ -110,27 +110,16 @@ constexpr clockid_t kCondClock = CLOCK_REALTIME;
 constexpr clockid_t kCondClock = CLOCK_MONOTONIC;
 #endif
 
-/// @brief Build an absolute timespec relative to the given clock.
-/// @param[in] clk            Clock used as the timespec reference.
-/// @param[in] timeout_ticks  Relative OSAL timeout in ticks.
-/// @return Absolute deadline expressed in @p clk time.
 [[nodiscard]] timespec ms_to_abs_timespec(clockid_t clk, osal::tick_t timeout_ticks) noexcept
 {
     return osal::detail::backend_timeout_adapter::to_abs_timespec(clk, timeout_ticks);
 }
 
-/// @brief Absolute timespec for sem_timedwait / pthread_mutex_timedlock.
-/// POSIX mandates these use CLOCK_REALTIME (no clockid parameter).
-/// @param[in] timeout_ticks  Relative OSAL timeout in ticks.
-/// @return Absolute CLOCK_REALTIME deadline.
 [[nodiscard]] timespec ms_to_abs_timespec_realtime(osal::tick_t timeout_ticks) noexcept
 {
     return ms_to_abs_timespec(CLOCK_REALTIME, timeout_ticks);
 }
 
-/// @brief Absolute timespec for condvar waits (uses MONOTONIC where available).
-/// @param[in] timeout_ticks  Relative OSAL timeout in ticks.
-/// @return Absolute deadline expressed in the configured condvar clock.
 [[nodiscard]] timespec ms_to_abs_timespec_cond(osal::tick_t timeout_ticks) noexcept
 {
     return ms_to_abs_timespec(kCondClock, timeout_ticks);
@@ -141,9 +130,6 @@ constexpr clockid_t kCondClock = CLOCK_MONOTONIC;
     return osal::detail::backend_timeout_adapter::to_poll_timeout_ms(timeout_ticks);
 }
 
-/// @brief Init a condvar with CLOCK_MONOTONIC where supported.
-/// @param[out] cond  Condvar to initialize.
-/// @return Zero on success; otherwise the native pthread error code.
 int cond_init_monotonic(pthread_cond_t* cond) noexcept
 {
 #if defined(__APPLE__) || !defined(_POSIX_MONOTONIC_CLOCK)
@@ -199,11 +185,8 @@ void posix_timer_release(posix_timer_ctx* ctx) noexcept
     delete ctx;
 }
 
-/// @brief Run one timer with serialized fixed-delay periodic callbacks.
-/// @details For periodic timers, each callback is followed by a full period wait.
-///          Callbacks never overlap and missed expirations are not replayed.
-/// @param[in] raw  Timer context supplied to pthread_create().
-/// @return nullptr when the watcher exits.
+// For periodic timers, each callback is followed by a full period wait.
+// Callbacks never overlap and missed expirations are not replayed.
 void* posix_timer_watcher(void* raw) noexcept
 {
     auto* const ctx = static_cast<posix_timer_ctx*>(raw);
@@ -297,21 +280,16 @@ extern "C"
 
 #include "../common/posix/posix_clock.inl"
 
-    /// @brief Return the current CLOCK_MONOTONIC time in milliseconds (1 tick = 1 ms).
-    /// @return Monotonic millisecond tick count via osal_clock_monotonic_ms().
     osal::tick_t osal_clock_ticks() noexcept
     {
         return static_cast<osal::tick_t>(osal_clock_monotonic_ms());
     }
 
-    /// @brief Return the tick period in microseconds (1 tick = 1 ms on POSIX).
-    /// @return 1000 always.
     std::uint32_t osal_clock_tick_period_us() noexcept
     {
         return 1'000U;
     }  // 1 ms per tick
 
-    /// @brief Return the current CLOCK_MONOTONIC time in nanoseconds.
     std::int64_t osal_clock_high_resolution_ns() noexcept
     {
         timespec ts{};
@@ -322,7 +300,6 @@ extern "C"
         return timespec_to_nanoseconds(ts);
     }
 
-    /// @brief Return the nominal CLOCK_MONOTONIC resolution in nanoseconds.
     std::int64_t osal_clock_high_resolution_resolution_ns() noexcept
     {
         timespec ts{};
@@ -338,18 +315,8 @@ extern "C"
     // Thread
     // ---------------------------------------------------------------------------
 
-    /// @brief Create a POSIX pthread.
-    /// @details Uses SCHED_FIFO when @p priority differs from PRIORITY_NORMAL.
-    ///          On Linux, sets CPU affinity via pthread_setaffinity_np() if @p affinity != AFFINITY_ANY.
-    /// @param[out] handle      Output handle that stores pthread_t as a void pointer.
-    /// @param[in] entry        Thread entry function.
-    /// @param[in] arg          Opaque argument forwarded to @p entry.
-    /// @param[in] priority     OSAL priority mapped to SCHED_FIFO range.
-    /// @param[in] affinity     CPU affinity bitmask (Linux only; ignored elsewhere).
-    /// @param[in] stack        Optional caller-provided stack storage.
-    /// @param[in] stack_bytes  Size of @p stack in bytes.
-    /// @retval osal::ok()                            Thread created successfully.
-    /// @retval osal::error_code::out_of_resources    Thread context or pthread creation failed.
+    // Uses SCHED_FIFO when priority differs from PRIORITY_NORMAL.
+    // On Linux, sets CPU affinity via pthread_setaffinity_np() if affinity != AFFINITY_ANY.
     osal::result osal_thread_create(osal::active_traits::thread_handle_t* handle, void (*entry)(void*), void* arg,
                                     osal::priority_t priority, osal::affinity_t affinity, void* stack,
                                     osal::stack_size_t stack_bytes, const char* /*name*/) noexcept
@@ -403,13 +370,6 @@ extern "C"
         return osal::ok();
     }
 
-    /// @brief Wait for a thread to exit via pthread_join() or pthread_timedjoin_np() (Linux/POSIX.1).
-    /// @param[in,out] handle     Thread handle; cleared after a successful join.
-    /// @param[in] timeout_ticks  Maximum wait; WAIT_FOREVER uses blocking pthread_join().
-    /// @retval osal::ok()                         Thread joined successfully.
-    /// @retval osal::error_code::not_initialized  The handle is null or has no native thread.
-    /// @retval osal::error_code::timeout          The finite join timeout expired.
-    /// @retval osal::error_code::unknown          The native join operation failed.
     osal::result osal_thread_join(osal::active_traits::thread_handle_t* handle, osal::tick_t timeout_ticks) noexcept
     {
         if (handle_is_null(handle)) [[unlikely]]
@@ -457,10 +417,6 @@ extern "C"
 #endif
     }
 
-    /// @brief Detach the pthread via pthread_detach().
-    /// @param[in,out] handle  Thread handle; cleared after successful detachment.
-    /// @retval osal::ok()                         Thread detached successfully.
-    /// @retval osal::error_code::not_initialized  The handle is null or has no native thread.
     osal::result osal_thread_detach(osal::active_traits::thread_handle_t* handle) noexcept
     {
         if (handle_is_null(handle)) [[unlikely]]
@@ -474,12 +430,6 @@ extern "C"
         return osal::ok();
     }
 
-    /// @brief Return a comparable opaque identifier for a thread.
-    /// @param[in] handle   Thread handle, or nullptr to identify the calling thread.
-    /// @param[out] out_id  Receives the opaque thread identifier.
-    /// @retval osal::ok()                         The identifier was written to @p out_id.
-    /// @retval osal::error_code::invalid_argument @p out_id is null.
-    /// @retval osal::error_code::not_initialized  @p handle has no native thread.
     osal::result osal_thread_get_id(const osal::active_traits::thread_handle_t* handle,
                                     osal::thread_id_t*                          out_id) noexcept
     {
@@ -502,13 +452,6 @@ extern "C"
         return osal::ok();
     }
 
-    /// @brief Query the current scheduler priority of a thread.
-    /// @param[in] handle         Thread handle, or nullptr to query the calling thread.
-    /// @param[out] out_priority  Receives the OSAL priority.
-    /// @retval osal::ok()                         The priority was written to @p out_priority.
-    /// @retval osal::error_code::invalid_argument @p out_priority is null.
-    /// @retval osal::error_code::not_initialized  @p handle has no native thread.
-    /// @retval osal::error_code::unknown          The native priority query failed.
     osal::result osal_thread_get_priority(const osal::active_traits::thread_handle_t* handle,
                                           osal::priority_t*                           out_priority) noexcept
     {
@@ -540,12 +483,8 @@ extern "C"
         return osal::ok();
     }
 
-    /// @brief Draft thread stack-watermark query for POSIX.
-    /// @details POSIX pthreads do not expose a portable low-watermark metric,
-    ///          so the draft API remains unsupported on this backend.
-    /// @param[in] handle      Thread handle; ignored by this backend.
-    /// @param[out] out_bytes  Receives zero when non-null.
-    /// @retval osal::error_code::not_supported  POSIX has no portable stack-watermark query.
+    // POSIX pthreads do not expose a portable low-watermark metric,
+    // so the draft API remains unsupported on this backend.
     osal::result osal_thread_stack_low_watermark_bytes(const osal::active_traits::thread_handle_t* /*handle*/,
                                                        std::size_t* out_bytes) noexcept
     {
@@ -556,15 +495,8 @@ extern "C"
         return osal::error_code::not_supported;
     }
 
-    /// @brief Returns the accumulated CPU time for a thread in microseconds.
-    /// @details Uses @c CLOCK_THREAD_CPUTIME_ID for the current thread and
-    ///          @c pthread_getcpuclockid() for an arbitrary joinable thread.
-    /// @param[in] handle   Thread handle, or nullptr to query the calling thread.
-    /// @param[out] out_us  Receives accumulated CPU time in microseconds.
-    /// @retval osal::ok()                         The execution time was written to @p out_us.
-    /// @retval osal::error_code::invalid_argument @p out_us is null.
-    /// @retval osal::error_code::not_initialized  @p handle has no native thread.
-    /// @retval osal::error_code::unknown          The native clock query failed.
+    // Uses CLOCK_THREAD_CPUTIME_ID for the current thread and
+    // pthread_getcpuclockid() for an arbitrary joinable thread.
     osal::result osal_thread_execution_time_us(const osal::active_traits::thread_handle_t* handle,
                                                std::int64_t*                               out_us) noexcept
     {
@@ -598,12 +530,6 @@ extern "C"
         return osal::ok();
     }
 
-    /// @brief Change the thread's scheduler priority using its current policy.
-    /// @param[in] handle    Thread handle.
-    /// @param[in] priority  OSAL priority mapped to the policy's range.
-    /// @retval osal::ok()                              Thread priority changed successfully.
-    /// @retval osal::error_code::not_initialized       The handle is null or has no native thread.
-    /// @retval osal::error_code::permission_denied     The caller lacks scheduling permission.
     osal::result osal_thread_set_priority(osal::active_traits::thread_handle_t* handle,
                                           osal::priority_t                      priority) noexcept
     {
@@ -627,13 +553,6 @@ extern "C"
         return (rc == 0) ? osal::ok() : osal::error_code::permission_denied;
     }
 
-    /// @brief Set CPU affinity via pthread_setaffinity_np() (Linux-only).
-    /// @param[in] handle    Thread handle.
-    /// @param[in] affinity  CPU bitmask; each set bit represents a processor to allow.
-    /// @retval osal::ok()                         Thread affinity changed successfully.
-    /// @retval osal::error_code::not_initialized  The handle is null or has no native thread.
-    /// @retval osal::error_code::not_supported    The backend does not support thread affinity.
-    /// @retval osal::error_code::unknown          The native affinity operation failed.
     osal::result osal_thread_set_affinity(osal::active_traits::thread_handle_t* handle,
                                           osal::affinity_t                      affinity) noexcept
     {
@@ -661,31 +580,22 @@ extern "C"
 #endif
     }
 
-    /// @brief Suspend a thread (not supported on POSIX through this OSAL).
-    /// @param[in] handle  Thread handle; ignored by this backend.
-    /// @retval osal::error_code::not_supported  Always; POSIX suspension is not exposed by this OSAL.
     osal::result osal_thread_suspend(osal::active_traits::thread_handle_t* handle) noexcept
     {
         (void)handle;
         return osal::error_code::not_supported;
     }
 
-    /// @brief Resume a suspended thread (not supported on POSIX through this OSAL).
-    /// @param[in] handle  Thread handle; ignored by this backend.
-    /// @retval osal::error_code::not_supported  Always; POSIX resumption is not exposed by this OSAL.
     osal::result osal_thread_resume(osal::active_traits::thread_handle_t* handle) noexcept
     {
         (void)handle;
         return osal::error_code::not_supported;
     }
 
-    /// @brief Yield the current thread via sched_yield().
     void osal_thread_yield() noexcept
     {
         sched_yield();
     }
-    /// @brief Sleep for at least @p ms milliseconds via nanosleep().
-    /// @param[in] ms  Minimum delay in milliseconds.
     void osal_thread_sleep_ms(std::uint32_t ms) noexcept
     {
         const auto nanoseconds = static_cast<std::int64_t>(ms % 1000U) * kNanosecondsPerMillisecond;
@@ -700,20 +610,12 @@ extern "C"
     // Mutex
     // ---------------------------------------------------------------------------
 
-    /// @brief Allocate and initialise a pthread_mutex_t; ERRORCHECK or RECURSIVE type.
-    /// @param[out] handle    Output handle that owns a heap-allocated pthread_mutex_t.
-    /// @param[in] recursive  True selects PTHREAD_MUTEX_RECURSIVE; false selects ERRORCHECK.
-    /// @retval osal::ok()                         Mutex created successfully.
-    /// @retval osal::error_code::out_of_resources Native mutex allocation or initialization failed.
     osal::result osal_mutex_create(osal::active_traits::mutex_handle_t* handle, bool recursive) noexcept
     {
         return osal::detail::create_pthread_mutex(handle,
                                                   {recursive ? osal::mutex_type::recursive : osal::mutex_type::normal});
     }
 
-    /// @brief Destroy the pthread_mutex_t and free heap storage.
-    /// @param[in,out] handle  Mutex handle; cleared after destruction.
-    /// @retval osal::ok()  Always.
     osal::result osal_mutex_destroy(osal::active_traits::mutex_handle_t* handle) noexcept
     {
         if (handle_is_null(handle)) [[unlikely]]
@@ -731,14 +633,6 @@ extern "C"
         return osal::ok();
     }
 
-    /// @brief Acquire the mutex; uses pthread_mutex_timedlock() with CLOCK_REALTIME for finite timeouts.
-    /// @param[in] handle         Mutex handle.
-    /// @param[in] timeout_ticks  Maximum wait in OSAL ticks; WAIT_FOREVER uses pthread_mutex_lock().
-    /// @retval osal::ok()                         Mutex acquired successfully.
-    /// @retval osal::error_code::not_initialized  The handle is null or has no native mutex.
-    /// @retval osal::error_code::would_block      The mutex was unavailable with NO_WAIT.
-    /// @retval osal::error_code::timeout          The finite acquisition timeout expired.
-    /// @retval osal::error_code::unknown          The native mutex operation failed.
     osal::result osal_mutex_lock(osal::active_traits::mutex_handle_t* handle, osal::tick_t timeout_ticks) noexcept
     {
         if (handle_is_null(handle)) [[unlikely]]
@@ -759,21 +653,11 @@ extern "C"
         return osal::detail::pthread_mutex_status(pthread_mutex_timedlock(m, &abs));
     }
 
-    /// @brief Try to acquire the mutex without blocking.
-    /// @param[in] handle  Mutex handle.
-    /// @retval osal::ok()                         Mutex acquired successfully.
-    /// @retval osal::error_code::not_initialized  The handle is null or has no native mutex.
-    /// @retval osal::error_code::would_block      The mutex is unavailable.
     osal::result osal_mutex_try_lock(osal::active_traits::mutex_handle_t* handle) noexcept
     {
         return osal_mutex_lock(handle, osal::NO_WAIT);
     }
 
-    /// @brief Release the mutex via pthread_mutex_unlock().
-    /// @param[in] handle  Mutex handle.
-    /// @retval osal::ok()                         Mutex released successfully.
-    /// @retval osal::error_code::not_initialized  The handle is null or has no native mutex.
-    /// @retval osal::error_code::not_owner        The calling thread does not own the mutex.
     osal::result osal_mutex_unlock(osal::active_traits::mutex_handle_t* handle) noexcept
     {
         if (handle_is_null(handle)) [[unlikely]]
@@ -790,12 +674,6 @@ extern "C"
 
 #include "../common/posix/posix_bounded_semaphore.inl"
 
-    /// @brief Allocate and initialise a bounded POSIX sem_t via sem_init().
-    /// @param[out] handle        Output handle that owns a heap-allocated sem_t.
-    /// @param[in] initial_count  Starting token count.
-    /// @param[in] max_count      Maximum token count; excess gives return overflow.
-    /// @retval osal::ok()                         Semaphore created successfully.
-    /// @retval osal::error_code::out_of_resources Native semaphore allocation or initialization failed.
     osal::result osal_semaphore_create(osal::active_traits::semaphore_handle_t* handle, unsigned initial_count,
                                        unsigned max_count) noexcept
     {
@@ -819,9 +697,6 @@ extern "C"
         return osal::ok();
     }
 
-    /// @brief Destroy the sem_t via sem_destroy() and free heap storage.
-    /// @param[in,out] handle  Semaphore handle; cleared after destruction.
-    /// @retval osal::ok()  Always.
     osal::result osal_semaphore_destroy(osal::active_traits::semaphore_handle_t* handle) noexcept
     {
         if (handle_is_null(handle)) [[unlikely]]
@@ -834,11 +709,6 @@ extern "C"
         return osal::ok();
     }
 
-    /// @brief Increment (post) the semaphore via sem_post().
-    /// @param[in] handle  Semaphore handle.
-    /// @retval osal::ok()                         Semaphore incremented successfully.
-    /// @retval osal::error_code::not_initialized  The handle is null or has no native semaphore.
-    /// @retval osal::error_code::unknown          The native semaphore operation failed.
     osal::result osal_semaphore_give(osal::active_traits::semaphore_handle_t* handle) noexcept
     {
         if (handle_is_null(handle)) [[unlikely]]
@@ -848,26 +718,13 @@ extern "C"
         return bounded_sem_post(static_cast<posix_bounded_semaphore*>(handle->native));
     }
 
-    /// @brief Increment the semaphore from ISR context (sem_post is async-signal-safe on POSIX).
-    /// @param[in] handle  Semaphore handle.
-    /// @retval osal::ok()                         Semaphore incremented successfully.
-    /// @retval osal::error_code::not_initialized  The handle is null or has no native semaphore.
-    /// @retval osal::error_code::unknown          The native semaphore operation failed.
     osal::result osal_semaphore_give_isr(osal::active_traits::semaphore_handle_t* handle) noexcept
     {
         return osal_semaphore_give(handle);  // sem_post is async-signal-safe
     }
 
-    /// @brief Decrement (wait on) the semaphore.
-    /// @details Uses sem_wait() (forever), sem_trywait() (NO_WAIT), or
-    ///          sem_timedwait() with CLOCK_REALTIME (timed).
-    /// @param[in] handle         Semaphore handle.
-    /// @param[in] timeout_ticks  Maximum wait in OSAL ticks.
-    /// @retval osal::ok()                         Semaphore decremented successfully.
-    /// @retval osal::error_code::not_initialized  The handle is null or has no native semaphore.
-    /// @retval osal::error_code::would_block      The semaphore has no token with NO_WAIT.
-    /// @retval osal::error_code::timeout          The finite wait timeout expired.
-    /// @retval osal::error_code::unknown          The native semaphore operation failed.
+    // Uses sem_wait() (forever), sem_trywait() (NO_WAIT), or
+    // sem_timedwait() with CLOCK_REALTIME (timed).
     osal::result osal_semaphore_take(osal::active_traits::semaphore_handle_t* handle,
                                      osal::tick_t                             timeout_ticks) noexcept
     {
@@ -907,11 +764,6 @@ extern "C"
         return osal::error_code::unknown;
     }
 
-    /// @brief Try to decrement the semaphore without blocking.
-    /// @param[in] handle  Semaphore handle.
-    /// @retval osal::ok()                         Semaphore decremented successfully.
-    /// @retval osal::error_code::not_initialized  The handle is null or has no native semaphore.
-    /// @retval osal::error_code::would_block      The semaphore has no token.
     osal::result osal_semaphore_try_take(osal::active_traits::semaphore_handle_t* handle) noexcept
     {
         return osal_semaphore_take(handle, osal::NO_WAIT);
@@ -934,14 +786,7 @@ extern "C"
         std::size_t     count;
     };
 
-    /// @brief Create a circular-buffer queue backed by caller-supplied @p buffer.
-    /// @details Internal mutex and condvars use the best available monotonic clock.
-    /// @param[out] handle  Output handle that owns a heap-allocated posix_queue_obj.
-    /// @param[in] buf      Caller-provided mutable storage for @p cap elements.
-    /// @param[in] item_sz  Size of each element in bytes.
-    /// @param[in] cap      Maximum number of elements the queue can hold.
-    /// @retval osal::ok()                         Queue created successfully.
-    /// @retval osal::error_code::out_of_resources Queue control-object allocation failed.
+    // Internal mutex and condvars use the best available monotonic clock.
     osal::result osal_queue_create(osal::active_traits::queue_handle_t* handle, void* buf, std::size_t item_sz,
                                    std::size_t cap) noexcept
     {
@@ -962,9 +807,6 @@ extern "C"
         return osal::ok();
     }
 
-    /// @brief Destroy the circular-buffer queue: destroy condvars, mutex, and free the object.
-    /// @param[in,out] handle  Queue handle; cleared after destruction.
-    /// @retval osal::ok()  Always.
     osal::result osal_queue_destroy(osal::active_traits::queue_handle_t* handle) noexcept
     {
         if (handle_is_null(handle)) [[unlikely]]
@@ -980,14 +822,6 @@ extern "C"
         return osal::ok();
     }
 
-    /// @brief Send an item into the queue; blocks on the not_full condvar if the queue is full.
-    /// @param[in] handle         Queue handle.
-    /// @param[in] item           Item to copy into the queue.
-    /// @param[in] timeout_ticks  Maximum wait in OSAL ticks; NO_WAIT returns immediately if full.
-    /// @retval osal::ok()                         Item queued successfully.
-    /// @retval osal::error_code::not_initialized  The handle is null or has no native queue.
-    /// @retval osal::error_code::would_block      The queue is full with NO_WAIT.
-    /// @retval osal::error_code::timeout          The finite send timeout expired.
     osal::result osal_queue_send(osal::active_traits::queue_handle_t* handle, const void* item,
                                  osal::tick_t timeout_ticks) noexcept
     {
@@ -1027,25 +861,11 @@ extern "C"
         return osal::ok();
     }
 
-    /// @brief Send an item non-blocking (ISR-compatible).
-    /// @param[in] handle  Queue handle.
-    /// @param[in] item    Item to copy into the queue.
-    /// @retval osal::ok()                         Item queued successfully.
-    /// @retval osal::error_code::not_initialized  The handle is null or has no native queue.
-    /// @retval osal::error_code::would_block      The queue is full.
     osal::result osal_queue_send_isr(osal::active_traits::queue_handle_t* handle, const void* item) noexcept
     {
         return osal_queue_send(handle, item, osal::NO_WAIT);
     }
 
-    /// @brief Receive an item from the queue; blocks on the not_empty condvar if the queue is empty.
-    /// @param[in] handle         Queue handle.
-    /// @param[out] item          Receives the dequeued item.
-    /// @param[in] timeout_ticks  Maximum wait in OSAL ticks; NO_WAIT returns immediately if empty.
-    /// @retval osal::ok()                         Item dequeued successfully.
-    /// @retval osal::error_code::not_initialized  The handle is null or has no native queue.
-    /// @retval osal::error_code::would_block      The queue is empty with NO_WAIT.
-    /// @retval osal::error_code::timeout          The finite receive timeout expired.
     osal::result osal_queue_receive(osal::active_traits::queue_handle_t* handle, void* item,
                                     osal::tick_t timeout_ticks) noexcept
     {
@@ -1085,23 +905,11 @@ extern "C"
         return osal::ok();
     }
 
-    /// @brief Receive an item non-blocking (ISR-compatible).
-    /// @param[in] handle  Queue handle.
-    /// @param[out] item   Receives the dequeued item.
-    /// @retval osal::ok()                         Item dequeued successfully.
-    /// @retval osal::error_code::not_initialized  The handle is null or has no native queue.
-    /// @retval osal::error_code::would_block      The queue is empty.
     osal::result osal_queue_receive_isr(osal::active_traits::queue_handle_t* handle, void* item) noexcept
     {
         return osal_queue_receive(handle, item, osal::NO_WAIT);
     }
 
-    /// @brief Copy the front item without removing it (timeout parameter ignored).
-    /// @param[in] handle  Queue handle.
-    /// @param[out] item   Receives a copy of the head item.
-    /// @retval osal::ok()                         Head item copied successfully.
-    /// @retval osal::error_code::not_initialized  The handle is null or has no native queue.
-    /// @retval osal::error_code::would_block      The queue is empty.
     osal::result osal_queue_peek(osal::active_traits::queue_handle_t* handle, void* item,
                                  osal::tick_t /*timeout_ticks*/) noexcept
     {
@@ -1121,9 +929,6 @@ extern "C"
         return osal::ok();
     }
 
-    /// @brief Return the number of items currently in the queue.
-    /// @param[in] handle  Queue handle.
-    /// @return Mutex-protected snapshot of the item count; 0 if the handle is invalid.
     std::size_t osal_queue_count(const osal::active_traits::queue_handle_t* handle) noexcept
     {
         if (handle_is_null(handle)) [[unlikely]]
@@ -1137,9 +942,6 @@ extern "C"
         return count;
     }
 
-    /// @brief Return the number of free slots remaining in the queue.
-    /// @param[in] handle  Queue handle.
-    /// @return Mutex-protected snapshot of free slots; 0 if the handle is invalid.
     std::size_t osal_queue_free(const osal::active_traits::queue_handle_t* handle) noexcept
     {
         if (handle_is_null(handle)) [[unlikely]]
@@ -1157,14 +959,6 @@ extern "C"
     // Timer (pthread watcher)
     // ---------------------------------------------------------------------------
 
-    /// @brief Create a POSIX timer with a lazily-started joinable watcher thread.
-    /// @param[out] handle       Output handle that owns a heap-allocated posix_timer_ctx.
-    /// @param[in] cb            Function called on each expiry.
-    /// @param[in] arg           Opaque argument forwarded to @p cb.
-    /// @param[in] period_ticks  Expiry period in OSAL ticks (milliseconds).
-    /// @param[in] auto_reload   True to fire repeatedly; false for one-shot.
-    /// @retval osal::ok()                         Timer created successfully.
-    /// @retval osal::error_code::out_of_resources Timer control-object allocation or initialization failed.
     osal::result osal_timer_create(osal::active_traits::timer_handle_t* handle, const char* /*name*/,
                                    osal_timer_callback_t cb, void* arg, osal::tick_t period_ticks,
                                    bool auto_reload) noexcept
@@ -1202,9 +996,6 @@ extern "C"
         return osal::ok();
     }
 
-    /// @brief Stop the watcher and release its context after any active callback completes.
-    /// @param[in,out] handle  Timer handle; cleared after destruction.
-    /// @retval osal::ok()  Always.
     osal::result osal_timer_destroy(osal::active_traits::timer_handle_t* handle) noexcept
     {
         if (handle_is_null(handle)) [[unlikely]]
@@ -1238,11 +1029,6 @@ extern "C"
         return osal::ok();
     }
 
-    /// @brief Arm the timer watcher.
-    /// @param[in] handle  Timer handle.
-    /// @retval osal::ok()                         Timer armed successfully.
-    /// @retval osal::error_code::not_initialized  The handle is null or has no native timer.
-    /// @retval osal::error_code::out_of_resources The watcher thread could not be created.
     osal::result osal_timer_start(osal::active_traits::timer_handle_t* handle) noexcept
     {
         if (handle_is_null(handle)) [[unlikely]]
@@ -1256,10 +1042,6 @@ extern "C"
         return result;
     }
 
-    /// @brief Disarm the timer watcher.
-    /// @param[in] handle  Timer handle.
-    /// @retval osal::ok()                         Timer disarmed successfully.
-    /// @retval osal::error_code::not_initialized  The handle is null or has no native timer.
     osal::result osal_timer_stop(osal::active_traits::timer_handle_t* handle) noexcept
     {
         if (handle_is_null(handle)) [[unlikely]]
@@ -1279,11 +1061,6 @@ extern "C"
         return osal::ok();
     }
 
-    /// @brief Restart the timer from its full period.
-    /// @param[in] handle  Timer handle.
-    /// @retval osal::ok()                         Timer reset successfully.
-    /// @retval osal::error_code::not_initialized  The handle is null or has no native timer.
-    /// @retval osal::error_code::out_of_resources The watcher thread could not be created.
     osal::result osal_timer_reset(osal::active_traits::timer_handle_t* handle) noexcept
     {
         if (handle_is_null(handle)) [[unlikely]]
@@ -1297,12 +1074,6 @@ extern "C"
         return result;
     }
 
-    /// @brief Update the period, preserving stopped state and timer mode.
-    /// @param[in] handle  Timer handle.
-    /// @param[in] p       New period in OSAL ticks (milliseconds).
-    /// @retval osal::ok()                         Period updated and timer armed successfully.
-    /// @retval osal::error_code::not_initialized  The handle is null or has no native timer.
-    /// @retval osal::error_code::out_of_resources The watcher thread could not be created.
     osal::result osal_timer_set_period(osal::active_traits::timer_handle_t* handle, osal::tick_t p) noexcept
     {
         if (handle_is_null(handle)) [[unlikely]]
@@ -1327,9 +1098,6 @@ extern "C"
         return result;
     }
 
-    /// @brief Query whether the timer watcher is currently armed.
-    /// @param[in] handle  Timer handle.
-    /// @return True if the watcher is waiting for expiry.
     bool osal_timer_is_active(const osal::active_traits::timer_handle_t* handle) noexcept
     {
         if (handle_is_null(handle)) [[unlikely]]
@@ -1357,10 +1125,6 @@ extern "C"
         std::size_t   n_fds;
     };
 
-    /// @brief Allocate a posix_wait_set_obj backed by up to OSAL_POSIX_MAX_POLL_FDS entries.
-    /// @param[out] handle  Output handle that owns a heap-allocated posix_wait_set_obj.
-    /// @retval osal::ok()                         Wait-set created successfully.
-    /// @retval osal::error_code::out_of_resources Wait-set allocation failed.
     osal::result osal_wait_set_create(osal::active_traits::wait_set_handle_t* handle) noexcept
     {
         auto* ws = new (std::nothrow) posix_wait_set_obj{};
@@ -1373,9 +1137,6 @@ extern "C"
         return osal::ok();
     }
 
-    /// @brief Free the posix_wait_set_obj and clear the handle.
-    /// @param[in,out] handle  Wait-set handle; cleared after destruction.
-    /// @retval osal::ok()  Always.
     osal::result osal_wait_set_destroy(osal::active_traits::wait_set_handle_t* handle) noexcept
     {
         if (handle_is_null(handle)) [[unlikely]]
@@ -1387,13 +1148,6 @@ extern "C"
         return osal::ok();
     }
 
-    /// @brief Register a file descriptor and its poll event mask in the wait-set.
-    /// @param[in] handle  Wait-set handle.
-    /// @param[in] fd      File descriptor to monitor.
-    /// @param[in] events  poll() event mask (POLLIN, POLLOUT, etc.).
-    /// @retval osal::ok()                         File descriptor registered successfully.
-    /// @retval osal::error_code::not_initialized  The handle is null or has no native wait-set.
-    /// @retval osal::error_code::out_of_resources The wait-set has reached its descriptor limit.
     osal::result osal_wait_set_add(osal::active_traits::wait_set_handle_t* handle, int fd,
                                    std::uint32_t events) noexcept
     {
@@ -1411,12 +1165,6 @@ extern "C"
         return osal::ok();
     }
 
-    /// @brief Remove a file descriptor from the wait-set by swapping with the last entry.
-    /// @param[in] handle  Wait-set handle.
-    /// @param[in] fd      File descriptor to remove.
-    /// @retval osal::ok()                            File descriptor removed successfully.
-    /// @retval osal::error_code::not_initialized     The handle is null or has no native wait-set.
-    /// @retval osal::error_code::invalid_argument    The file descriptor is not registered.
     osal::result osal_wait_set_remove(osal::active_traits::wait_set_handle_t* handle, int fd) noexcept
     {
         if (handle_is_null(handle)) [[unlikely]]
@@ -1435,16 +1183,6 @@ extern "C"
         return osal::error_code::invalid_argument;
     }
 
-    /// @brief Block on poll() until at least one file descriptor has an event or the timeout expires.
-    /// @param[in] handle         Wait-set handle.
-    /// @param[out] fds_ready     Output array for ready file descriptors, up to @p max_ready entries.
-    /// @param[in] max_ready      Maximum number of ready file descriptors to report.
-    /// @param[out] n_ready       Receives the number of file descriptors written to @p fds_ready.
-    /// @param[in] timeout_ticks  Maximum wait in OSAL ticks; WAIT_FOREVER = -1, NO_WAIT = 0.
-    /// @retval osal::ok()                         One or more file descriptors are ready.
-    /// @retval osal::error_code::not_initialized  The handle is null or has no native wait-set.
-    /// @retval osal::error_code::timeout          The wait timeout expired.
-    /// @retval osal::error_code::unknown          The native poll operation failed.
     osal::result osal_wait_set_wait(osal::active_traits::wait_set_handle_t* handle, int* fds_ready,
                                     std::size_t max_ready, std::size_t* n_ready, osal::tick_t timeout_ticks) noexcept
     {
