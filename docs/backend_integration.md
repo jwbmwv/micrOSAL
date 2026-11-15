@@ -12,6 +12,9 @@ raise the standalone MicrOSAL CMake minimum or remove the v3.7 LTS lane.
 Keep the C++20 Kconfig fragment enabled and use
 `k_work_queue_thread_get()` rather than the work queue's deprecated `thread`
 member; the accessor is available in both tested release lines.
+Hardware-cycle conversion helpers use the same
+`CONFIG_TIMER_HAS_64BIT_CYCLE_COUNTER` guard as their callers, avoiding
+unused-function warnings when that capability is disabled.
 Twister tags must be YAML lists (`tags: [osal, rtos, abstraction]`), not
 space-separated strings; the list form also works with v3.7.
 Use a separate west workspace for each release, with MicrOSAL supplied through

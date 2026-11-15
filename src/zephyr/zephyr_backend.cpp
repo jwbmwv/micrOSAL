@@ -40,6 +40,7 @@
 namespace
 {
 
+#if defined(CONFIG_TIMER_HAS_64BIT_CYCLE_COUNTER) && (CONFIG_TIMER_HAS_64BIT_CYCLE_COUNTER == 1)
 constexpr std::uint64_t kNanosecondsPerSecond = 1'000'000'000ULL;
 
 [[nodiscard]] std::int64_t zephyr_cycles_to_nanoseconds(std::uint64_t cycles) noexcept
@@ -75,6 +76,7 @@ constexpr std::uint64_t kNanosecondsPerSecond = 1'000'000'000ULL;
     }
     return static_cast<std::int64_t>((kNanosecondsPerSecond + frequency_hz - 1U) / frequency_hz);
 }
+#endif
 
 [[nodiscard]] osal::priority_t zephyr_to_osal_priority(int priority) noexcept
 {
