@@ -98,6 +98,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Cla
             "LINKER:--wrap=osal_queue_create"
             "LINKER:--wrap=osal_queue_receive"
             "LINKER:--wrap=osal_timer_create"
+            "LINKER:--wrap=osal_timer_destroy"
             "LINKER:--wrap=osal_timer_start"
             "LINKER:--wrap=osal_timer_stop"
             "LINKER:--wrap=osal_timer_set_period"
@@ -131,6 +132,9 @@ add_test(NAME test_c_api COMMAND test_c_api)
 add_subdirectory(bus)
 
 if(OSAL_BACKEND STREQUAL "LINUX" OR OSAL_BACKEND STREQUAL "POSIX")
+    add_test(NAME test_version_consistency
+        COMMAND ${CMAKE_COMMAND} "-DOSAL_TEST_BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/test_version_consistency.cmake")
     osal_add_test(test_mutex_policy test_mutex_policy.cpp)
     osal_add_test(test_backend_conformance test_backend_conformance.cpp)
     osal_add_test(test_emulation_concurrency test_emulation_concurrency.cpp)

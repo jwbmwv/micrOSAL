@@ -69,6 +69,62 @@ jobs:
         if: matrix.run_tests
         run: ctest --test-dir build --output-on-failure --timeout 60
 
+  cxx23-test:
+    name: "Build & Test (C++23 expected APIs)"
+    runs-on: ubuntu-24.04
+    needs: build-test
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Configure
+        run: |
+          cmake -B build-cxx23 \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_CXX_STANDARD=23 \
+            -DOSAL_REQUIRE_STD_EXPECTED=ON \
+            -DOSAL_BACKEND=LINUX \
+            -DOSAL_BUILD_TESTS=ON
+
+      - name: Build
+        run: cmake --build build-cxx23 -j $(nproc)
+
+      - name: Test C++23 configuration
+        run: ctest --test-dir build-cxx23 --output-on-failure --timeout 120
+
+  cxx26-test:
+    name: "Build & Test (C++26, advisory)"
+    runs-on: ubuntu-24.04
+    container: gcc:16
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install build dependencies
+        run: apt-get update && apt-get install -y --no-install-recommends cmake git
+
+      - name: Require native C++26 bounded-container support
+        run: |
+          c++ -std=c++26 -x c++ -fsyntax-only - <<'EOF'
+          #include <version>
+          #if !defined(__cpp_lib_inplace_vector) || __cpp_lib_inplace_vector < 202406L
+          #error "C++26 advisory validation requires native std::inplace_vector"
+          #endif
+          EOF
+
+      - name: Configure
+        run: |
+          cmake -B build-cxx26 \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_CXX_STANDARD=26 \
+            -DOSAL_BACKEND=LINUX \
+            -DOSAL_BUILD_TESTS=ON
+
+      - name: Build
+        run: cmake --build build-cxx26 -j $(nproc)
+
+      - name: Test C++26 configuration
+        run: ctest --test-dir build-cxx26 --output-on-failure --timeout 120
+
   # -------------------------------------------------------------------
   # Static analysis (clang-tidy on Linux backend)
   # -------------------------------------------------------------------
@@ -158,14 +214,40 @@ jobs:
   # -------------------------------------------------------------------
   # Backends whose integration environments are not available on the
   # Ubuntu runners are intentionally documented rather than built here.
-  # ThreadX, PX5, VxWorks, Micrium, ChibiOS, embOS, CMSIS-RTOS v1/v2,
+  # PX5, VxWorks, Micrium, ChibiOS, embOS, CMSIS-RTOS v1/v2,
   # and QNX currently need external SDKs, BSPs, simulators, or host
   # environments that are not provisioned on GitHub-hosted runners.
   # -------------------------------------------------------------------
-  freertos-test:
-    name: "FreeRTOS v11 test (POSIX sim)"
+  threadx-test:
+    name: "ThreadX v6.4.2 (Linux/GNU SDK port)"
     runs-on: ubuntu-24.04
     needs: build-test
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Configure pinned SDK and adapter tests
+        run: |
+          cmake -S tests/threadx -B build-threadx \
+            -DCMAKE_BUILD_TYPE=Debug
+
+      - name: Build
+        run: cmake --build build-threadx -j $(nproc)
+
+      - name: Test
+        run: ctest --test-dir build-threadx --output-on-failure --timeout 30
+
+  freertos-test:
+    name: "FreeRTOS v11 (${{ matrix.allocation }} allocation, POSIX sim)"
+    runs-on: ubuntu-24.04
+    needs: build-test
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - allocation: static
+            dynamic_alloc: "OFF"
+          - allocation: dynamic
+            dynamic_alloc: "ON"
     steps:
       - uses: actions/checkout@v5
 
@@ -177,7 +259,8 @@ jobs:
         # tests/freertos/CMakeLists.txt via FetchContent.
         run: |
           cmake -B build-freertos tests/freertos \
-            -DCMAKE_BUILD_TYPE=Debug
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DOSAL_FREERTOS_TEST_DYNAMIC_ALLOC=${{ matrix.dynamic_alloc }}
 
       - name: Build
         run: cmake --build build-freertos -j $(nproc)

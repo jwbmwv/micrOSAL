@@ -135,8 +135,8 @@ Checked wrappers retain `initialization_status()` and provide explicit lifecycle
 results; use `mutex::checked_lock_guard` rather than assuming acquisition always
 succeeds. Mutex configurations can request inheritance, ceiling and robustness
 where implemented; unsupported policies return an error rather than silently
-using defaults. This `0.1.0` change requires rebuilding consumers and zero-initializing
-owning C handles before first creation.
+using defaults. The ABI-changing `0.1.0` release requires rebuilding consumers
+and zero-initializing owning C handles before first creation.
 
 Optional or native-only APIs also expose explicit support helpers. Use
 `osal::spinlock::is_supported`, `osal::wait_set::is_supported`,
@@ -193,7 +193,7 @@ After installation, use `find_package(microsal CONFIG REQUIRED)` and link
 The legacy installed `MicrOSAL::microsal` target remains available.
 
 ```cmake
-find_package(microsal 0.1.0 CONFIG REQUIRED)
+find_package(microsal 0.1.2 CONFIG REQUIRED)
 target_link_libraries(myapp PRIVATE MicrOSAL::OSAL)
 ```
 
@@ -309,25 +309,31 @@ toolchain and core support them.
 
 | Backend | Test suite | Runner | Status |
 | --- | --- | --- | --- |
-| Linux | CTest / doctest | Native process | ✅ hosted primitives, conformance, fault injection, package, and documentation tests |
-| POSIX | CTest / doctest | Native process | ✅ hosted primitives, conformance, package, and documentation tests |
-| Bare-metal | CTest / doctest | Native process with hosted self-tick/context helper | ✅ hosted regression only; production threads unsupported |
-| RTEMS | CTest / doctest | Native process | ✅ hosted binaries configured in CI |
-| INTEGRITY | CTest / doctest | Native process | ✅ hosted binaries configured in CI |
-| FreeRTOS v11 | CTest / doctest | POSIX sim | ✅ static/dynamic suites; 64 cases / 1378 assertions and 10 repeated full-suite passes each |
+| Linux | CTest / doctest + scripts | Native process | ✅ 41/41 checks, including version consistency, conformance, fault injection, package, and documentation tests |
+| POSIX | CTest / doctest + scripts | Native process | ✅ 39/39 last full run; version-check script subsequently added |
+| Bare-metal | CTest / doctest | Native process with hosted self-tick/context helper | ✅ 34/34 hosted regression binaries; production threads unsupported |
+| RTEMS | CTest / doctest | Hosted POSIX profile, not the RTEMS SDK | ✅ 34/34 hosted binaries |
+| INTEGRITY | CTest / doctest | Hosted POSIX profile, not the INTEGRITY SDK | ✅ 34/34 hosted binaries |
+| FreeRTOS v11 | CTest / doctest | POSIX sim | ✅ static and dynamic allocation modes; 64 cases each |
+| ThreadX v6.4.2 | CTest / doctest | Real SDK Linux/GNU simulation port | ✅ 9 focused cases locally; pinned SDK CI job configured |
 | NuttX (`sim/nsh`) | printf framework | NuttX sim on x86-64 Linux | ✅ 30/30 last recorded rerun |
-| Zephyr (`native_sim`) | west twister / ztest | Native process | ✅ 194/194 locally rerun across 2 configs |
-| Zephyr (`nrf52840dk`) | west twister / ztest | Renode v1.15.3 | ⚠️ 79/79 last recorded rerun on the pre-thread-introspection suite |
-| ThreadX / PX5 / VxWorks / Micrium / ChibiOS / embOS / CMSIS-RTOS{,2} / QNX | External SDK or non-hosted integration | External SDK, BSP, simulator, or non-Ubuntu toolchain/environment required | Documented, not GitHub-hosted CI-built |
+| Zephyr (`native_sim`) | west twister / ztest | Native process | ✅ Current suite has 101 cases; CI matrix covers v3.7.0 and v4.4.0 |
+| Zephyr (`nrf52840dk`) | west twister / ztest | Renode | ⚠️ CI matrix covers v3.7.0 and v4.4.0; the latest published pass predates current suite additions |
+| PX5 / VxWorks / Micrium / ChibiOS / embOS / CMSIS-RTOS{,2} / QNX | External SDK or non-hosted integration | External SDK, BSP, simulator, or non-Ubuntu toolchain/environment required | Documented, not GitHub-hosted CI-built |
 
 Several backends intentionally remain out of GitHub-hosted CI because their
 source files depend on SDK/header sets, BSPs, simulators, or host toolchains
 that are not provisioned on Ubuntu runners.
-That includes ThreadX, PX5, VxWorks, Micrium, ChibiOS, embOS,
+That includes PX5, VxWorks, Micrium, ChibiOS, embOS,
 CMSIS-RTOS v1/v2, and QNX. Their integration points and feature expectations
 are still documented, but validating them requires the corresponding external
 integration environments. Some of those backends are open source upstream; the
 gap here is CI availability, not licensing alone.
+
+Host and simulator passes are not hardware/ISR/SMP certification. C++26 native
+bounded-container validation is configured as an advisory, non-blocking CI job;
+it requires a library with `std::inplace_vector` and does not replace the
+required C++20/C++23 runs.
 
 See [`docs/TestCoverage.md`](docs/TestCoverage.md) for the full primitive
 coverage matrix and gap analysis.
@@ -352,6 +358,8 @@ API documentation can be generated with Doxygen:
 doxygen Doxyfile
 # output → docs/doxygen/html/index.html
 ```
+
+Generated Doxygen output is local-only, ignored by Git, and must not be committed.
 
 ---
 

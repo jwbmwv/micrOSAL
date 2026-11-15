@@ -127,3 +127,81 @@ TEST_CASE("delayable_work: reschedule while queued or running reports would_bloc
     gate.give();
     REQUIRE(work.flush(osal::milliseconds{2000}).ok());
 }
+
+TEST_CASE("delayable_work: destruction cancels an armed callback before releasing its context")
+{
+    if constexpr (!osal::delayable_work::is_supported || !osal::timer::can_reclaim_after_start)
+    {
+        return;
+    }
+    osal::work_queue queue{dw_stack, sizeof(dw_stack), 8U, "dw_close"};
+    REQUIRE(queue.valid());
+    std::atomic<unsigned> calls{0U};
+    {
+        osal::delayable_work work{queue, +[](void* arg) { static_cast<std::atomic<unsigned>*>(arg)->fetch_add(1U); },
+                                  &calls};
+        REQUIRE(work.valid());
+        REQUIRE(work.schedule(osal::milliseconds{100}).ok());
+    }
+    osal::thread::sleep_for(osal::milliseconds{150});
+    CHECK(calls.load() == 0U);
+}
+
+TEST_CASE("delayable_work: close timeout retains queued context and retry drains only this item")
+{
+    if constexpr (!osal::delayable_work::is_supported)
+    {
+        return;
+    }
+    osal::work_queue queue{dw_stack, sizeof(dw_stack), 8U, "dw_close"};
+    REQUIRE(queue.valid());
+    struct context
+    {
+        osal::semaphore       entered{osal::semaphore_type::binary, 0U};
+        osal::semaphore       release{osal::semaphore_type::binary, 0U};
+        osal::semaphore       unrelated_entered{osal::semaphore_type::binary, 0U};
+        osal::semaphore       unrelated_release{osal::semaphore_type::binary, 0U};
+        std::atomic<unsigned> calls{0U};
+    } ctx;
+    REQUIRE(ctx.entered.valid());
+    REQUIRE(ctx.release.valid());
+    REQUIRE(ctx.unrelated_entered.valid());
+    REQUIRE(ctx.unrelated_release.valid());
+    REQUIRE(queue
+                .submit(
+                    +[](void* arg)
+                    {
+                        auto& state = *static_cast<context*>(arg);
+                        state.entered.give();
+                        (void)state.release.take_for(osal::milliseconds{2000});
+                    },
+                    &ctx)
+                .ok());
+    REQUIRE(ctx.entered.take_for(osal::milliseconds{1000}));
+    osal::delayable_work work{queue, +[](void* arg) { static_cast<context*>(arg)->calls.fetch_add(1U); }, &ctx};
+    REQUIRE(work.valid());
+    REQUIRE(work.schedule(osal::milliseconds{0}).ok());
+    REQUIRE(queue
+                .submit(
+                    +[](void* arg)
+                    {
+                        auto& state = *static_cast<context*>(arg);
+                        state.unrelated_entered.give();
+                        (void)state.unrelated_release.take_for(osal::milliseconds{2000});
+                    },
+                    &ctx)
+                .ok());
+    CHECK(work.close(osal::milliseconds{0}) == osal::error_code::timeout);
+    CHECK_FALSE(work.valid());
+    CHECK(work.pending());
+    CHECK(work.schedule(osal::milliseconds{0}) == osal::error_code::not_initialized);
+    ctx.release.give();
+    CHECK(ctx.unrelated_entered.take_for(osal::milliseconds{1000}));
+    CHECK(work.close(osal::milliseconds{0}).ok());
+    CHECK_FALSE(work.pending());
+    CHECK(ctx.calls.load() == 1U);
+    CHECK(work.close().ok());
+    CHECK(queue.valid());
+    ctx.unrelated_release.give();
+    CHECK(queue.flush().ok());
+}

@@ -1,6 +1,7 @@
 # MicrOSAL Documentation Generation
 
-This directory holds generated Doxygen output for MicrOSAL.
+This directory documents local Doxygen generation for MicrOSAL. Generated HTML,
+LaTeX, and XML output is ignored and must not be committed to the repository.
 
 ## Prerequisites
 

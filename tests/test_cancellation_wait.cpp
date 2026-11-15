@@ -6,6 +6,8 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <cstddef>
+#include <new>
 #include <thread>
 
 using namespace std::chrono_literals;
@@ -63,6 +65,11 @@ extern "C"
 #endif
 
 #ifdef OSAL_TEST_STOP_SOURCE_FAULTS
+#include <csignal>
+#include <sys/resource.h>
+#include <sys/wait.h>
+#include <unistd.h>
+
 namespace
 {
 std::atomic<bool> fail_source_mutex_create{false};
@@ -150,12 +157,15 @@ TEST_CASE("stop: checked request separates first and repeated requests")
 TEST_CASE("stop: callback capacity fails explicitly")
 {
     osal::stop_source source;
-    using storage_type = std::aligned_storage_t<sizeof(osal::stop_callback), alignof(osal::stop_callback)>;
-    std::array<storage_type, OSAL_STOP_SOURCE_MAX_CALLBACKS>         storage{};
+    struct callback_storage
+    {
+        alignas(osal::stop_callback) std::byte bytes[sizeof(osal::stop_callback)];
+    };
+    std::array<callback_storage, OSAL_STOP_SOURCE_MAX_CALLBACKS>     storage{};
     std::array<osal::stop_callback*, OSAL_STOP_SOURCE_MAX_CALLBACKS> callbacks{};
     for (std::size_t i = 0U; i < callbacks.size(); ++i)
     {
-        callbacks[i] = new (&storage[i]) osal::stop_callback{source.get_token(), [](void*) noexcept {}, nullptr};
+        callbacks[i] = new (storage[i].bytes) osal::stop_callback{source.get_token(), [](void*) noexcept {}, nullptr};
         CHECK(callbacks[i]->status().ok());
     }
     osal::stop_callback excess{source.get_token(), [](void*) noexcept {}, nullptr};
@@ -433,6 +443,54 @@ TEST_CASE("stop: failed source-lock reacquisition completes unregister handoff")
     CHECK(close_result.ok());
     CHECK(source.status() == osal::error_code::permission_denied);
     callback->~stop_callback();
+}
+
+TEST_CASE("stop: destructor aborts on persistent unregister failure instead of retrying forever")
+{
+    const auto child = fork();
+    REQUIRE(child >= 0);
+    if (child == 0)
+    {
+        const rlimit no_core{0, 0};
+        if (setrlimit(RLIMIT_CORE, &no_core) != 0)
+        {
+            _exit(2);
+        }
+        alarm(3U);
+        osal::stop_source source;
+        if (!source.valid())
+        {
+            _exit(2);
+        }
+        {
+            osal::stop_callback callback{source.get_token(), [](void*) noexcept {}, nullptr};
+            if (!callback.status().ok())
+            {
+                _exit(2);
+            }
+            fail_source_lock.store(true);
+        }
+        _exit(1);
+    }
+    int status = 0;
+    REQUIRE(waitpid(child, &status, 0) == child);
+    REQUIRE(WIFSIGNALED(status));
+    CHECK(WTERMSIG(status) == SIGABRT);
+}
+
+TEST_CASE("stop: late synchronous callbacks do not require unregistering")
+{
+    osal::stop_source source;
+    REQUIRE(source.valid());
+    REQUIRE(source.request_stop());
+    {
+        osal::stop_callback callback{source.get_token(), [](void*) noexcept {}, nullptr};
+        REQUIRE(callback.status().ok());
+        fail_source_lock.store(true);
+        CHECK(callback.close().ok());
+    }
+    fail_source_lock.store(false);
+    CHECK(source.status().ok());
 }
 #endif
 

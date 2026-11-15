@@ -43,8 +43,14 @@
 namespace
 {
 
-TX_THREAD            tx_threads[OSAL_TX_MAX_THREADS];
-std::atomic<bool>    tx_thread_used[OSAL_TX_MAX_THREADS];
+TX_THREAD         tx_threads[OSAL_TX_MAX_THREADS];
+std::atomic<bool> tx_thread_used[OSAL_TX_MAX_THREADS];
+struct tx_thread_ctx
+{
+    void (*entry)(void*){};
+    void* arg{};
+};
+tx_thread_ctx        tx_thread_ctxs[OSAL_TX_MAX_THREADS];
 TX_MUTEX             tx_mutexes[OSAL_TX_MAX_MUTEXES];
 std::atomic<bool>    tx_mutex_used[OSAL_TX_MAX_MUTEXES];
 TX_SEMAPHORE         tx_sems[OSAL_TX_MAX_SEMS];
@@ -90,6 +96,12 @@ void pool_release(T (&pool)[N], std::atomic<bool> (&used)[N], T* p) noexcept
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
+
+void tx_thread_entry(ULONG index) noexcept
+{
+    const auto& ctx = tx_thread_ctxs[index];
+    ctx.entry(ctx.arg);
+}
 
 /// @brief Map OSAL priority [0=lowest, 255=highest] to ThreadX priority [0=highest, 31=lowest].
 constexpr UINT osal_to_tx_priority(osal::priority_t p) noexcept
@@ -201,11 +213,12 @@ extern "C"
             return osal::error_code::out_of_resources;
         }
 
-        const UINT prio = osal_to_tx_priority(priority);
-        const UINT rc   = tx_thread_create(t, const_cast<CHAR*>(name != nullptr ? name : "osal"),
-                                           reinterpret_cast<void (*)(ULONG)>(reinterpret_cast<void*>(entry)),
-                                           reinterpret_cast<ULONG>(arg), stack, static_cast<ULONG>(stack_bytes), prio,
-                                           prio, TX_NO_TIME_SLICE, TX_AUTO_START);
+        const auto index      = static_cast<ULONG>(t - tx_threads);
+        tx_thread_ctxs[index] = {entry, arg};
+        const UINT prio       = osal_to_tx_priority(priority);
+        const UINT rc =
+            tx_thread_create(t, const_cast<CHAR*>(name != nullptr ? name : "osal"), tx_thread_entry, index, stack,
+                             static_cast<ULONG>(stack_bytes), prio, prio, TX_NO_TIME_SLICE, TX_AUTO_START);
 
         if (rc != TX_SUCCESS)
         {

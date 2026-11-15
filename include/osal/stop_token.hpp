@@ -7,6 +7,7 @@
 #include "thread.hpp"
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 
 #ifndef OSAL_STOP_SOURCE_MAX_CALLBACKS
 #define OSAL_STOP_SOURCE_MAX_CALLBACKS 16U
@@ -165,6 +166,7 @@ public:
             status_ = source_->unlock();
             if (status_.ok())
             {
+                source_ = nullptr;
                 callback_(argument_);
             }
             return;
@@ -186,21 +188,19 @@ public:
         status_ = source_->unlock();
     }
 
-    /// @brief Destruction waits without holding the source mutex.
-    /// @details A permanent backend fault may prevent safe unregistering. Use
-    ///          close(timeout) and keep the registration alive on failure.
+    /// @brief Wait for safe unregistering; abort on a backend cleanup error.
+    /// @details Use close(timeout) and keep the registration, source and argument
+    ///          alive on failure when recovery is required before destruction.
     ~stop_callback() noexcept
     {
-        while (!close().ok())
+        if (!close().ok())
         {
-            // Fault-only retry: never abandon a node still referenced by the source.
-            // Completion and metadata contention use blocking primitives, not this path.
-            thread::sleep_for(milliseconds{1000});
+            std::abort();
         }
     }
 
     /// @brief Checked unregister; failure retains the registration for retry.
-    result close(milliseconds timeout = milliseconds{-1}) noexcept
+    [[nodiscard]] result close(milliseconds timeout = milliseconds{-1}) noexcept
     {
         if (source_ == nullptr)
         {

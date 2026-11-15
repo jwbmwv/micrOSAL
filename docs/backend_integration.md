@@ -4,6 +4,14 @@
 
 Follow these steps to integrate a new RTOS or platform.
 
+For an existing reproducible SDK-backed example, see
+[`tests/threadx/CMakeLists.txt`](../tests/threadx/CMakeLists.txt). It pins the
+ThreadX kernel commit, compiles the actual adapter and C bridge, links the
+upstream Linux/GNU port, and runs focused runtime checks. Reproduction commands
+and evidence limits are in [Test Coverage](TestCoverage.md#running-the-threadx-sdk-suite).
+Keep SDK compilation, simulator execution, hosted-profile emulation, and
+hardware sign-off distinct when reporting backend support.
+
 ---
 
 ### Step 1 — Add a backend tag and selector

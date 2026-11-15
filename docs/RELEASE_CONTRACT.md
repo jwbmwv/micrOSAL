@@ -1,6 +1,6 @@
 # MicrOSAL Release Contract
 
-This document defines the support boundary for MicrOSAL `0.1.0`.
+This document defines the support boundary for MicrOSAL `0.1.2`.
 
 The release version is declared in all of the following locations, which must
 remain synchronized:
@@ -8,6 +8,21 @@ remain synchronized:
 - `include/osal/version.hpp` for the public compile-time API
 - `CMakeLists.txt` for CMake package metadata
 - `Doxyfile` for generated API documentation
+
+Standalone CMake configuration checks these declarations automatically and
+rejects mismatches or malformed versions. Changes to the header or Doxyfile
+also trigger reconfiguration on the next build. To check without compiling:
+
+```bash
+cmake -P cmake/check_version.cmake
+```
+
+Version `0.1.2` adds checked `delayable_work::close(timeout)` and hardens
+destructor failure handling. Delayed-work and stop-callback destructors now
+invoke `std::abort()` when checked cleanup cannot establish safe lifetime; use
+explicit close and retain object/context storage on failure when recovery is
+required. These changes add
+no backend ABI hooks or public wrapper data members.
 
 ## Language and Configuration
 
@@ -107,7 +122,19 @@ consumers together when changing modes. A passing C++20 build does not validate
 feature-gated C++23 or native C++26 code.
 
 Doxygen's preprocessing profile includes optional expected declarations in the
-API reference; this does not enable them in a C++20 build.
+API reference; this does not enable them in a C++20 build. CI builds and tests
+the hosted Linux suite in C++20 and C++23 modes. The C++23 job sets
+`OSAL_REQUIRE_STD_EXPECTED=ON`: configuration fails unless the selected
+compiler/standard-library combination supplies `__cpp_lib_expected >= 202202L`
+and can compile `std::expected`. The probe is rerun on reconfiguration so a
+previous success cannot hide changed language/library flags. The option
+defaults off, preserving C++20 and fallback builds; it does not require the
+newer `202211L` monadic expected operations.
+An advisory, non-blocking C++26
+job uses GCC 16 and requires `__cpp_lib_inplace_vector >= 202406L` before building
+and testing, so a passing fallback build cannot masquerade as native-container
+validation. Toolchain, feature-probe, build, and test failures in that job do
+not fail CI. Adding this job is not itself a recorded successful C++26 run.
 
 ## Capability, Thread, and ISR Use
 
@@ -150,6 +177,18 @@ API reference; this does not enable them in a C++20 build.
   so a completed `flush()` observes the failure. The C helper checks deadlines
   in native OSAL ticks, preserving sub-millisecond delays and tick-counter
   wraparound without rounding its expiry guard to milliseconds.
+- C++ delayed-work close first reclaims the timer, then cancels an outstanding
+  arm and drains this item's queued/running callback. It requires quiesced public
+  callers and a live, draining target queue; never call from that worker or cancel
+  its queued thunk externally. Its timeout bounds draining, not backend timer
+  destruction. A failed timer close retains ownership. After timer reclamation,
+  `valid()` is false even if draining times out: retain the object and callback
+  argument and retry close. Deferred dispatch errors are returned once.
+  Destruction waits indefinitely for normal completion but aborts if cleanup
+  remains unsafe. A deferred dispatch error after safe reclamation is not fatal;
+  observe it through checked close/flush. Started delayed work on a
+  non-reclaiming timer backend must use application-lifetime storage, even after
+  successful cancel/flush.
 - Pub/sub subscription fails when backing resources did not initialize.
   Unsubscribe returns `false` while a blocking receive holds that slot;
   callers must let receivers finish before releasing the subscription.
@@ -206,8 +245,11 @@ synchronization failures. Callback registrations expose checked `close()`;
 retain the callback, source and argument when close fails. Metadata uses a
 native mutex, requesting priority inheritance where supported, and completion
 uses condition-variable broadcast rather than task-context spin acquisition.
-Source status retains synchronization failures; persistent backend faults can
-prevent successful destruction or waking an indefinite wait.
+Source status retains synchronization failures. Stop-callback destruction
+aborts on a returned cleanup error rather than retrying indefinitely. It still
+waits for normal callback completion; a callback that never returns, or a backend
+operation that never returns, can block indefinitely. Faults can also prevent
+waking an indefinite wait.
 
 `wait_signal` and the new `object_wait_set` overload use a native semaphore
 wakeup. This is **explicit opt-in**: every producer must mutate observed state
@@ -227,7 +269,9 @@ operations remain; checked operations expose native errors. Explicit `close()`
 is idempotent and preserves a valid handle on failure. Work shutdown and thread
 join/detach are cooperative lifecycle boundaries; destruction does not force
 thread termination or guarantee successful shutdown. Close/check results before
-destroying wrappers when backend lifecycle restrictions can apply.
+destroying wrappers when backend lifecycle restrictions can apply. The
+fail-fast delayed-work and stop-callback destructors described above are
+intentional exceptions to best-effort destruction.
 
 `mutex::checked_lock_guard` owns a lock only after successful acquisition or
 `owner_died`. A robust mutex returning `owner_died` is **already acquired**:
@@ -343,11 +387,14 @@ of discarding the ceiling contract.
 
 | Configuration | Evidence | Limit |
 | --- | --- | --- |
-| Linux, POSIX, RTEMS, INTEGRITY, and hosted bare-metal | CMake/doctest suites run by CTest in CI | Hosted execution does not prove target timing or ABI |
+| Linux and POSIX | Native host OS CMake/doctest suites run by CTest in CI | Does not prove target real-time behavior |
+| RTEMS and INTEGRITY | Hosted POSIX-profile regression suites | Not compiled against RTEMS/INTEGRITY SDKs |
+| Bare-metal | Hosted self-tick/context regression helper | Not a production board/context-switch port |
 | FreeRTOS v11 | POSIX simulation doctest suite in CI | It is not a real interrupt or board validation |
+| ThreadX v6.4.2 | Pinned real SDK, full adapter build and focused Linux/GNU-port runtime suite; CI job configured | Linux-port simulation, not board/ISR/SMP sign-off; started-timer reclamation remains unsupported |
 | NuttX main | `sim/nsh` built-in test application in CI | It does not exercise a deployed board configuration |
 | Zephyr v3.7 and v4.4 | `native_sim` and nRF52840 Renode ztest runs in CI | Simulation does not replace physical-device validation |
-| ThreadX, PX5, VxWorks, Micrium, ChibiOS, embOS, CMSIS-RTOS v1/v2, and QNX | Documented integration contracts | Required SDKs, BSPs, simulators, or toolchains are not provisioned in GitHub-hosted CI |
+| PX5, VxWorks, Micrium, ChibiOS, embOS, CMSIS-RTOS v1/v2, and QNX | Documented integration contracts | Required SDKs, BSPs, simulators, or toolchains are not provisioned in GitHub-hosted CI |
 
 The detailed test inventory, known gaps, and backend-specific commands are in
 [`TestCoverage.md`](TestCoverage.md). Backend integration requirements are in

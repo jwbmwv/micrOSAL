@@ -8,8 +8,8 @@
 ///          - only one delayed submission may be armed at a time
 ///          - once the timer has handed the callback to the work queue,
 ///            cancel/reschedule return would_block until the callback runs
-///          - destroying a pending delayable_work is undefined behaviour;
-///            flush() or cancel() it first
+///          - close() reclaims the timer and waits for queued/running work
+///          - destruction performs close() and aborts if cleanup remains unsafe
 ///
 ///          This keeps the primitive allocation-free and avoids backend-
 ///          specific delayed-work contracts.
@@ -28,6 +28,7 @@
 #include "detail/atomic_compat.hpp"
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 
 namespace osal
 {
@@ -77,7 +78,15 @@ public:
     {
     }
 
-    ~delayable_work() noexcept = default;
+    /// @brief Close before member storage is destroyed; abort if cleanup fails.
+    ~delayable_work() noexcept
+    {
+        const result closed = close(milliseconds{-1});
+        if (!closed.ok() && (timer_.valid() || pending()))
+        {
+            std::abort();
+        }
+    }
 
     delayable_work(const delayable_work&)            = delete;
     delayable_work& operator=(const delayable_work&) = delete;
@@ -212,6 +221,43 @@ public:
             thread::sleep_for(poll_interval());
         }
 
+        return consume_dispatch_error();
+    }
+
+    /// @brief Reclaim the timer, cancel its arm, and drain this item's queued/running callback.
+    /// @details Thread context only. Quiesce other public operations first and keep
+    ///          the queue alive and draining; never call from its worker or cancel
+    ///          the queued thunk externally. A timer-close failure retains ownership.
+    ///          Once the timer closes, valid() is false even if draining times out;
+    ///          retain this object and its argument and retry close() on failure.
+    ///          Backends without timer reclamation after start return not_supported;
+    ///          use application-lifetime storage there. Idempotent after success.
+    /// @param[in] timeout Maximum drain wait; negative waits forever. Does not bound
+    ///                    the backend's synchronous timer destruction.
+    /// @return Timer-close errors, timeout, or a deferred dispatch error, otherwise ok.
+    ///         A deferred dispatch error is reported only after safe reclamation;
+    ///         it does not make destruction fatal.
+    [[nodiscard]] result close(milliseconds timeout = milliseconds{5000}) noexcept
+    {
+        const auto   deadline = monotonic_deadline::after(timeout);
+        const result closed   = timer_.close();
+        if (!closed.ok())
+        {
+            return closed;
+        }
+        valid_ = false;
+
+        // Successful timer reclamation is the barrier against late timer thunks.
+        state expected = state::armed;
+        (void)compare_exchange_state(expected, state::idle);
+        while (load_state() != state::idle)
+        {
+            if (timeout.count() >= 0 && deadline.expired())
+            {
+                return error_code::timeout;
+            }
+            thread::sleep_for(poll_interval());
+        }
         return consume_dispatch_error();
     }
 

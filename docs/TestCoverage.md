@@ -1,7 +1,7 @@
 # MicrOSAL — Test Coverage
 
 This document catalogues what is and is not tested. It is updated manually
-whenever new tests are added. Four independent test suites exist:
+whenever new tests are added. Five independent test suites exist:
 
 - **Hosted/doctest suite** — core primitive and bus test binaries built with CMake, run via CTest; this includes the
   three bus/pubsub executables under `tests/bus/` and is used in CI for Linux, POSIX, Bare-metal,
@@ -9,6 +9,10 @@ whenever new tests are added. Four independent test suites exist:
 - **FreeRTOS/doctest suite** — single `tests/freertos/src/main.cpp`, built with CMake, run via
   CTest; uses the FreeRTOS-Kernel v11 POSIX simulation port (runs as a Linux process, no emulator
   required).
+- **ThreadX/doctest suite** — `tests/threadx/src/main.cpp`, built with CMake
+  against a pinned ThreadX v6.4.2 SDK and its Linux/GNU port; the full adapter
+  and C bridge are compiled, linked to the real kernel, and exercised under its
+  scheduler.
 - **NuttX/doctest suite** — `tests/nuttx/src/main.cpp` built as a NuttX builtin application;
   runs inside the NuttX sim/nsh simulator on x86-64 Linux.
 - **Zephyr/ztest suite** — single `tests/zephyr/src/main.cpp`, built with `west twister`;
@@ -23,19 +27,29 @@ whenever new tests are added. Four independent test suites exist:
   exercise the hardened synchronization, timeout, and buffer contracts.
 - Portable adapter tests check exact byte copies with guard bytes, bounded
   queue capacity, non-destructive unsupported peek, and persistent event bits.
-- Linux delayed-work fault injection exercises failed timer stop, rejected stale
+- Linux delayed-work fault injection exercises failed timer stop/close, rejected stale
   expiry, dispatch-error consumption, failed pub/sub backing queues, and receiver
-  slot retention through both C++ and C helper surfaces.
+  slot retention through both C++ and C helper surfaces. C++ close timeout/retry,
+  destructor draining, and fail-fast cleanup are covered. Stop-callback tests
+  verify fail-fast persistent unregister errors and late-registration cleanup.
 - The first README C++ example is extracted and compiled by the Linux/POSIX
   build, then executed as a test.
 - An installed-package consumer independently configures, builds, and executes
   both canonical `MicrOSAL::OSAL` and legacy `MicrOSAL::microsal` targets.
 - Wait-set tests own pipes rather than assuming stdin is epoll-compatible.
+- Standalone configuration rejects version drift across the public header,
+  CMake project, and Doxyfile. A hosted CTest script exercises matching,
+  mismatched, missing/malformed, duplicate, and quoted declarations using
+  isolated generated fixtures.
 
 Conformance and concurrency tests are regression evidence. Neither host threads
 nor injected callbacks establish real ISR, SMP, or hardware timing behavior.
 The current runner output is authoritative for case/binary counts; historical
-counts below describe previously recorded runs.
+counts below describe previously recorded runs. The current Linux, POSIX,
+hosted RTEMS, INTEGRITY, and bare-metal counts below were refreshed with the
+0.1.2 source. The Linux suite also passes in C++23 mode. C++26 library-specific
+features are covered by a new advisory CI configuration, not a recorded local
+pass: the local standard library lacks `std::inplace_vector`.
 
 ### FreeRTOS simulation root cause and regression
 
@@ -60,32 +74,41 @@ Reproduce using an independently configured FreeRTOS build:
 ```bash
 ctest --test-dir build-freertos --output-on-failure --repeat until-fail:10
 timeout 8s build-freertos/test_freertos --test-case='*pools*'
+
+# Dynamic-allocation variant
+cmake -B build-freertos-dynamic tests/freertos \
+    -DCMAKE_BUILD_TYPE=Debug \
+    -DOSAL_FREERTOS_TEST_DYNAMIC_ALLOC=ON
+cmake --build build-freertos-dynamic --parallel
+ctest --test-dir build-freertos-dynamic --output-on-failure
 ```
 
 ## Backend under test
 
-### Portable extension verification (0.1.0)
+### Portable extensions (introduced in 0.1.0)
 
-New registered binaries cover owned-loan identity/no-copy fanout and release,
+The registered binaries cover owned-loan identity/no-copy fanout and release,
 typed registry dispatch/unregister/cycle handling, bounded stop callbacks,
 lost-wakeup/cancellation races, native semaphore wake fault injection, checked
 initialization/close failures and ownership retention, mutex inheritance and
 robust recovery, and actual diagnostics. Lifecycle fault injection wraps
 creation/destruction rather than inferring error preservation from `valid()`.
 
-The current integration runs pass Linux **40/40**, POSIX **39/39**, and Linux
-ASan/UBSan/alignment **40/40** CTest binaries. Zephyr `native_sim/native/64`
-at 100 Hz passes **119** cases, including inactive period
-updates and one-shot preservation. Installed package validation checks that the
-`0.1.0` package rejects the changed `0.0` ABI. These portable/hosted results do
-not certify unprovisioned native SDKs, real ISR notification, SMP reclamation or
-hardware real-time behavior.
+The refreshed Linux runs pass **41/41** CTest checks in both C++20 and C++23,
+including the new version-consistency script. Previously recorded full runs
+passed POSIX **39/39** and Linux ASan/UBSan/alignment **40/40** before that script
+was registered; the current POSIX configuration adds the same version check.
+Hosted bare-metal, RTEMS, and INTEGRITY each pass **34/34** binaries. The
+current Zephyr suite contains **101** cases across 25 suites. Installed-package
+validation requests version `0.1.2` and checks that the 0.1 ABI rejects a `0.0`
+request. These portable/hosted results do not certify unprovisioned native
+SDKs, real ISR notification, SMP reclamation, or hardware real-time behavior.
 
-Hosted bare-metal, RTEMS and INTEGRITY each pass **34/34** binaries. Bare-metal
-explicitly rejects event-driven native waiting: its timed semaphore operation
-spins rather than providing a native blocking wake. Cancellation and polling
-remain available. Native SDK-independent header policy checks cover all 17
-backend selectors; they do not compile the corresponding native adapter sources.
+Bare-metal explicitly rejects event-driven native waiting: its timed semaphore
+operation spins rather than providing a native blocking wake. Cancellation and
+polling remain available. Native SDK-independent header policy checks cover all
+17 backend selectors; they do not compile the corresponding native adapter
+sources.
 
 Both native simulators now execute the shared checks in
 [`portable_feature_checks.hpp`](../tests/portable_feature_checks.hpp), registered
@@ -106,20 +129,33 @@ these checks. The nRF Connect extension cannot resolve this build's toolchain
 metadata, so native-simulator validation uses its configured SDK/toolchain
 environment directly.
 
-Nine build targets are covered by automated builds or runtime suites:
+### Evidence levels
+
+- **Native host OS:** actual Linux/POSIX primitives run as host processes.
+- **SDK-backed simulation:** the real kernel SDK and adapter are compiled and
+  run in a kernel/SoC simulator (FreeRTOS, ThreadX, NuttX, Zephyr).
+- **Hosted emulation/profile:** bare-metal's test-only context/tick helper and
+  RTEMS/INTEGRITY's POSIX profile run on Linux, not their target SDKs.
+- **Header policy only:** selector/capability compile checks do not compile
+  adapter sources or certify a backend.
+- **Hardware:** none of these host/simulator results is physical-board,
+  real-ISR, SMP, or hard-real-time sign-off.
+
+Ten configurations are covered by automated builds or runtime suites:
 
 | Backend | Test suite | Emulator / runner | Coverage |
 | --- | --- | --- | --- |
-| Linux | CMake / CTest (doctest) | None (native process) | ✅ 28 binaries, 28/28 locally rerun |
-| POSIX | CMake / CTest (doctest) | None (native process) | ✅ in CI (`OSAL_BACKEND=POSIX`); same 28 binaries |
-| Bare-metal | CMake / CTest (doctest) | Native process with hosted self-tick/context helper | ✅ in CI (`OSAL_BACKEND=BAREMETAL`); same 28 binaries |
-| RTEMS | CMake / CTest (doctest) | None (native process) | ✅ in CI (`OSAL_BACKEND=RTEMS`); same 28 binaries |
-| INTEGRITY | CMake / CTest (doctest) | None (native process) | ✅ in CI (`OSAL_BACKEND=INTEGRITY`); same 28 binaries |
-| FreeRTOS v11 | CMake / CTest (doctest) | POSIX sim port (no emulator) | ✅ in CI (`freertos-test` job); **44/44 pass** locally rerun |
+| Linux | CMake / CTest (doctest + scripts) | None (native process) | ✅ 41/41; C++20 and feature-required C++23 |
+| POSIX | CMake / CTest (doctest + scripts) | None (native process) | ✅ 39/39 last full run; version-check script subsequently added |
+| Bare-metal | CMake / CTest (doctest) | Native process with hosted self-tick/context helper | ✅ 34/34; production threads unsupported |
+| RTEMS | CMake / CTest (doctest) | Hosted POSIX profile; no RTEMS SDK | ✅ 34/34 hosted regressions only |
+| INTEGRITY | CMake / CTest (doctest) | Hosted POSIX profile; no INTEGRITY SDK | ✅ 34/34 hosted regressions only |
+| FreeRTOS v11 | CMake / CTest (doctest) | POSIX sim port (no emulator) | ✅ static and dynamic allocation modes; 64 cases each |
+| ThreadX v6.4.2 | CMake / CTest (doctest) | Real SDK Linux/GNU simulation port | ✅ 9 focused cases / 409 assertions locally; CI job configured |
 | NuttX (main / sim:nsh) | NuttX builtin app (printf framework) | NuttX sim/nsh on x86-64 | ✅ in CI; **30/30 pass** last recorded rerun |
-| Zephyr (`native_sim`) | west twister (ztest) | Native Linux process | ✅ Last published isolated Twister rerun passed **2/2** configurations and **194/194** test cases on the pre-bus 97-case suite; the current **101-case / 25-suite** suite also passed in a fresh isolated `west build` + `-t run` rerun |
-| Zephyr (`nrf52840dk`) | west twister (ztest + Renode) | **Renode** v1.15.3 SoC simulation | ⚠️ Last published rerun was **79/79** on the pre-change suite; current **101-case / 25-suite** suite not rerun after the stack-watermark, high-resolution-clock, thread-introspection, and bus-layer additions |
-| ThreadX / PX5 / VxWorks / Micrium / ChibiOS / embOS / CMSIS-RTOS{,2} / QNX | External SDK or BSP integration | External SDK, BSP, simulator, or non-hosted toolchain/environment required | ❌ Not on GitHub-hosted CI |
+| Zephyr (`native_sim`) | west twister (ztest) | Native Linux process | ✅ 101 cases in the current suite; CI matrix covers v3.7.0 and v4.4.0 |
+| Zephyr (`nrf52840dk`) | west twister (ztest + Renode) | Renode SoC simulation | ⚠️ CI matrix covers v3.7.0 and v4.4.0; last published 79/79 result predates current suite additions |
+| PX5 / VxWorks / Micrium / ChibiOS / embOS / CMSIS-RTOS{,2} / QNX | External SDK or BSP integration | External SDK, BSP, simulator, or non-hosted toolchain/environment required | ❌ Not on GitHub-hosted CI |
 
 GitHub-hosted CI does not attempt to build these external-integration backends
 because the required SDK/header sets, BSPs, simulators, or toolchains are not
@@ -160,6 +196,25 @@ renode --disable-xwt -e "
 cat /tmp/renode_uart.log
 ```
 
+### Running the C++23 hosted suite
+
+The Linux C++23 CI run requires the feature-gated `std::expected` adapters.
+Use the same gate locally to reject missing library support instead of passing
+with those tests compiled out:
+
+```bash
+cmake -B build-cxx23 -DOSAL_BACKEND=LINUX \
+    -DCMAKE_CXX_STANDARD=23 -DOSAL_REQUIRE_STD_EXPECTED=ON -DOSAL_BUILD_TESTS=ON
+cmake --build build-cxx23 --parallel
+ctest --test-dir build-cxx23 --output-on-failure
+```
+
+The probe uses the selected compiler, standard mode, and standard-library flags
+and requires `__cpp_lib_expected >= 202202L` plus a compilable expected object.
+It is rerun on reconfiguration, including changes to an already-configured
+build's language mode. C++20 remains the default with this gate off. The newer
+`202211L` expected monadic operations are still separately feature-gated.
+
 ### Running the FreeRTOS suite
 
 ```bash
@@ -168,6 +223,70 @@ cmake -B build-freertos tests/freertos -DCMAKE_BUILD_TYPE=Debug
 cmake --build build-freertos -j$(nproc)
 ctest --test-dir build-freertos --output-on-failure
 ```
+
+### Running the ThreadX SDK suite
+
+The self-contained build fetches ThreadX v6.4.2 at commit
+`06dabb0ad0403f59889ce85eeb3d48dbd9d3759b` and uses its upstream Linux/GNU port.
+On a Linux host with a C/C++ toolchain, CMake, Git, and pthreads:
+
+```bash
+cmake -S tests/threadx -B build-threadx -DCMAKE_BUILD_TYPE=Debug
+cmake --build build-threadx --parallel
+ctest --test-dir build-threadx --output-on-failure --timeout 30
+```
+
+Nine focused cases cover exact odd-sized queue copies and guard bytes,
+non-destructive unsupported peek, bounded semaphores, mutex lifecycle, native
+thread argument-pointer integrity and pool-slot reuse, stop-callback lifecycle,
+timer expiry, and retained ownership after unsupported started-timer reclamation.
+Cross-task readiness and cancellation each run ten handshakes per invocation,
+reusing the shared portable wait-worker check. In-flight callback close verifies
+timeout/retry and that another task can acquire source metadata while unregister
+waits. Finite semaphore and contended-mutex waits must return timeout only after
+the requested native ticks. Exhausting native semaphore slots must preserve
+existing objects, reject initialization explicitly, and recover after release.
+Thread completion is acknowledged before calling ThreadX join, which terminates
+the task and must not be used as evidence that its work completed.
+The suite passed ten consecutive local runs. Its first SDK build exposed a
+pointer-to-32-bit-`ULONG` truncation in thread creation; the adapter now passes a
+bounded context index through a correctly typed ThreadX entry thunk.
+
+This compiles the complete adapter against actual SDK headers, unlike the
+selector-only checks. It is still a narrow simulator suite, not full primitive
+conformance or hardware/ISR/SMP certification. The upstream Linux port uses
+pthreads and attempts FIFO scheduling; host permissions and scheduling policy
+affect timing, so these checks make no real-time claims. Started timer slots
+remain intentionally non-reclaimable.
+
+Strict analysis passes for the new native test translation unit and changed
+adapter lines. Full ThreadX SDK-backend clang-tidy still reports 11 pre-existing
+padding, narrowing, style, and declaration-name findings; these are left
+unchanged rather than folded into the validation work.
+
+### Advisory C++26 validation
+
+The `cxx26-test` CI job uses a GCC 16 container and job-level
+`continue-on-error: true`: toolchain provisioning, feature-probe, compilation,
+or test failure does not fail CI. It requires
+`__cpp_lib_inplace_vector >= 202406L`, then builds and runs the hosted Linux
+suite in C++26 mode, including the existing bounded-container boundary tests.
+A toolchain without the native library feature fails the advisory probe rather
+than silently validating fallback storage. This job is not a merge gate and has
+not been run as part of the local validation reported here.
+
+With a suitable compiler and standard library:
+
+```bash
+cmake -B build-cxx26 -DOSAL_BACKEND=LINUX \
+    -DCMAKE_CXX_STANDARD=26 -DOSAL_BUILD_TESTS=ON
+cmake --build build-cxx26 --parallel
+ctest --test-dir build-cxx26 --output-on-failure
+```
+
+Select the compiler with `CC`/`CXX` if it is not the host default. These local
+commands alone do not require the feature macro; check it as the CI probe does
+before claiming the native container path was exercised.
 
 ### Running the NuttX suite
 
@@ -258,8 +377,8 @@ stack-watermark queries (with `CONFIG_INIT_STACKS=y` and
 `CONFIG_THREAD_STACK_INFO=y`), thread introspection queries,
 high-resolution clock coverage, and native Zephyr bus-layer coverage.
 
-- **`native_sim`** (Zephyr v4.4.99) — fresh isolated direct `west build -b native_sim/native tests/zephyr && west build -t run` rerun of the current suite passed; the last published 2-configuration Twister rerun on the pre-bus suite was **194/194 pass**.
-- **`nrf52840dk/nrf52840`** (Zephyr v4.3.0, **Renode** v1.15.3) — last published rerun before the thread stack-watermark, high-resolution-clock, thread-introspection, and bus-layer additions: **79/79 pass**.
+- **`native_sim`** (Zephyr v4.4.99) — a fresh isolated direct `west build -b native_sim/native tests/zephyr && west build -t run` rerun of the current 101-case suite passed. CI additionally covers v3.7.0 and v4.4.0.
+- **`nrf52840dk/nrf52840`** (**Renode**) — CI is configured for v3.7.0 and v4.4.0; the last published local run was 79/79 on the older v4.3.0 suite.
 
 | ztest suite | Cases | What is covered |
 | --- | --- | --- |
@@ -299,9 +418,9 @@ timed-lock timeout paths for mutex and queue, ISR variants (FreeRTOS-specific
 
 Built with CMake + FreeRTOS-Kernel v11 (GCC/POSIX simulation port).
 Runs as a standard Linux process via CTest — no emulator required.
-FreeRTOS-Kernel and doctest are fetched automatically by FetchContent.  The
-current suite registers 44 doctest cases and was rerun in this workspace after
-the thread-introspection addition.
+FreeRTOS-Kernel and doctest are fetched automatically by FetchContent. The
+combined current suite registers 64 doctest cases across `main.cpp` and
+`portable_features.cpp`; both static and dynamic allocation modes pass.
 
 | Primitive | Cases | What is covered |
 | --- | --- | --- |
