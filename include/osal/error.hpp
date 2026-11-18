@@ -60,7 +60,7 @@ enum class error_code : std::int32_t
     not_owner         = 12,  ///< Calling thread does not own the resource.
     isr_invalid       = 13,  ///< Operation is not valid from an ISR context.
     barrier_serial =
-        14,  ///< This thread is the barrier's serial thread (POSIX PTHREAD_BARRIER_SERIAL_THREAD; not an error).
+        14,  ///< Special successful barrier-wait outcome for the serial thread; check explicitly rather than with ok().
     owner_died      = 15,   ///< A robust mutex was acquired after its owner died; repair protected state.
     not_recoverable = 16,   ///< Robust mutex state was not repaired before unlock.
     cancelled       = 17,   ///< Cooperative cancellation was requested.
@@ -86,32 +86,44 @@ struct result
     /// @brief Constructs a successful result.
     constexpr result() noexcept : code_(error_code::ok) {}
 
-    /// @brief Constructs from an error code.
-    /// @param[in] c  The error code.
+    /// @brief Constructs a result from an error code.
+    /// @param[in] c  Canonical status code to store.
     constexpr result(error_code c) noexcept : code_(c) {}  // NOLINT(google-explicit-constructor)
 
-    /// @brief Returns true if the operation succeeded.
-    /// @return true if error_code == ok.
+    /// @brief Tests whether the stored status indicates success.
+    /// @return @c true exactly when the stored code is @c error_code::ok.
     [[nodiscard]] constexpr bool ok() const noexcept { return code_ == error_code::ok; }
 
-    /// @brief Returns the underlying error code.
-    /// @return The error_code enumeration value.
+    /// @brief Returns the stored canonical status code.
+    /// @return The value supplied at construction.
     [[nodiscard]] constexpr error_code code() const noexcept { return code_; }
 
     /// @brief Contextual bool conversion — true on success.
+    /// @return The value returned by @ref ok().
     constexpr explicit operator bool() const noexcept { return ok(); }
 
     /// @brief Equality comparison.
+    /// @param[in] o  Result to compare with this result.
+    /// @return @c true when both results contain the same error code.
     constexpr bool operator==(const result& o) const noexcept { return code_ == o.code_; }
     /// @brief Inequality comparison.
+    /// @param[in] o  Result to compare with this result.
+    /// @return @c true when the results contain different error codes.
     constexpr bool operator!=(const result& o) const noexcept { return code_ != o.code_; }
     /// @brief Comparison with raw error_code.
+    /// @param[in] c  Error code to compare with this result.
+    /// @return @c true when this result contains @p c.
     constexpr bool operator==(error_code c) const noexcept { return code_ == c; }
     /// @brief Comparison with raw error_code.
+    /// @param[in] c  Error code to compare with this result.
+    /// @return @c true when this result does not contain @p c.
     constexpr bool operator!=(error_code c) const noexcept { return code_ != c; }
 
     /// @brief Runs a result-returning callback on success; otherwise preserves the error.
     /// @details Available in C++20. Use to_expected() for value-returning monadic chains.
+    /// @tparam Function  Callable whose invocation result is @c osal::result.
+    /// @param[in] function  Callback invoked only when this result is successful.
+    /// @return The callback's result on success, or this result unchanged on failure.
     template<typename Function>
         requires std::is_same_v<std::invoke_result_t<Function>, result>
     constexpr result and_then(Function&& function) const noexcept(std::is_nothrow_invocable_v<Function>)
@@ -125,6 +137,9 @@ struct result
 
     /// @brief Status-only synonym for and_then(); the callback must return result.
     /// @details This does not transform a value. Use to_expected().transform() for that operation.
+    /// @tparam Function  Callable whose invocation result is @c osal::result.
+    /// @param[in] function  Callback invoked only when this result is successful.
+    /// @return The callback's result on success, or this result unchanged on failure.
     template<typename Function>
         requires std::is_same_v<std::invoke_result_t<Function>, result>
     constexpr result transform(Function&& function) const noexcept(std::is_nothrow_invocable_v<Function>)
@@ -133,6 +148,9 @@ struct result
     }
 
     /// @brief Runs a result-returning error handler on failure; otherwise preserves success.
+    /// @tparam Function  Callable accepting @c error_code and returning @c osal::result.
+    /// @param[in] function  Error handler invoked with the stored code only on failure.
+    /// @return The handler's result on failure, or this result unchanged on success.
     template<typename Function>
         requires std::is_same_v<std::invoke_result_t<Function, error_code>, result>
     constexpr result or_else(Function&& function) const noexcept(std::is_nothrow_invocable_v<Function, error_code>)
@@ -146,6 +164,7 @@ struct result
 
 #if defined(__cpp_lib_expected) && __cpp_lib_expected >= 202202L
     /// @brief Converts result to std::expected<void, error_code> (C++23).
+    /// @return An empty expected value on success, or an unexpected value containing the stored error code.
     [[nodiscard]] constexpr std::expected<void, error_code> to_expected() const noexcept
     {
         if (ok())
@@ -161,6 +180,7 @@ private:
 };
 
 /// @brief Convenience constant for a successful result.
+/// @return A result containing @c error_code::ok.
 constexpr result ok() noexcept
 {
     return {};

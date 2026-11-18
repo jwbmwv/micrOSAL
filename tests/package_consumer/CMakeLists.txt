@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 cmake_minimum_required(VERSION 3.16)
 project(microsal_package_consumer LANGUAGES CXX)
-find_package(microsal 0.1.0 CONFIG REQUIRED)
+find_package(microsal 0.1.2 CONFIG REQUIRED)
 add_executable(package_consumer main.cpp)
 target_link_libraries(package_consumer PRIVATE MicrOSAL::OSAL)
 add_executable(package_consumer_legacy main.cpp)

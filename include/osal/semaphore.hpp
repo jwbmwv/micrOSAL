@@ -29,18 +29,43 @@
 // Backend implementation functions — defined in src/<backend>/*.cpp.
 extern "C"
 {
+    /// @brief Creates a backend semaphore with bounded permit count.
+    /// @param[out] handle         Receives the native semaphore handle.
+    /// @param[in]  initial_count  Initial permits, no greater than max_count.
+    /// @param[in]  max_count      Nonzero maximum permit count.
+    /// @return Success or the backend creation error.
+    /// @note Thread context only.
     osal::result osal_semaphore_create(osal::active_traits::semaphore_handle_t* handle, unsigned initial_count,
                                        unsigned max_count) noexcept;
 
+    /// @brief Destroys a backend semaphore after concurrent users have quiesced.
+    /// @param[in,out] handle  Semaphore handle to release.
+    /// @return Success or the backend destruction error.
+    /// @note Thread context only; keep handle storage alive if destruction fails.
     osal::result osal_semaphore_destroy(osal::active_traits::semaphore_handle_t* handle) noexcept;
 
+    /// @brief Gives a permit from thread context without waiting.
+    /// @param[in,out] handle  Initialised semaphore handle.
+    /// @return Success or the backend overflow/error result.
     osal::result osal_semaphore_give(osal::active_traits::semaphore_handle_t* handle) noexcept;
 
+    /// @brief Gives a permit from ISR context without waiting.
+    /// @param[in,out] handle  Initialised semaphore handle.
+    /// @pre The active backend advertises ISR semaphore support.
+    /// @return Success or the backend overflow/error result.
     osal::result osal_semaphore_give_isr(osal::active_traits::semaphore_handle_t* handle) noexcept;
 
+    /// @brief Takes a permit from thread context.
+    /// @param[in,out] handle         Initialised semaphore handle.
+    /// @param[in]     timeout_ticks  Wait limit in ticks; NO_WAIT polls and WAIT_FOREVER waits indefinitely.
+    /// @return Success or the backend wait/error result.
     osal::result osal_semaphore_take(osal::active_traits::semaphore_handle_t* handle,
                                      osal::tick_t                             timeout_ticks) noexcept;
 
+    /// @brief Attempts to take a permit without waiting.
+    /// @param[in,out] handle  Initialised semaphore handle.
+    /// @return Success or the backend empty/error result.
+    /// @note Thread context only.
     osal::result osal_semaphore_try_take(osal::active_traits::semaphore_handle_t* handle) noexcept;
 
 }  // extern "C"
@@ -92,6 +117,7 @@ public:
     /// @param[in] type           binary or counting.
     /// @param[in] initial_count  Initial permit count.
     /// @param[in] max_count      Maximum permit count (ignored for binary — forced to 1).
+    /// @details Invalid type/counts leave the object invalid; inspect initialization_status().
     /// @complexity O(1)
     /// @blocking   Never.
     semaphore(semaphore_type type, unsigned initial_count, unsigned max_count = 1U) noexcept : valid_(false)
@@ -102,6 +128,7 @@ public:
 
     /// @brief Constructs from an immutable config (config may reside in FLASH).
     /// @param[in] cfg  Configuration — typically declared @c const / @c constexpr.
+    /// @details Check valid() or initialization_status() before using the semaphore.
     /// @complexity O(1)
     /// @blocking   Never.
     explicit semaphore(const semaphore_config& cfg) noexcept : valid_(false)
@@ -110,23 +137,33 @@ public:
         initialize(cfg.type, cfg.initial_count, mc);
     }
 
-    /// @brief Destructs the semaphore.
+    /// @brief Attempts cleanup, discarding close() errors.
+    /// @pre Users and waiters have quiesced; handle close() failure before destroying storage.
     ~semaphore() noexcept { (void)close(); }
 
-    semaphore(const semaphore&)            = delete;
+    /// @brief Copy construction is disabled.
+    semaphore(const semaphore&) = delete;
+    /// @brief Copy assignment is disabled.
     semaphore& operator=(const semaphore&) = delete;
-    semaphore(semaphore&&)                 = delete;
-    semaphore& operator=(semaphore&&)      = delete;
+    /// @brief Move construction is disabled.
+    semaphore(semaphore&&) = delete;
+    /// @brief Move assignment is disabled.
+    semaphore& operator=(semaphore&&) = delete;
 
     // ---- query -------------------------------------------------------------
 
     /// @brief Returns true if the semaphore was successfully initialised.
-    [[nodiscard]] bool   valid() const noexcept { return valid_; }
+    /// @return Whether this object currently owns a valid semaphore.
+    [[nodiscard]] bool valid() const noexcept { return valid_; }
+    /// @brief Reports the original initialization result.
+    /// @return Success or the validation/backend creation error, unchanged by close().
     [[nodiscard]] result initialization_status() const noexcept { return initialization_status_; }
 
     /// @brief Idempotent checked destruction; failure retains ownership for retry.
     /// @details The caller must quiesce concurrent operations before closing.
     ///          On failure keep this object alive; destructor cleanup is best-effort.
+    /// @return Success if already closed or destroyed, otherwise the backend destruction error.
+    /// @note Thread context only.
     [[nodiscard]] result close() noexcept
     {
         if (!valid_)
@@ -144,6 +181,9 @@ public:
     }
 
     /// @brief Gives a permit and preserves overflow and backend errors.
+    /// @retval error_code::not_initialized  The semaphore is invalid.
+    /// @return Otherwise the backend give result, including overflow when already full.
+    /// @note Thread context only; does not wait for capacity.
     [[nodiscard]] result checked_give() noexcept
     {
         const result status = valid_ ? osal_semaphore_give(&handle_) : result{error_code::not_initialized};
@@ -155,6 +195,11 @@ public:
     /// @brief Takes a permit; negative timeout means an indefinite wait.
     /// @details Zero never blocks. Positive timeouts require timed-semaphore
     ///          support; otherwise not_supported is returned without waiting.
+    /// @param[in] timeout  Negative waits indefinitely; zero polls; positive values bound the wait.
+    /// @retval error_code::not_initialized  The semaphore is invalid.
+    /// @retval error_code::not_supported    A positive timeout requires timed-semaphore support.
+    /// @return Otherwise the backend acquisition result, including contention/timeout errors.
+    /// @note Thread context only.
     [[nodiscard]] result checked_take(milliseconds timeout = milliseconds{-1}) noexcept
     {
         result status{error_code::not_initialized};
@@ -188,6 +233,7 @@ public:
     }
 
     /// @brief Approximate operation counters; uint32 counters wrap modulo 2^32.
+    /// @return Independently sampled counters for checked thread-context operations.
     [[nodiscard]] diagnostic_snapshot statistics() const noexcept { return operations_.snapshot(); }
 
     // ---- give (signal) -----------------------------------------------------
@@ -202,7 +248,8 @@ public:
     void give() noexcept { (void)checked_give(); }
 
     /// @brief Attempts to give without blocking; returns false on overflow.
-    /// @return true if the give succeeded; false if already at max_count.
+    /// @return True if a permit was given; false on overflow, invalid state, or another backend error.
+    /// @note Thread context only.
     /// @complexity O(1)
     /// @blocking   Never.
     bool try_give() noexcept { return checked_give().ok(); }
@@ -231,8 +278,9 @@ public:
     bool try_take() noexcept { return checked_take(milliseconds{0}).ok(); }
 
     /// @brief Takes, blocking for at most @p timeout milliseconds.
-    /// @param[in] timeout  Maximum wait time.
-    /// @return true if acquired within the timeout.
+    /// @param[in] timeout  Wait policy as for checked_take().
+    /// @return True if acquired; false on contention, timeout, invalid state, or another error.
+    /// @note Thread context only; unsupported timed semaphores fall back to a non-blocking attempt.
     /// @complexity O(1)
     /// @blocking   Up to timeout.
     bool take_for(milliseconds timeout) noexcept
@@ -249,7 +297,8 @@ public:
 
     /// @brief Takes, blocking until an absolute deadline.
     /// @param[in] deadline  Absolute monotonic time point.
-    /// @return true if acquired before the deadline.
+    /// @return True if acquired, false on contention, timeout, invalid state, or another error.
+    /// @note An expired deadline polls once. Unsupported timed semaphores also poll without waiting.
     /// @complexity O(1)
     /// @blocking   Until deadline.
     bool take_until(monotonic_clock::time_point deadline) noexcept

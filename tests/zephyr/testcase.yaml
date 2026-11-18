@@ -2,14 +2,14 @@
 # testcase.yaml — twister test descriptor for MicrOSAL Zephyr tests
 #
 # Run with:
-#   west twister -T tests/zephyr
-#   west twister -T tests/zephyr -p native_sim -p qemu_cortex_m3
+#   "$ZEPHYR_BASE/scripts/twister" -T tests/zephyr
+#   "$ZEPHYR_BASE/scripts/twister" -T tests/zephyr -p native_sim -p qemu_cortex_m3
 #
 # Users can retarget to any Zephyr-supported board/SoC by adding the
 # board name to the platform_allow list or passing -p <board> to twister.
 
 common:
-  tags: osal rtos abstraction
+  tags: [osal, rtos, abstraction]
   timeout: 120
   min_ram: 32
   min_flash: 128
@@ -33,7 +33,7 @@ tests:
   # hardware-timing issues that native_sim cannot catch.
   #
   # Run locally (with Renode in PATH):
-  #   west twister -T tests/zephyr -p nrf52840dk/nrf52840 --runner renode
+  #   "$ZEPHYR_BASE/scripts/twister" -T tests/zephyr -p nrf52840dk/nrf52840 --runner renode
   # -------------------------------------------------------------------
   microsal.ztest.renode_nrf52840:
     platform_allow:

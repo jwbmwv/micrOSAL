@@ -69,9 +69,13 @@ endif()
 # Standalone cmake project
 # ---------------------------------------------------------------------------
 project(microsal
-    VERSION 0.1.1
+    VERSION 0.1.2
     LANGUAGES C CXX)
 
+include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/check_version.cmake)
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/include/osal/version.hpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/Doxyfile")
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/osal_diagnostics.cmake)
 
 # ---------------------------------------------------------------------------
@@ -85,6 +89,29 @@ set_property(CACHE OSAL_BACKEND PROPERTY STRINGS
 
 option(OSAL_BUILD_TESTS     "Build OSAL unit tests"    OFF)
 option(OSAL_BUILD_EXAMPLES  "Build OSAL examples"      OFF)
+option(OSAL_REQUIRE_STD_EXPECTED
+    "Require std::expected adapters in the selected compiler/standard-library configuration"
+    OFF)
+if(OSAL_REQUIRE_STD_EXPECTED)
+    include(CheckCXXSourceCompiles)
+    # Language and standard-library flags may change when reconfiguring an existing build.
+    unset(OSAL_STD_EXPECTED_AVAILABLE CACHE)
+    check_cxx_source_compiles("
+        #include <version>
+        #if !defined(__cpp_lib_expected) || __cpp_lib_expected < 202202L
+        #error MicrOSAL validation requires __cpp_lib_expected >= 202202L
+        #endif
+        #include <expected>
+        int main() {
+            std::expected<void, int> status{};
+            return status.has_value() ? 0 : 1;
+        }" OSAL_STD_EXPECTED_AVAILABLE)
+    if(NOT OSAL_STD_EXPECTED_AVAILABLE)
+        message(FATAL_ERROR
+            "OSAL_REQUIRE_STD_EXPECTED requires __cpp_lib_expected >= 202202L. "
+            "Select a supporting compiler, standard library, and CMAKE_CXX_STANDARD (23 or newer).")
+    endif()
+endif()
 set(OSAL_TICK_WIDTH "32" CACHE STRING "OSAL tick width: 16, 32, or 64")
 set_property(CACHE OSAL_TICK_WIDTH PROPERTY STRINGS 16 32 64)
 set(OSAL_NATIVE_TICK_BITS "AUTO" CACHE STRING

@@ -4,7 +4,7 @@
 # Build with `west build` or `twister`:
 #
 #   west build -b native_sim tests/zephyr -- -DEXTRA_ZEPHYR_MODULES=/path/to/micrOSAL
-#   west twister -T tests/zephyr
+#   "$ZEPHYR_BASE/scripts/twister" -T tests/zephyr
 #
 cmake_minimum_required(VERSION 3.20.0)
 

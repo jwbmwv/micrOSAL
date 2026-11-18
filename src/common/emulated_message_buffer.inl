@@ -191,17 +191,9 @@ extern "C"
     // C-linkage message buffer functions
     // ---------------------------------------------------------------------------
 
-    /// @brief Create an emulated message buffer backed by caller-supplied storage.
-    /// @details Uses the same lock-free SPSC ring as the stream buffer, but frames
-    ///          each message as a 16-bit length prefix followed by the payload.
-    ///          The caller must supply @p capacity + 1 bytes of storage.
-    /// @param[out] handle   Output handle; populated on success.
-    /// @param[in] buffer    Caller-supplied storage; must be at least @p capacity + 1 bytes.
-    /// @param[in] capacity  Total ring capacity in bytes (includes framing overhead);
-    ///                 must be > `kMsgHeaderBytes` (2 bytes).
-    /// @retval osal::ok()                    On success.
-    /// @retval error_code::invalid_argument  For bad parameters.
-    /// @retval error_code::out_of_resources  If the pool or semaphores are exhausted.
+    // Uses the same lock-free SPSC ring as the stream buffer, but frames
+    // each message as a 16-bit length prefix followed by the payload.
+    // The caller must supply capacity + 1 bytes of storage.
     osal::result osal_message_buffer_create(osal::active_traits::message_buffer_handle_t* handle, void* buffer,
                                             std::size_t capacity) noexcept
     {
@@ -238,10 +230,6 @@ extern "C"
         return osal::ok();
     }
 
-    /// @brief Destroy an emulated message buffer and release its pool slot.
-    /// @param[in,out] handle  Handle to destroy; silently ignored if null or uninitialized.
-    /// @retval osal::ok()                   On success.
-    /// @retval error_code::not_initialized  If null.
     osal::result osal_message_buffer_destroy(osal::active_traits::message_buffer_handle_t* handle) noexcept
     {
         if (!handle || !handle->native) [[unlikely]]
@@ -260,17 +248,8 @@ extern "C"
     // Send (producer)
     // ---------------------------------------------------------------------------
 
-    /// @brief Send a message into the buffer, blocking until space is available.
-    /// @details Writes a 16-bit length header followed by @p len payload bytes as a
-    ///          single atomic frame.  The consumer will never see a partial message.
-    /// @param[in] handle         Message buffer handle.
-    /// @param[in] msg            Message data to write.
-    /// @param[in] len            Length of @p msg in bytes; must fit in `osal_mb_length_t`.
-    /// @param[in] timeout_ticks  Maximum ticks to wait for space; use `osal::WAIT_FOREVER` for indefinite.
-    /// @retval osal::ok()                    On success.
-    /// @retval error_code::timeout           On expiry.
-    /// @retval error_code::invalid_argument  For oversized messages or null parameters.
-    /// @retval error_code::not_initialized   If @p handle is null.
+    // Writes a 16-bit length header followed by len payload bytes as a
+    // single atomic frame.  The consumer will never see a partial message.
     osal::result osal_message_buffer_send(osal::active_traits::message_buffer_handle_t* handle, const void* msg,
                                           std::size_t len, osal::tick_t timeout_ticks) noexcept
     {
@@ -326,7 +305,6 @@ extern "C"
         }
     }
 
-    /// @brief Send from ISR context.  Never blocks.
     osal::result osal_message_buffer_send_isr(osal::active_traits::message_buffer_handle_t* handle, const void* msg,
                                               std::size_t len) noexcept
     {
@@ -356,15 +334,8 @@ extern "C"
     // Receive (consumer)
     // ---------------------------------------------------------------------------
 
-    /// @brief Receive one message from the buffer, blocking until a complete message arrives.
-    /// @details Reads the 16-bit length header, then copies at most @p max_len bytes of
-    ///          payload into @p buf (excess payload is discarded).
-    /// @param[in] handle         Message buffer handle.
-    /// @param[out] buf           Output buffer for the message payload.
-    /// @param[in] max_len        Capacity of @p buf in bytes.
-    /// @param[in] timeout_ticks  Maximum ticks to wait; use `osal::WAIT_FOREVER` for indefinite.
-    /// @return Number of payload bytes copied (capped at @p max_len), or 0 on timeout
-    ///         or bad parameters.
+    // Reads the 16-bit length header, then copies at most max_len bytes of
+    // payload into buf (excess payload is discarded).
     std::size_t osal_message_buffer_receive(osal::active_traits::message_buffer_handle_t* handle, void* buf,
                                             std::size_t max_len, osal::tick_t timeout_ticks) noexcept
     {
@@ -433,7 +404,6 @@ extern "C"
         }
     }
 
-    /// @brief Receive from ISR context.  Never blocks.
     std::size_t osal_message_buffer_receive_isr(osal::active_traits::message_buffer_handle_t* handle, void* buf,
                                                 std::size_t max_len) noexcept
     {
@@ -476,9 +446,6 @@ extern "C"
     // Query + Reset
     // ---------------------------------------------------------------------------
 
-    /// @brief Return the payload size of the next complete message, or 0 if none.
-    /// @param[in] handle  Message buffer handle (const).
-    /// @return Payload byte count of the oldest complete message, or 0.
     std::size_t osal_message_buffer_available(const osal::active_traits::message_buffer_handle_t* handle) noexcept
     {
         if (!handle || !handle->native) [[unlikely]]
@@ -498,10 +465,7 @@ extern "C"
         return (avail >= frame_size) ? static_cast<std::size_t>(msg_len) : 0U;
     }
 
-    /// @brief Return the maximum payload size that can currently be sent without blocking.
-    /// @details Computed as `max(0, ring_free - kMsgHeaderBytes)` where `kMsgHeaderBytes` is 2.
-    /// @param[in] handle  Message buffer handle (const).
-    /// @return Maximum payload bytes, or 0 if the ring cannot accommodate even the header.
+    // Computed as `max(0, ring_free - kMsgHeaderBytes)` where `kMsgHeaderBytes` is 2.
     std::size_t osal_message_buffer_free_space(const osal::active_traits::message_buffer_handle_t* handle) noexcept
     {
         if (!handle || !handle->native) [[unlikely]]
@@ -515,10 +479,6 @@ extern "C"
         return (f > kMsgHeaderBytes) ? (f - kMsgHeaderBytes) : 0U;
     }
 
-    /// @brief Discard all buffered messages by advancing the consumer tail to the producer head.
-    /// @param[in] handle  Message buffer handle.
-    /// @retval osal::ok()                   On success.
-    /// @retval error_code::not_initialized  If null.
     osal::result osal_message_buffer_reset(osal::active_traits::message_buffer_handle_t* handle) noexcept
     {
         if (!handle || !handle->native) [[unlikely]]

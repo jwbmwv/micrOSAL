@@ -6,8 +6,13 @@
 #include <osal/osal_c.h>
 
 #include <atomic>
+#include <csignal>
 #include <limits>
+#include <new>
+#include <sys/resource.h>
+#include <sys/wait.h>
 #include <thread>
+#include <unistd.h>
 
 namespace
 {
@@ -17,6 +22,7 @@ std::atomic<std::uint32_t>           tick_period_us{1000U};
 std::atomic<bool>                    clock_stub{false};
 bool                                 fail_create    = false;
 bool                                 fail_stop      = false;
+bool                                 fail_destroy   = false;
 bool                                 fail_submit    = false;
 osal_timer_callback_t                saved_callback = nullptr;
 void*                                saved_argument = nullptr;
@@ -100,6 +106,14 @@ extern "C" osal::result osal_test_wrap_timer_start(osal::active_traits::timer_ha
 {
     return handle == stub_timer ? osal::ok() : osal_test_real_timer_start(handle);
 }
+extern "C" osal::result osal_test_real_timer_destroy(osal::active_traits::timer_handle_t*) noexcept
+    asm("__real_osal_timer_destroy");
+extern "C" osal::result osal_test_wrap_timer_destroy(osal::active_traits::timer_handle_t*) noexcept
+    asm("__wrap_osal_timer_destroy");
+extern "C" osal::result osal_test_wrap_timer_destroy(osal::active_traits::timer_handle_t* handle) noexcept
+{
+    return fail_destroy ? osal::result{osal::error_code::permission_denied} : osal_test_real_timer_destroy(handle);
+}
 extern "C" osal::result osal_test_real_timer_stop(osal::active_traits::timer_handle_t*) noexcept
     asm("__real_osal_timer_stop");
 extern "C" osal::result osal_test_wrap_timer_stop(osal::active_traits::timer_handle_t*) noexcept
@@ -175,6 +189,141 @@ TEST_CASE("delayable_work: stop failure, stale expiry and dispatch error retain 
     CHECK_FALSE(work.pending());
     CHECK(work.flush(osal::milliseconds{0}).ok());
     clock_stub.store(false);
+}
+
+TEST_CASE("delayable_work: failed close retains the timer and callback context for retry")
+{
+    osal::work_queue queue{nullptr, 0U};
+    REQUIRE(queue.valid());
+    unsigned             calls = 0U;
+    osal::delayable_work work{queue, +[](void* arg) { ++*static_cast<unsigned*>(arg); }, &calls};
+    REQUIRE(work.valid());
+    REQUIRE(work.schedule(osal::milliseconds{100}).ok());
+    fail_destroy = true;
+    CHECK(work.close(osal::milliseconds{0}) == osal::error_code::permission_denied);
+    CHECK(work.valid());
+    CHECK(work.scheduled());
+    fail_destroy = false;
+    CHECK(work.close(osal::milliseconds{0}).ok());
+    CHECK_FALSE(work.valid());
+    CHECK_FALSE(work.pending());
+    CHECK(work.close().ok());
+    CHECK(work.schedule(osal::milliseconds{0}) == osal::error_code::not_initialized);
+    CHECK(calls == 0U);
+}
+
+TEST_CASE("delayable_work: destructor aborts instead of abandoning a failed timer close")
+{
+    const auto child = fork();
+    REQUIRE(child >= 0);
+    if (child == 0)
+    {
+        const rlimit no_core{0, 0};
+        if (setrlimit(RLIMIT_CORE, &no_core) != 0)
+        {
+            _exit(2);
+        }
+        alarm(3U);
+        osal::work_queue queue{nullptr, 0U};
+        if (!queue.valid())
+        {
+            _exit(2);
+        }
+        {
+            osal::delayable_work work{queue, +[](void*) {}};
+            if (!work.valid())
+            {
+                _exit(2);
+            }
+            fail_destroy = true;
+        }
+        _exit(1);
+    }
+    int status = 0;
+    REQUIRE(waitpid(child, &status, 0) == child);
+    REQUIRE(WIFSIGNALED(status));
+    CHECK(WTERMSIG(status) == SIGABRT);
+}
+
+TEST_CASE("delayable_work: destructor waits for an executing callback before releasing member storage")
+{
+    osal::work_queue queue{nullptr, 0U};
+    REQUIRE(queue.valid());
+    struct context
+    {
+        std::atomic<bool>     entered{false};
+        std::atomic<bool>     release{false};
+        std::atomic<bool>     destroying{false};
+        std::atomic<bool>     destroyed{false};
+        std::atomic<unsigned> calls{0U};
+    } ctx;
+    alignas(osal::delayable_work) std::byte storage[sizeof(osal::delayable_work)];
+    auto*                                   work = new (storage) osal::delayable_work{queue,
+                                                    +[](void* arg)
+                                                    {
+                                                        auto& state = *static_cast<context*>(arg);
+                                                        state.entered.store(true);
+                                                        while (!state.release.load())
+                                                        {
+                                                            std::this_thread::yield();
+                                                        }
+                                                        state.calls.fetch_add(1U);
+                                                    },
+                                                    &ctx};
+    REQUIRE(work->valid());
+    REQUIRE(work->schedule(osal::milliseconds{0}).ok());
+    const auto deadline = osal::monotonic_deadline::after(osal::milliseconds{1000});
+    while (!ctx.entered.load() && !deadline.expired())
+    {
+        std::this_thread::yield();
+    }
+    CHECK(ctx.entered.load());
+    std::thread destroyer{[&]
+                          {
+                              ctx.destroying.store(true);
+                              work->~delayable_work();
+                              ctx.destroyed.store(true);
+                          }};
+    while (!ctx.destroying.load())
+    {
+        std::this_thread::yield();
+    }
+    osal::thread::sleep_for(osal::milliseconds{20});
+    CHECK_FALSE(ctx.destroyed.load());
+    ctx.release.store(true);
+    destroyer.join();
+    CHECK(ctx.destroyed.load());
+    CHECK(ctx.calls.load() == 1U);
+    CHECK(queue.flush().ok());
+}
+
+TEST_CASE("delayable_work: close reports a deferred dispatch error once after reclaiming safely")
+{
+    osal::work_queue queue{nullptr, 0U};
+    REQUIRE(queue.valid());
+    osal::delayable_work work{queue, +[](void*) {}};
+    REQUIRE(work.valid());
+    fail_submit = true;
+    CHECK(work.schedule(osal::milliseconds{0}) == osal::error_code::overflow);
+    fail_submit = false;
+    CHECK(work.close() == osal::error_code::overflow);
+    CHECK_FALSE(work.valid());
+    CHECK_FALSE(work.pending());
+    CHECK(work.close().ok());
+}
+
+TEST_CASE("delayable_work: handled dispatch rejection does not make safe destruction fatal")
+{
+    osal::work_queue queue{nullptr, 0U};
+    REQUIRE(queue.valid());
+    {
+        osal::delayable_work work{queue, +[](void*) {}};
+        REQUIRE(work.valid());
+        fail_submit = true;
+        CHECK(work.schedule(osal::milliseconds{0}) == osal::error_code::overflow);
+        fail_submit = false;
+    }
+    CHECK(queue.flush().ok());
 }
 
 TEST_CASE("pubsub: a receiving slot cannot be unsubscribed and recycled")

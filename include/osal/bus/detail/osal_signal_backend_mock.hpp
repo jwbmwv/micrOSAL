@@ -48,6 +48,11 @@ public:
 
     // All LCD methods inherited from base_type.
 
+    /// @brief Registers an observer in the mock backend's fixed-size table.
+    /// @param[in] fn  Non-null callback invoked during observer publication.
+    /// @return @c true if registered; @c false for a null callback or full table.
+    /// @note The callback must not block or throw. Serialize registration and
+    ///       publication because this test-only table has no internal lock.
     [[nodiscard]] bool native_subscribe_observer(observer_fn fn) noexcept
     {
         if (fn == nullptr || observer_count_ >= max_observers_)
@@ -58,6 +63,10 @@ public:
         return true;
     }
 
+    /// @brief Removes a previously registered mock observer.
+    /// @param[in] fn  Callback pointer to remove; must be non-null.
+    /// @return @c true if found and removed; @c false otherwise.
+    /// @note Serialize registration, removal, and publication.
     [[nodiscard]] bool native_unsubscribe_observer(observer_fn fn) noexcept
     {
         if (fn == nullptr)
@@ -76,8 +85,15 @@ public:
         return false;
     }
 
+    /// @brief Returns the number of registered mock observers.
+    /// @return Current observer count.
+    /// @note Serialize this query with observer registration and publication.
     [[nodiscard]] std::size_t native_observer_count() const noexcept { return observer_count_; }
 
+    /// @brief Invokes registered mock observers synchronously.
+    /// @param[in] msg  Message passed by reference to each callback.
+    /// @return @c true if at least one observer was registered.
+    /// @note Callbacks must not block or throw; serialize all hook operations.
     [[nodiscard]] bool native_publish_observers(const T& msg) noexcept
     {
         const bool any = observer_count_ > 0U;

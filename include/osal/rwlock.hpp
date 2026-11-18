@@ -42,22 +42,38 @@
 
 extern "C"
 {
+    /// @brief Create a read-write lock.
+    /// @param[out] handle Handle storage to initialise.
+    /// @return The backend result; consult its error code if creation fails.
     osal::result osal_rwlock_create(osal::active_traits::rwlock_handle_t* handle) noexcept;
 
+    /// @brief Destroy a read-write lock.
+    /// @param[in,out] handle Handle to destroy.
+    /// @return The backend result; consult its error code if destruction fails.
     osal::result osal_rwlock_destroy(osal::active_traits::rwlock_handle_t* handle) noexcept;
 
     /// @brief Acquire the lock for reading (shared).
+    /// @param[in,out] handle        Initialised lock handle.
+    /// @param[in]     timeout_ticks Maximum wait in ticks; WAIT_FOREVER waits indefinitely.
+    /// @return The backend result; consult its error code if acquisition fails.
     osal::result osal_rwlock_read_lock(osal::active_traits::rwlock_handle_t* handle,
                                        osal::tick_t                          timeout_ticks) noexcept;
 
     /// @brief Release a read lock.
+    /// @param[in,out] handle Initialised lock handle held for reading by this caller.
+    /// @return The backend result; consult its error code if release fails.
     osal::result osal_rwlock_read_unlock(osal::active_traits::rwlock_handle_t* handle) noexcept;
 
     /// @brief Acquire the lock for writing (exclusive).
+    /// @param[in,out] handle        Initialised lock handle.
+    /// @param[in]     timeout_ticks Maximum wait in ticks; WAIT_FOREVER waits indefinitely.
+    /// @return The backend result; consult its error code if acquisition fails.
     osal::result osal_rwlock_write_lock(osal::active_traits::rwlock_handle_t* handle,
                                         osal::tick_t                          timeout_ticks) noexcept;
 
     /// @brief Release a write lock.
+    /// @param[in,out] handle Initialised lock handle held for writing by this caller.
+    /// @return The backend result; consult its error code if release fails.
     osal::result osal_rwlock_write_unlock(osal::active_traits::rwlock_handle_t* handle) noexcept;
 
 }  // extern "C"
@@ -80,10 +96,13 @@ class rwlock  // NOLINT(cppcoreguidelines-pro-type-member-init,hicpp-member-init
 public:
     // ---- construction / destruction ----------------------------------------
 
-    /// @brief Constructs a read-write lock.
+    /// @brief Constructs and initializes a read-write lock.
+    /// @details Check valid() before using it.
     rwlock() noexcept = default;  // NOLINT(cppcoreguidelines-pro-type-member-init,hicpp-member-init)
 
-    /// @brief Destroys the read-write lock.
+    /// @brief Destroys the lock if initialization succeeded.
+    /// @details All readers and writers must have released the lock before its
+    ///          lifetime ends.
     ~rwlock() noexcept
     {
         if (valid_)
@@ -93,17 +112,28 @@ public:
         }
     }
 
-    rwlock(const rwlock&)            = delete;
+    /// @brief Copy construction is disabled; the backend handle has one owner.
+    rwlock(const rwlock&) = delete;
+    /// @brief Copy assignment is disabled; the backend handle has one owner.
     rwlock& operator=(const rwlock&) = delete;
-    rwlock(rwlock&&)                 = delete;
-    rwlock& operator=(rwlock&&)      = delete;
+    /// @brief Move construction is disabled; the backend handle is not transferable.
+    rwlock(rwlock&&) = delete;
+    /// @brief Move assignment is disabled; the backend handle is not transferable.
+    rwlock& operator=(rwlock&&) = delete;
 
     // ---- read (shared) lock ------------------------------------------------
 
     /// @brief Acquire the lock for reading (blocking).
+    /// @return Success or the backend error result.
+    /// @details Thread-context operation; successful acquisition must be paired
+    ///          with read_unlock() by the owning thread.
     [[nodiscard]] result read_lock() noexcept { return osal_rwlock_read_lock(&handle_, WAIT_FOREVER); }
 
     /// @brief Try to acquire the read lock with a timeout.
+    /// @param[in] timeout Maximum wait; non-positive values do not wait.
+    /// @return Success or the backend error result, including timeout where reported.
+    /// @details Successful acquisition must be paired with read_unlock() by the
+    ///          owning thread.
     result read_lock_for(milliseconds timeout) noexcept
     {
         const tick_t ticks = clock_utils::ms_to_ticks(timeout);
@@ -111,14 +141,22 @@ public:
     }
 
     /// @brief Release the read lock.
+    /// @return Success or the backend error result.
     [[nodiscard]] result read_unlock() noexcept { return osal_rwlock_read_unlock(&handle_); }
 
     // ---- write (exclusive) lock --------------------------------------------
 
     /// @brief Acquire the lock for writing (blocking).
+    /// @return Success or the backend error result.
+    /// @details Thread-context operation; successful acquisition must be paired
+    ///          with write_unlock() by the owning thread.
     [[nodiscard]] result write_lock() noexcept { return osal_rwlock_write_lock(&handle_, WAIT_FOREVER); }
 
     /// @brief Try to acquire the write lock with a timeout.
+    /// @param[in] timeout Maximum wait; non-positive values do not wait.
+    /// @return Success or the backend error result, including timeout where reported.
+    /// @details Successful acquisition must be paired with write_unlock() by the
+    ///          owning thread.
     result write_lock_for(milliseconds timeout) noexcept
     {
         const tick_t ticks = clock_utils::ms_to_ticks(timeout);
@@ -126,35 +164,56 @@ public:
     }
 
     /// @brief Release the write lock.
+    /// @return Success or the backend error result.
     [[nodiscard]] result write_unlock() noexcept { return osal_rwlock_write_unlock(&handle_); }
 
     // ---- RAII guards -------------------------------------------------------
 
     /// @brief RAII guard for read (shared) access.
+    /// @details Holds a reference to @p rw, attempts to acquire its read lock at
+    ///          construction, and attempts to release it at destruction. The
+    ///          lock must outlive the guard. Acquisition errors are not exposed.
     class read_guard
     {
     public:
+        /// @brief Constructs the guard for the specified lock.
+        /// @param[in,out] rw Lock to acquire and release.
         explicit read_guard(rwlock& rw) noexcept : rw_(rw) { (void)rw_.read_lock(); }
+        /// @brief Attempts to release the read lock.
         ~read_guard() noexcept { (void)rw_.read_unlock(); }
-        read_guard(const read_guard&)            = delete;
+        /// @brief Copy construction is disabled to prevent duplicate unlocks.
+        read_guard(const read_guard&) = delete;
+        /// @brief Copy assignment is disabled to prevent duplicate unlocks.
         read_guard& operator=(const read_guard&) = delete;
-        read_guard(read_guard&&)                 = delete;
-        read_guard& operator=(read_guard&&)      = delete;
+        /// @brief Move construction is disabled to preserve guard ownership.
+        read_guard(read_guard&&) = delete;
+        /// @brief Move assignment is disabled to preserve guard ownership.
+        read_guard& operator=(read_guard&&) = delete;
 
     private:
         rwlock& rw_;
     };
 
     /// @brief RAII guard for write (exclusive) access.
+    /// @details Holds a reference to @p rw, attempts to acquire its write lock
+    ///          at construction, and attempts to release it at destruction.
+    ///          The lock must outlive the guard. Acquisition errors are not exposed.
     class write_guard
     {
     public:
+        /// @brief Constructs the guard for the specified lock.
+        /// @param[in,out] rw Lock to acquire and release.
         explicit write_guard(rwlock& rw) noexcept : rw_(rw) { (void)rw_.write_lock(); }
+        /// @brief Attempts to release the write lock.
         ~write_guard() noexcept { (void)rw_.write_unlock(); }
-        write_guard(const write_guard&)            = delete;
+        /// @brief Copy construction is disabled to prevent duplicate unlocks.
+        write_guard(const write_guard&) = delete;
+        /// @brief Copy assignment is disabled to prevent duplicate unlocks.
         write_guard& operator=(const write_guard&) = delete;
-        write_guard(write_guard&&)                 = delete;
-        write_guard& operator=(write_guard&&)      = delete;
+        /// @brief Move construction is disabled to preserve guard ownership.
+        write_guard(write_guard&&) = delete;
+        /// @brief Move assignment is disabled to preserve guard ownership.
+        write_guard& operator=(write_guard&&) = delete;
 
     private:
         rwlock& rw_;
@@ -163,6 +222,7 @@ public:
     // ---- query -------------------------------------------------------------
 
     /// @brief Returns true if the rwlock was successfully created.
+    /// @return true if construction initialized the lock successfully.
     [[nodiscard]] bool valid() const noexcept { return valid_; }
 
 private:

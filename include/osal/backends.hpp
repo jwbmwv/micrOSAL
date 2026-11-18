@@ -247,7 +247,8 @@ using active_capabilities = capabilities<active_backend>;
 /// @brief Trait descriptor for the currently selected backend.
 using active_traits = backend_traits<active_backend>;
 
-/// @brief Human-readable name of the currently selected backend.
+/// @brief Returns the human-readable name of the selected backend.
+/// @return A null-terminated backend name with static storage duration.
 constexpr const char* backend_name() noexcept
 {
     return active_traits::name;
@@ -379,11 +380,17 @@ struct support_requirement_value<support_requirement::irq_mask_guard, Backend>
 }  // namespace detail
 
 /// @brief True when the selected backend satisfies the requested requirement.
+/// @tparam Requirement  Feature or primitive whose support is queried.
+/// @tparam Backend      Backend descriptor to query; defaults to the active backend.
 template<support_requirement Requirement, typename Backend = active_backend>
 // NOLINTNEXTLINE(google-readability-casting) -- false positive on non-type template parameter usage.
 inline constexpr bool supports_requirement = detail::support_requirement_value<Requirement, Backend>::value;
 
 /// @brief Force a clear compile-time diagnostic when a backend requirement is mandatory.
+/// @tparam Requirement  Feature or primitive that must be supported.
+/// @tparam Backend      Backend descriptor to validate; defaults to the active backend.
+/// @pre @p Backend must provide the trait/capability values needed to evaluate @p Requirement.
+/// @note Unsupported requirements fail compilation with a requirement-specific static assertion.
 template<support_requirement Requirement, typename Backend = active_backend>
 consteval void require_backend_support() noexcept
 {

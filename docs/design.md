@@ -9,7 +9,7 @@ seventeen backends:
 | Backend | Target | File |
 | --- | --- | --- |
 | `FREERTOS` | FreeRTOS ≥ 10.0 (all chip families) | `src/freertos/freertos_backend.cpp` |
-| `ZEPHYR` | Zephyr RTOS ≥ 3.0 (tested with 4.3) | `src/zephyr/zephyr_backend.cpp` |
+| `ZEPHYR` | Zephyr RTOS ≥ 3.0 (CI targets 3.7 LTS and 4.5) | `src/zephyr/zephyr_backend.cpp` |
 | `THREADX` | Azure RTOS ThreadX | `src/threadx/threadx_backend.cpp` |
 | `PX5` | PX5 RTOS (ThreadX superset) | `src/px5/px5_backend.cpp` |
 | `POSIX` | Any POSIX:2008 system | `src/posix/posix_backend.cpp` |
@@ -437,6 +437,7 @@ Internally it is built from:
 | `reschedule(delay)` | Replace an existing armed delay before it has been queued |
 | `cancel()` | Cancel a still-armed delay; returns `would_block` once queued/running |
 | `flush(timeout)` | Wait until the delayed work reaches the idle state again |
+| `close(timeout)` | Reclaim the timer and drain this item's queued/running callback |
 | `scheduled()` | True only while the timer is armed |
 | `pending()` | True while armed, queued, or currently running |
 | `running()` | True only while the callback is executing |
@@ -451,6 +452,22 @@ Internally it is built from:
     longer cancellable because execution order belongs to the work queue.
 - `valid()` is false on backends whose timer callbacks may run in ISR context
     unless the active work-queue backend supports ISR-safe submission.
+- `close(timeout)` first closes the timer, providing the backend's callback
+    quiescence barrier, then cancels any remaining arm and waits for this item's
+    queued/running callback. It does not shut down or cancel unrelated queue work.
+    The timeout bounds the drain wait, not synchronous backend timer destruction.
+- Serialize close/destruction against other public operations. Keep the queue
+    alive and draining, and never close from its worker or externally cancel the
+    queued thunk. After timer reclamation `valid()` is false, including when
+    draining times out; retain the object and argument and retry `close()`.
+    Deferred dispatch errors are returned after draining and consumed once.
+- Destruction calls `close(-1)` and invokes `std::abort()` on unsafe cleanup rather
+    than releasing callback context unsafely. Use checked close for recovery.
+    A deferred dispatch error reported after safe reclamation is not fatal;
+    use checked close or flush to observe work errors before destruction.
+    Normal completion can still wait indefinitely if the worker cannot progress.
+    On backends where `timer::can_reclaim_after_start` is false, started delayed
+    work needs application-lifetime storage even after `cancel()` or `flush()`.
 
 This keeps the abstraction thin while still covering the practical subset of
 Zephyr `k_work_delayable` / FreeRTOS timer-plus-worker patterns that can be
@@ -1125,10 +1142,12 @@ Serialize close/destruction of the same registration in caller code; distinct
 registrations may unregister concurrently. Completion uses condition-variable
 broadcast and each waiter rechecks its own node, not a shared semaphore permit
 that one waiter could consume on another's behalf.
-The compatibility destructor waits for safe unregistering; on primitive
-failure it retries with a blocking delay, never abandoning a referenced node.
-A persistent backend fault can therefore prevent destruction from completing:
-use checked close with a finite timeout and external recovery where required.
+The destructor waits for normal in-flight completion, but invokes `std::abort()`
+on a primitive cleanup error instead of retrying forever or abandoning a
+referenced node. Use checked close with a finite timeout and external recovery
+before destruction where required. A callback that never returns can still
+prevent normal destruction from completing. Late synchronous registrations
+need no unregister operation once their constructor returns.
 
 ## Event-Driven Portable Object Waiting
 

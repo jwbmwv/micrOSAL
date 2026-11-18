@@ -14,10 +14,8 @@
 
 #pragma once
 
-/// @brief Return the monotonic wall time in milliseconds.
-/// @details Uses `clock_gettime(CLOCK_MONOTONIC)`.  The reference epoch is
-///          undefined but the value is strictly monotonically increasing.
-/// @return Milliseconds since an arbitrary but fixed epoch.
+// Uses `clock_gettime(CLOCK_MONOTONIC)`.  The reference epoch is
+// undefined but the value is strictly monotonically increasing.
 std::int64_t osal_clock_monotonic_ms() noexcept
 {
     struct timespec ts;
@@ -25,9 +23,7 @@ std::int64_t osal_clock_monotonic_ms() noexcept
     return static_cast<std::int64_t>(ts.tv_sec) * 1'000LL + static_cast<std::int64_t>(ts.tv_nsec) / 1'000'000LL;
 }
 
-/// @brief Return the current system (wall-clock) time in milliseconds since the Unix epoch.
-/// @details Uses `clock_gettime(CLOCK_REALTIME)`.
-/// @return Milliseconds since 1970-01-01T00:00:00Z.
+// Uses `clock_gettime(CLOCK_REALTIME)`.
 std::int64_t osal_clock_system_ms() noexcept
 {
     struct timespec ts;

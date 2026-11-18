@@ -8,6 +8,7 @@ It mirrors the guardrails in [Agents.md](../Agents.md) and maps directly to curr
 - [ ] Formatting check passes.
 - [ ] Hosted Linux configure/build/test passes.
 - [ ] Core clang-tidy pass succeeds.
+- [ ] Header, CMake, and Doxygen versions agree (checked automatically during standalone configuration).
 
 Commands:
 
@@ -78,7 +79,28 @@ ctest --test-dir build-freertos --output-on-failure
 ### Zephyr
 
 - [ ] Zephyr test lane rerun in isolated west/module context when Zephyr code paths changed.
+- [ ] Both v3.7.0 LTS (SDK 0.16.8) and v4.5.0 (SDK 1.0.1) remain in the
+      `native_sim` and nRF52840 Renode matrix; the advisory discovery sweep follows v4.5.0.
+- [ ] The v4.5.0 workspace uses CMake 3.28+ and Python 3.12+.
 - [ ] Capability-gated behavior remains explicit (for example high-resolution clock and CPU query support).
+
+Use the isolated-workspace commands in
+[Test Coverage](TestCoverage.md#running-the-zephyr-suite). Do not change another
+project's west manifest or present a newer development checkout as v4.5.0 evidence.
+
+### ThreadX
+
+- [ ] Pinned SDK adapter build and Linux/GNU-port tests pass when ThreadX changed.
+- [ ] Simulator evidence is not presented as board/ISR/SMP certification.
+- [ ] Started-timer reclamation remains explicitly unsupported.
+- [ ] Cross-task readiness/cancellation, in-flight callback close, native timeout,
+      and semaphore-exhaustion/recovery checks pass.
+
+```bash
+cmake -S tests/threadx -B build-threadx -DCMAKE_BUILD_TYPE=Debug
+cmake --build build-threadx --parallel
+ctest --test-dir build-threadx --output-on-failure --timeout 30
+```
 
 ### NuttX
 
@@ -87,6 +109,18 @@ ctest --test-dir build-freertos --output-on-failure
       rather than `<atomic>` directly, including when included before `osal.hpp`.
 - [ ] The test app links the shared C bridge as well as the NuttX backend;
       C++ mutex configuration also depends on the shared bridge.
+
+### Optional C++23 APIs
+
+- [ ] The feature-presence gate succeeds with the same compiler/library used by the tests.
+- [ ] Expected adapters are not silently compiled out of the C++23 validation run.
+
+```bash
+cmake -B build-cxx23 -DOSAL_BACKEND=LINUX -DCMAKE_CXX_STANDARD=23 \
+    -DOSAL_REQUIRE_STD_EXPECTED=ON -DOSAL_BUILD_TESTS=ON
+cmake --build build-cxx23 --parallel
+ctest --test-dir build-cxx23 --output-on-failure
+```
 
 ## 4) Off-Rails Checks (must stay true)
 
@@ -103,10 +137,12 @@ ctest --test-dir build-freertos --output-on-failure
   - CMakeLists.txt
   - Doxyfile
 - [ ] Doxygen generation succeeds.
+- [ ] Generated Doxygen HTML/LaTeX/XML remains untracked and is not included in the release changeset.
 
 Commands:
 
 ```bash
+cmake -P cmake/check_version.cmake
 rm -rf docs/doxygen/html docs/doxygen/latex docs/doxygen/xml
 doxygen Doxyfile
 ```
@@ -117,10 +153,13 @@ Current workflow jobs in [.github/workflows/ci.yml](../.github/workflows/ci.yml)
 
 - format-check
 - build-test
+- cxx23-test
+- cxx26-test (advisory, non-blocking; requires native `std::inplace_vector`)
 - clang-tidy
 - clang-tidy-tests (non-blocking)
 - sanitizers
 - freertos-test
+- threadx-test
 - nuttx-test
 - zephyr-test
 

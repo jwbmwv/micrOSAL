@@ -75,11 +75,6 @@ static void zep_sl_release(zephyr_spinlock_obj* p) noexcept
 
 }  // anonymous namespace
 
-/// @brief Creates a Zephyr spinlock from the internal pool.
-/// @param[out] handle  Output handle; populated on success.
-/// @retval osal::ok()                    On success.
-/// @retval error_code::invalid_argument  If null.
-/// @retval error_code::out_of_resources  If the pool is exhausted.
 osal::result osal_spinlock_create(osal::active_traits::spinlock_handle_t* handle) noexcept
 {
     if (!handle)
@@ -95,9 +90,6 @@ osal::result osal_spinlock_create(osal::active_traits::spinlock_handle_t* handle
     return osal::ok();
 }
 
-/// @brief Destroys a spinlock and returns its pool slot.
-/// @param[in,out] handle  Handle to destroy; silently ignored if null.
-/// @retval osal::ok()  Always.
 osal::result osal_spinlock_destroy(osal::active_traits::spinlock_handle_t* handle) noexcept
 {
     if (!handle || !handle->native)
@@ -109,10 +101,6 @@ osal::result osal_spinlock_destroy(osal::active_traits::spinlock_handle_t* handl
     return osal::ok();
 }
 
-/// @brief Acquires the spinlock via @c k_spin_lock, saving the IRQ key.
-/// @param[in] handle  Spinlock handle.
-/// @retval osal::ok()                   On success.
-/// @retval error_code::not_initialized  If null.
 osal::result osal_spinlock_lock(osal::active_traits::spinlock_handle_t* handle) noexcept
 {
     if (!handle || !handle->native)
@@ -124,12 +112,10 @@ osal::result osal_spinlock_lock(osal::active_traits::spinlock_handle_t* handle) 
     return osal::ok();
 }
 
-/// @brief Attempts to acquire the spinlock without contending.
-/// @details Zephyr does not expose a non-blocking @c k_spin_trylock.  This
-///          implementation calls @c k_spin_lock, which will busy-wait on SMP
-///          if another CPU holds the lock.  On single-core Zephyr builds the
-///          spinlock is always immediately acquired (interrupts are disabled).
-/// @return @c true on success; @c false if the handle is null.
+// Zephyr does not expose a non-blocking k_spin_trylock.  This
+// implementation calls k_spin_lock, which will busy-wait on SMP
+// if another CPU holds the lock.  On single-core Zephyr builds the
+// spinlock is always immediately acquired (interrupts are disabled).
 bool osal_spinlock_try_lock(osal::active_traits::spinlock_handle_t* handle) noexcept
 {
     if (!handle || !handle->native)
@@ -141,8 +127,6 @@ bool osal_spinlock_try_lock(osal::active_traits::spinlock_handle_t* handle) noex
     return true;
 }
 
-/// @brief Releases the spinlock via @c k_spin_unlock, restoring the saved IRQ key.
-/// @param[in] handle  Spinlock handle.
 void osal_spinlock_unlock(osal::active_traits::spinlock_handle_t* handle) noexcept
 {
     if (!handle || !handle->native)

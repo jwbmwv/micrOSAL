@@ -36,17 +36,47 @@ struct mutex_config;
 // Forward-declare backend implementation functions (defined in src/<backend>/).
 extern "C"
 {
+    /// @brief Creates a backend mutex.
+    /// @param[out] handle     Receives the native mutex handle.
+    /// @param[in]  recursive  Whether repeated locking by the owner is allowed.
+    /// @return Success or the backend creation error.
+    /// @note Thread context only; release a successfully created handle with osal_mutex_destroy().
     osal::result osal_mutex_create(osal::active_traits::mutex_handle_t* handle, bool recursive) noexcept;
 
+    /// @brief Destroys a backend mutex after users have quiesced.
+    /// @param[in,out] handle  Mutex handle to release.
+    /// @pre The mutex is unlocked and has no waiters; call from thread context.
+    /// @return Success or the backend destruction error.
     osal::result osal_mutex_destroy(osal::active_traits::mutex_handle_t* handle) noexcept;
 
+    /// @brief Acquires a backend mutex from thread context.
+    /// @param[in,out] handle         Initialised mutex handle.
+    /// @param[in]     timeout_ticks  Wait limit in ticks; NO_WAIT polls and WAIT_FOREVER waits indefinitely.
+    /// @return Acquisition status, including timeout/ownership errors as provided by the backend.
     osal::result osal_mutex_lock(osal::active_traits::mutex_handle_t* handle, osal::tick_t timeout_ticks) noexcept;
 
+    /// @brief Attempts to acquire a backend mutex without waiting.
+    /// @param[in,out] handle  Initialised mutex handle.
+    /// @return Acquisition status, preserving the backend's contention or ownership error.
+    /// @note Thread context only.
     osal::result osal_mutex_try_lock(osal::active_traits::mutex_handle_t* handle) noexcept;
 
+    /// @brief Releases one level of backend mutex ownership.
+    /// @param[in,out] handle  Mutex owned by the calling thread.
+    /// @return Success or the backend unlock error.
+    /// @note Thread context only.
     osal::result osal_mutex_unlock(osal::active_traits::mutex_handle_t* handle) noexcept;
+    /// @brief Creates a mutex with explicit protocol and robustness configuration.
+    /// @param[out] handle  Receives the native mutex handle.
+    /// @param[in]  config  Configuration consumed during creation.
+    /// @return Success or a configuration/capability/backend creation error.
+    /// @note Thread context only.
     osal::result osal_mutex_create_config(osal::active_traits::mutex_handle_t* handle,
                                           const osal::mutex_config*            config) noexcept;
+    /// @brief Marks repaired robust-mutex state consistent.
+    /// @param[in,out] handle  Robust mutex owned after an owner_died result.
+    /// @pre The caller repaired the protected state and still owns the mutex.
+    /// @return Success or a capability/ownership/backend error.
     osal::result osal_mutex_consistent(osal::active_traits::mutex_handle_t* handle) noexcept;
 
 }  // extern "C"
@@ -117,6 +147,9 @@ struct mutex_config
 class mutex
 {
 public:
+    /// @brief Checks whether the active backend can honor a mutex protocol.
+    /// @param[in] protocol  Requested mutex protocol.
+    /// @return True when the protocol is supported by this build.
     [[nodiscard]] static constexpr bool supports_protocol(mutex_protocol protocol) noexcept
     {
         if (protocol == mutex_protocol::native_default)
@@ -150,6 +183,7 @@ public:
 
     /// @brief Constructs from an immutable config (config may reside in FLASH).
     /// @param[in] cfg  Configuration — typically declared @c const / @c constexpr.
+    /// @details Check valid() or initialization_status() for creation failure.
     /// @complexity O(1)
     /// @blocking   Never.
     explicit mutex(const mutex_config& cfg) noexcept : valid_(false)
@@ -166,23 +200,32 @@ public:
 
     /// @brief Destructs and releases the mutex.
     /// @warning  Destroying a locked mutex is undefined behaviour (UB) on all backends.
+    /// @details Cleanup is best-effort; explicitly handle close() failures before destroying storage.
     /// @complexity O(1)
     ~mutex() noexcept { (void)close(); }
 
     // Disable copy and move — OS handles are non-transferable.
-    mutex(const mutex&)            = delete;
+    /// @brief Copy construction is disabled because mutex ownership is not transferable.
+    mutex(const mutex&) = delete;
+    /// @brief Copy assignment is disabled.
     mutex& operator=(const mutex&) = delete;
-    mutex(mutex&&)                 = delete;
-    mutex& operator=(mutex&&)      = delete;
+    /// @brief Move construction is disabled.
+    mutex(mutex&&) = delete;
+    /// @brief Move assignment is disabled.
+    mutex& operator=(mutex&&) = delete;
 
     // ---- query -------------------------------------------------------------
 
     /// @brief Returns true if the mutex was successfully initialised.
     /// @return true if the backing OS primitive is valid.
-    [[nodiscard]] bool   valid() const noexcept { return valid_; }
+    [[nodiscard]] bool valid() const noexcept { return valid_; }
+    /// @brief Reports the original creation result.
+    /// @return Success or the initialization error; closing does not replace this result.
     [[nodiscard]] result initialization_status() const noexcept { return initialization_status_; }
 
-    /// Close only when unlocked and without waiters. A failed close retains ownership.
+    /// @brief Closes an unlocked mutex with no waiters; failure retains ownership.
+    /// @pre Concurrent users have quiesced; call from thread context.
+    /// @return Success if already closed or destroyed, otherwise the backend destruction error.
     [[nodiscard]] result close() noexcept
     {
         if (!valid_)
@@ -198,6 +241,12 @@ public:
         return status;
     }
 
+    /// @brief Acquires the mutex with explicit error reporting.
+    /// @param[in] timeout  Negative waits indefinitely; zero polls; positive values bound the wait.
+    /// @retval error_code::not_initialized  The mutex is not valid.
+    /// @retval error_code::not_supported    A positive timeout requires timed-mutex support.
+    /// @return Otherwise the backend acquisition result, including owner_died for a recovered robust mutex.
+    /// @note Thread context only. An owner_died result grants ownership but requires state repair.
     [[nodiscard]] result checked_lock(milliseconds timeout = milliseconds{-1}) noexcept
     {
         if (!valid_)
@@ -223,17 +272,28 @@ public:
         }
         return status;
     }
+    /// @brief Releases one ownership level and preserves backend errors.
+    /// @pre The calling thread owns the mutex.
+    /// @return Success or the backend unlock error.
     [[nodiscard]] result checked_unlock() noexcept { return osal_mutex_unlock(&handle_); }
-    /// Mark repaired protected state consistent after owner_died; caller must own the robust mutex.
+    /// @brief Marks repaired protected state consistent after owner_died.
+    /// @pre The calling thread owns the robust mutex and has repaired its protected state.
+    /// @return Success or the backend capability/ownership error.
     [[nodiscard]] result consistent() noexcept { return osal_mutex_consistent(&handle_); }
 
+    /// @brief Scoped checked lock, including ownership granted with owner_died.
     class checked_lock_guard
     {
     public:
+        /// @brief Attempts acquisition and retains the result for inspection.
+        /// @param[in,out] m        Mutex to acquire; must outlive the guard.
+        /// @param[in]     timeout  Wait policy as for checked_lock().
+        /// @note After owner_died, repair state and call consistent() before releasing ownership.
         explicit checked_lock_guard(mutex& m, milliseconds timeout = milliseconds{-1}) noexcept
             : mutex_(m), status_(m.checked_lock(timeout)), owns_(status_.ok() || status_ == error_code::owner_died)
         {
         }
+        /// @brief Releases owned locking; backend cleanup errors are discarded.
         ~checked_lock_guard() noexcept
         {
             if (owns_)
@@ -241,12 +301,23 @@ public:
                 (void)mutex_.checked_unlock();
             }
         }
-        checked_lock_guard(const checked_lock_guard&)            = delete;
+        /// @brief Copy construction is disabled.
+        checked_lock_guard(const checked_lock_guard&) = delete;
+        /// @brief Copy assignment is disabled.
         checked_lock_guard& operator=(const checked_lock_guard&) = delete;
-        checked_lock_guard(checked_lock_guard&&)                 = delete;
-        checked_lock_guard&  operator=(checked_lock_guard&&)     = delete;
+        /// @brief Move construction is disabled.
+        checked_lock_guard(checked_lock_guard&&) = delete;
+        /// @brief Move assignment is disabled.
+        checked_lock_guard& operator=(checked_lock_guard&&) = delete;
+        /// @brief Reports the acquisition result.
+        /// @return Original checked_lock() result, unchanged by unlock().
         [[nodiscard]] result status() const noexcept { return status_; }
-        [[nodiscard]] bool   owns_lock() const noexcept { return owns_; }
+        /// @brief Checks whether this guard still owns the mutex.
+        /// @return True after successful acquisition or owner_died until a successful unlock().
+        [[nodiscard]] bool owns_lock() const noexcept { return owns_; }
+        /// @brief Releases owned locking, retaining ownership on backend failure.
+        /// @retval error_code::not_owner  This guard does not own the mutex.
+        /// @return Otherwise the backend unlock result.
         [[nodiscard]] result unlock() noexcept
         {
             if (!owns_)
@@ -273,13 +344,16 @@ public:
     /// @details Blocks the calling thread until the mutex is acquired.
     ///          For recursive mutexes, increments the lock counter if the
     ///          calling thread is already the owner.
+    ///          Acquisition errors are discarded; use checked_lock() when errors or robust recovery matter.
     /// @note    Not ISR-safe on any backend.
     /// @complexity O(1)
     /// @blocking   Potentially blocking.
     void lock() noexcept { (void)checked_lock(); }
 
     /// @brief Attempts to acquire the mutex without blocking.
-    /// @return true if the mutex was acquired; false if already locked by another thread.
+    /// @return True if acquired; false on contention, invalid state, or another acquisition error.
+    /// @warning A robust owner_died result grants ownership but returns false here.
+    ///          Use checked_lock() to distinguish and repair that state.
     /// @note    Not ISR-safe on any backend.
     /// @complexity O(1)
     /// @blocking   Never.
@@ -287,9 +361,12 @@ public:
 
     /// @brief Acquires the mutex, blocking up to @p timeout_ms milliseconds.
     /// @param[in] timeout_ms  Maximum time to wait.
-    /// @return true if acquired within the timeout; false on timeout.
+    /// @return True if acquired; false on contention, timeout, or another backend error.
     /// @note   Requires capabilities<active_backend>::has_timed_mutex.
-    ///         Returns false immediately if the backend does not support timed locks.
+    ///         Falls back to a non-blocking attempt if timed locks are unsupported.
+    ///         Non-positive durations convert to a non-blocking attempt.
+    /// @warning A robust owner_died result grants ownership but returns false here.
+    ///          Use checked_lock() to distinguish and repair that state.
     /// @complexity O(1)
     /// @blocking   Potentially blocking up to timeout_ms.
     bool try_lock_for(milliseconds timeout_ms) noexcept
@@ -311,12 +388,14 @@ public:
     /// @warning Calling unlock() from a thread that does not own the mutex is
     ///          undefined behaviour.
     /// @note    Not ISR-safe on any backend.
+    /// @details Backend errors are discarded; use checked_unlock() for error reporting.
     /// @complexity O(1)
     /// @blocking   Never.
     void unlock() noexcept { (void)osal_mutex_unlock(&handle_); }
 
     /// @brief Returns a pointer to the internal backend handle.
     /// @note  Intended for OSAL internal use (e.g. condvar).
+    /// @return Borrowed handle storage, valid only while this mutex object is alive.
     [[nodiscard]] active_traits::mutex_handle_t* native_handle() noexcept { return &handle_; }
 
     // ---- RAII lock_guard ---------------------------------------------------
@@ -327,15 +406,20 @@ public:
     {
     public:
         /// @brief Constructs the guard and locks @p m.
-        /// @param[in] m  The mutex to lock.
+        /// @param[in,out] m  Mutex to lock; must outlive the guard.
+        /// @note Lock errors are discarded; use checked_lock_guard to inspect acquisition.
         explicit lock_guard(mutex& m) noexcept : m_(m) { m_.lock(); }
         /// @brief Destructs the guard and unlocks the mutex.
         ~lock_guard() noexcept { m_.unlock(); }
 
-        lock_guard(const lock_guard&)            = delete;
+        /// @brief Copy construction is disabled.
+        lock_guard(const lock_guard&) = delete;
+        /// @brief Copy assignment is disabled.
         lock_guard& operator=(const lock_guard&) = delete;
-        lock_guard(lock_guard&&)                 = delete;
-        lock_guard& operator=(lock_guard&&)      = delete;
+        /// @brief Move construction is disabled.
+        lock_guard(lock_guard&&) = delete;
+        /// @brief Move assignment is disabled.
+        lock_guard& operator=(lock_guard&&) = delete;
 
     private:
         mutex& m_;

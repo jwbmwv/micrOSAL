@@ -57,6 +57,8 @@ conan/
 # Doxygen output
 docs/html/
 docs/doxygen/html/
+docs/doxygen/latex/
+docs/doxygen/xml/
 docs/latex/
 docs/xml/
 Doxyfile.bak

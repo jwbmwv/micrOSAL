@@ -61,10 +61,6 @@ static void emu_barrier_release(emulated_barrier_obj* barrier) noexcept
 
 }  // namespace
 
-/// @brief Create an emulated barrier.
-/// @retval osal::ok()                    On success.
-/// @retval error_code::invalid_argument  For null or zero-count.
-/// @retval error_code::out_of_resources  If the pool is exhausted.
 osal::result osal_barrier_create(osal::active_traits::barrier_handle_t* handle, unsigned count) noexcept
 {
     if (!handle || (count == 0U)) [[unlikely]]
@@ -106,7 +102,6 @@ osal::result osal_barrier_create(osal::active_traits::barrier_handle_t* handle, 
     return osal::ok();
 }
 
-/// @brief Destroy an emulated barrier and release its pool slot.
 osal::result osal_barrier_destroy(osal::active_traits::barrier_handle_t* handle) noexcept
 {
     if (!handle || !handle->native) [[unlikely]]
@@ -122,8 +117,6 @@ osal::result osal_barrier_destroy(osal::active_traits::barrier_handle_t* handle)
     return osal::ok();
 }
 
-/// @brief Wait until the barrier threshold is reached.
-/// @return `barrier_serial` for the releasing thread, `ok` for all others.
 osal::result osal_barrier_wait(osal::active_traits::barrier_handle_t* handle) noexcept
 {
     if (!handle || !handle->native) [[unlikely]]

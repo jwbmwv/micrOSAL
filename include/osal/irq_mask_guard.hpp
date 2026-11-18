@@ -160,6 +160,8 @@ public:
     static constexpr bool is_supported = supports_requirement<support_requirement::irq_mask_guard>;
 
     /// @brief Enforce IRQ-mask-guard support at compile time.
+    /// @tparam Backend Backend whose IRQ-mask-guard requirement is checked.
+    /// @details Compilation fails if @p Backend does not support this facility.
     template<typename Backend = active_backend>
     static consteval void require_support()
     {
@@ -169,6 +171,8 @@ public:
     /// @brief Constructs the guard.
     /// @details Acquires the backend's IRQ-mask token on supported backends.
     ///          On FreeRTOS this maps to a task critical section.
+    ///          Use only around very short sections; this is not an SMP-wide
+    ///          lock. On FreeRTOS construction is task-context-only.
     irq_mask_guard() noexcept
     {
         if constexpr (is_supported)
@@ -177,7 +181,8 @@ public:
         }
     }
 
-    /// @brief Destructs the guard.
+    /// @brief Restores the saved interrupt-mask state on supported backends.
+    /// @details Must be destroyed on the same execution context that created it.
     ~irq_mask_guard() noexcept
     {
         if constexpr (is_supported)
@@ -186,14 +191,19 @@ public:
         }
     }
 
-    irq_mask_guard(const irq_mask_guard&)            = delete;
+    /// @brief Copy construction is disabled; the saved mask state has one owner.
+    irq_mask_guard(const irq_mask_guard&) = delete;
+    /// @brief Copy assignment is disabled; the saved mask state has one owner.
     irq_mask_guard& operator=(const irq_mask_guard&) = delete;
-    irq_mask_guard(irq_mask_guard&&)                 = delete;
-    irq_mask_guard& operator=(irq_mask_guard&&)      = delete;
+    /// @brief Move construction is disabled to preserve lexical mask lifetime.
+    irq_mask_guard(irq_mask_guard&&) = delete;
+    /// @brief Move assignment is disabled to preserve lexical mask lifetime.
+    irq_mask_guard& operator=(irq_mask_guard&&) = delete;
 
     /// @brief Returns true when the active backend supports the IRQ-mask guard.
     /// @details This is a compile-time constant; the guard always holds its
     ///          mask for its full lifetime on supported backends.
+    /// @return true when the active backend supports the guard.
     [[nodiscard]] static constexpr bool active() noexcept { return is_supported; }
 
 private:

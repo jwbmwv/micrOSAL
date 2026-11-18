@@ -41,10 +41,12 @@
 #endif
 
 #ifndef OSAL_OBJECT_WAIT_SET_MAX_ENTRIES
+/// @brief Maximum number of object registrations held by one object_wait_set.
 #define OSAL_OBJECT_WAIT_SET_MAX_ENTRIES 16U
 #endif
 
 #ifndef OSAL_OBJECT_WAIT_SET_POLL_INTERVAL_MS
+/// @brief Polling interval used by blocking object_wait_set::wait() calls.
 #define OSAL_OBJECT_WAIT_SET_POLL_INTERVAL_MS 1U
 #endif
 
@@ -56,10 +58,15 @@ namespace osal
 /// @{
 
 /// @brief Portable wait set for OSAL objects with non-destructive readiness.
+/// @details Registrations hold non-owning pointers. Every registered object
+///          must remain alive until removed or until this wait set is no
+///          longer used. Readiness is sampled and may change immediately.
 /// @details Each registration associates a caller-defined integer identifier
 ///          with one OSAL object and a readiness predicate. The wait set does
 ///          not consume data or events unless the specific registration opts
 ///          into clear-on-exit behavior for event flags or notifications.
+///          Registration changes are not synchronized with wait(); do not
+///          modify entries concurrently with waits or other registration changes.
 ///
 /// @warning **Polling cost:** This implementation polls registered objects at
 ///          a fixed interval (default `OSAL_OBJECT_WAIT_SET_POLL_INTERVAL_MS`
@@ -71,25 +78,35 @@ namespace osal
 class object_wait_set
 {
 public:
-    /// @brief Construct an empty object wait set.
-    object_wait_set() noexcept  = default;
+    /// @brief Constructs an empty object wait set.
+    /// @details No backend resources are acquired.
+    object_wait_set() noexcept = default;
+    /// @brief Destroys the object wait set.
+    /// @details Does not own or destroy registered objects.
     ~object_wait_set() noexcept = default;
 
-    object_wait_set(const object_wait_set&)            = delete;
+    /// @brief Copy construction is disabled; registrations refer to caller-owned objects.
+    object_wait_set(const object_wait_set&) = delete;
+    /// @brief Copy assignment is disabled; registrations refer to caller-owned objects.
     object_wait_set& operator=(const object_wait_set&) = delete;
-    object_wait_set(object_wait_set&&)                 = delete;
-    object_wait_set& operator=(object_wait_set&&)      = delete;
+    /// @brief Move construction is disabled to preserve registration identity.
+    object_wait_set(object_wait_set&&) = delete;
+    /// @brief Move assignment is disabled to preserve registration identity.
+    object_wait_set& operator=(object_wait_set&&) = delete;
 
     /// @brief Report whether the wait set can be used.
     /// @return Always `true`; this type has no backend resources of its own.
     [[nodiscard]] static constexpr bool valid() noexcept { return true; }
 
     /// @brief Register a queue and mark it ready when non-empty.
-    /// @param[in] q   Queue to observe.
-    /// @param[in] id  Caller-defined identifier returned by wait().
+    /// @param[in] q  Queue to observe.
+    /// @param[in] id Caller-defined identifier returned by wait().
     /// @retval error_code::ok              The queue was registered.
     /// @retval error_code::not_initialized The queue is not initialized.
     /// @retval error_code::overflow        The wait-set has reached its entry limit.
+    /// @tparam T Queue element type.
+    /// @tparam N Queue depth.
+    /// @details The queue is borrowed, not owned; keep it alive while registered.
     template<queue_element T, queue_depth_t N>
     result add(queue<T, N>& q, int id) noexcept
     {
@@ -101,11 +118,13 @@ public:
     }
 
     /// @brief Register a mailbox and mark it ready when non-empty.
-    /// @param[in] mb  Mailbox to observe.
-    /// @param[in] id  Caller-defined identifier returned by wait().
+    /// @param[in] mb Mailbox to observe.
+    /// @param[in] id Caller-defined identifier returned by wait().
     /// @retval error_code::ok              The mailbox was registered.
     /// @retval error_code::not_initialized The mailbox is not initialized.
     /// @retval error_code::overflow        The wait-set has reached its entry limit.
+    /// @tparam T Mailbox element type.
+    /// @details The mailbox is borrowed, not owned; keep it alive while registered.
     template<queue_element T>
     result add(mailbox<T>& mb, int id) noexcept
     {
@@ -117,15 +136,17 @@ public:
     }
 
     /// @brief Register an event-flags object and wait for any bit in @p bits.
-    /// @param[in] flags          Event flags to observe.
-    /// @param[in] bits           Bit mask that triggers readiness when any bit is set.
-    /// @param[in] id             Caller-defined identifier returned by wait().
-    /// @param[in] clear_on_exit  When `true`, the matched bits are cleared once the
-    ///                      entry reports ready.
+    /// @param[in] flags         Event flags to observe.
+    /// @param[in] bits          Bit mask that triggers readiness when any bit is set.
+    /// @param[in] id            Caller-defined identifier returned by wait().
+    /// @param[in] clear_on_exit When true, matched bits are cleared when the
+    ///                          readiness probe observes them.
     /// @retval error_code::ok               The event-flags object was registered.
     /// @retval error_code::not_initialized  The event-flags object is not initialized.
     /// @retval error_code::invalid_argument @p bits is zero.
     /// @retval error_code::overflow         The wait-set has reached its entry limit.
+    /// @details The flags object is borrowed. Clearing occurs during a probe,
+    ///          not as an atomic operation with the eventual wait return.
     result add_any(event_flags& flags, event_bits_t bits, int id, bool clear_on_exit = false) noexcept
     {
         if (!flags.valid())
@@ -140,15 +161,17 @@ public:
     }
 
     /// @brief Register an event-flags object and wait for all bits in @p bits.
-    /// @param[in] flags          Event flags to observe.
-    /// @param[in] bits           Bit mask that must be fully set for readiness.
-    /// @param[in] id             Caller-defined identifier returned by wait().
-    /// @param[in] clear_on_exit  When `true`, the matched bits are cleared once the
-    ///                      entry reports ready.
+    /// @param[in] flags         Event flags to observe.
+    /// @param[in] bits          Bit mask that must be fully set for readiness.
+    /// @param[in] id            Caller-defined identifier returned by wait().
+    /// @param[in] clear_on_exit When true, matched bits are cleared when the
+    ///                          readiness probe observes them.
     /// @retval error_code::ok               The event-flags object was registered.
     /// @retval error_code::not_initialized  The event-flags object is not initialized.
     /// @retval error_code::invalid_argument @p bits is zero.
     /// @retval error_code::overflow         The wait-set has reached its entry limit.
+    /// @details The flags object is borrowed. Clearing occurs during a probe,
+    ///          not as an atomic operation with the eventual wait return.
     result add_all(event_flags& flags, event_bits_t bits, int id, bool clear_on_exit = false) noexcept
     {
         if (!flags.valid())
@@ -163,13 +186,16 @@ public:
     }
 
     /// @brief Register a stream buffer and require at least @p min_bytes ready.
-    /// @param[in] sb         Stream buffer to observe.
-    /// @param[in] min_bytes  Minimum readable byte count that triggers readiness.
-    /// @param[in] id         Caller-defined identifier returned by wait().
+    /// @param[in] sb        Stream buffer to observe.
+    /// @param[in] min_bytes Minimum readable byte count that triggers readiness.
+    /// @param[in] id        Caller-defined identifier returned by wait().
     /// @retval error_code::ok               The stream buffer was registered.
     /// @retval error_code::not_initialized  The stream buffer is not initialized.
     /// @retval error_code::invalid_argument @p min_bytes is zero.
     /// @retval error_code::overflow         The wait-set has reached its entry limit.
+    /// @tparam N             Stream-buffer byte capacity.
+    /// @tparam TriggerLevel  Stream-buffer receive trigger level.
+    /// @details The stream buffer is borrowed and must outlive the registration.
     template<std::size_t N, std::size_t TriggerLevel>
     result add(stream_buffer<N, TriggerLevel>& sb, std::size_t min_bytes, int id) noexcept
     {
@@ -185,11 +211,13 @@ public:
     }
 
     /// @brief Register a message buffer and mark it ready when a message exists.
-    /// @param[in] mb  Message buffer to observe.
-    /// @param[in] id  Caller-defined identifier returned by wait().
+    /// @param[in] mb Message buffer to observe.
+    /// @param[in] id Caller-defined identifier returned by wait().
     /// @retval error_code::ok              The message buffer was registered.
     /// @retval error_code::not_initialized The message buffer is not initialized.
     /// @retval error_code::overflow        The wait-set has reached its entry limit.
+    /// @tparam N Message-buffer byte capacity.
+    /// @details The message buffer is borrowed and must outlive the registration.
     template<std::size_t N>
     result add(message_buffer<N>& mb, int id) noexcept
     {
@@ -201,11 +229,12 @@ public:
     }
 
     /// @brief Register a work queue and mark it ready when items are pending.
-    /// @param[in] wq  Work queue to observe.
-    /// @param[in] id  Caller-defined identifier returned by wait().
+    /// @param[in] wq Work queue to observe.
+    /// @param[in] id Caller-defined identifier returned by wait().
     /// @retval error_code::ok              The work queue was registered.
     /// @retval error_code::not_initialized The work queue is not initialized.
     /// @retval error_code::overflow        The wait-set has reached its entry limit.
+    /// @details The work queue is borrowed and must outlive the registration.
     result add(work_queue& wq, int id) noexcept
     {
         if (!wq.valid())
@@ -216,11 +245,12 @@ public:
     }
 
     /// @brief Register a delayable work item and mark it ready while pending.
-    /// @param[in] work  Delayable work item to observe.
-    /// @param[in] id    Caller-defined identifier returned by wait().
+    /// @param[in] work Delayable work item to observe.
+    /// @param[in] id   Caller-defined identifier returned by wait().
     /// @retval error_code::ok              The delayable work item was registered.
     /// @retval error_code::not_initialized The delayable work item is not initialized.
     /// @retval error_code::overflow        The wait-set has reached its entry limit.
+    /// @details The work item is borrowed and must outlive the registration.
     result add(delayable_work& work, int id) noexcept
     {
         if (!work.valid())
@@ -231,14 +261,17 @@ public:
     }
 
     /// @brief Register one notification slot and mark it ready when pending.
-    /// @param[in] note           Notification object to observe.
-    /// @param[in] index          Slot index inside @p note.
-    /// @param[in] id             Caller-defined identifier returned by wait().
-    /// @param[in] clear_on_exit  When `true`, the slot is reset after readiness is
-    ///                      reported.
+    /// @param[in] note          Notification object to observe.
+    /// @param[in] index         Slot index inside @p note.
+    /// @param[in] id            Caller-defined identifier returned by wait().
+    /// @param[in] clear_on_exit When true, the slot is reset when the probe
+    ///                          observes readiness.
     /// @retval error_code::ok              The notification slot was registered.
     /// @retval error_code::not_initialized The notification object is not initialized.
     /// @retval error_code::overflow        The wait-set has reached its entry limit.
+    /// @tparam Slots Number of notification slots.
+    /// @details An out-of-range slot is not rejected at registration; its
+    ///          readiness probe reports false. The notification is borrowed.
     template<std::size_t Slots>
     result add(notification<Slots>& note, std::size_t index, int id, bool clear_on_exit = false) noexcept
     {
@@ -251,9 +284,10 @@ public:
     }
 
     /// @brief Remove one previously registered identifier.
-    /// @param[in] id  Identifier originally passed to add().
+    /// @param[in] id Identifier originally passed to add().
     /// @retval error_code::ok               The identifier was removed.
     /// @retval error_code::invalid_argument The identifier is not currently registered.
+    /// @details Removes the first active registration with this identifier.
     result remove(int id) noexcept
     {
         for (auto& entry : entries_)
@@ -268,14 +302,18 @@ public:
     }
 
     /// @brief Wait until one or more registered objects become ready.
-    /// @param[out] ready_ids  Output buffer that receives ready identifiers.
-    /// @param[in] max_ready   Capacity of @p ready_ids.
-    /// @param[out] n_ready    Number of identifiers written to @p ready_ids.
-    /// @param[in] timeout     Maximum time to wait. A negative value waits forever and
-    ///                zero performs a poll-only check.
+    /// @param[out] ready_ids Output buffer that receives ready identifiers.
+    /// @param[in]  max_ready Capacity of @p ready_ids.
+    /// @param[out] n_ready   Receives the number of identifiers written.
+    /// @param[in]  timeout   Maximum wait; negative waits indefinitely and zero
+    ///                       performs one poll-only check.
     /// @retval error_code::ok               At least one entry is ready.
     /// @retval error_code::timeout          No entry became ready before the deadline.
     /// @retval error_code::invalid_argument @p ready_ids is null with a nonzero @p max_ready.
+    /// @details Returns a snapshot of ready registrations; excess ready IDs are
+    ///          truncated to @p max_ready. A successful wait does not generally
+    ///          consume readiness; configured clear-on-exit registrations do.
+    ///          Thread context only.
     result wait(int* ready_ids, std::size_t max_ready, std::size_t& n_ready,
                 milliseconds timeout = milliseconds{-1}) noexcept
     {
@@ -330,7 +368,11 @@ public:
         }
     }
 
-    /// @brief Span-based wait overload for fixed-capacity caller buffers.
+    /// @brief Wait using a span as the caller-owned ready-ID buffer.
+    /// @param[out] ready_ids Output span for ready identifiers.
+    /// @param[out] n_ready   Receives the number of identifiers written.
+    /// @param[in]  timeout   Maximum wait; negative waits indefinitely and zero polls once.
+    /// @return Same result and error contract as the pointer-based wait overload.
     result wait(std::span<int> ready_ids, std::size_t& n_ready, milliseconds timeout = milliseconds{-1}) noexcept
     {
         return wait(ready_ids.data(), ready_ids.size(), n_ready, timeout);
@@ -339,6 +381,17 @@ public:
     /// @brief Event-driven opt-in wait; every relevant producer must notify signal.
     /// @details Claims the signal and registers cancellation before probing.
     ///          Cancellation wins over readiness at the next loop check.
+    /// @param[in,out] signal    Signal used for producer notifications.
+    /// @param[out]    ready_ids Caller-owned output array.
+    /// @param[in]     max_ready Capacity of @p ready_ids.
+    /// @param[out]    n_ready   Receives the number of IDs written.
+    /// @param[in]     timeout   Maximum wait; negative waits indefinitely.
+    /// @param[in]     token     Optional cancellation token.
+    /// @return Success when an entry is ready; otherwise a propagated signal
+    ///         or callback-registration error, cancelled, timeout, or invalid_argument.
+    /// @details The signal must outlive the call. Each producer that can make an
+    ///          entry ready must update state then notify. Only one consumer may
+    ///          wait on a signal at a time.
     result wait(wait_signal& signal, int* ready_ids, std::size_t max_ready, std::size_t& n_ready,
                 milliseconds timeout = milliseconds{-1}, stop_token token = {}) noexcept
     {
@@ -369,6 +422,13 @@ public:
             timeout, token);
     }
 
+    /// @brief Event-driven wait using a span for ready identifiers.
+    /// @param[in,out] signal    Signal used for producer notifications.
+    /// @param[out]    ready_ids Output span.
+    /// @param[out]    n_ready   Receives the number of IDs written.
+    /// @param[in]     timeout   Maximum wait; negative waits indefinitely.
+    /// @param[in]     token     Optional cancellation token.
+    /// @return Same result and error contract as the pointer-based signal wait.
     result wait(wait_signal& signal, std::span<int> ready_ids, std::size_t& n_ready,
                 milliseconds timeout = milliseconds{-1}, stop_token token = {}) noexcept
     {
@@ -378,6 +438,8 @@ public:
 #if defined(__cpp_lib_expected) && __cpp_lib_expected >= 202202L
     /// @brief Value-returning wait overload using std::expected and bounded_vector (C++23/26).
     /// @tparam MaxReady Positive output capacity; excess ready identifiers are truncated as in wait().
+    /// @param[in] timeout Maximum wait; negative waits indefinitely and zero polls once.
+    /// @return Ready IDs on success, otherwise the error code from wait().
     /// @details Uses capacity-sized result storage directly, without a separate scratch array.
     template<std::size_t MaxReady = OSAL_OBJECT_WAIT_SET_MAX_ENTRIES>
         requires(MaxReady > 0U)

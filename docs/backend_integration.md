@@ -1,8 +1,38 @@
 # MicrOSAL — Backend Integration Guide
 
+## Zephyr Version Policy
+
+The Zephyr CI baselines are **v3.7.0 LTS** with SDK **0.16.8** and
+**v4.5.0** with SDK **1.0.1**, on both `native_sim` and
+`nrf52840dk/nrf52840` via Renode. The v4.5.0 entries replace v4.4.0;
+the advisory Twister discovery sweep also follows v4.5.0.
+Zephyr v4.5 requires CMake **3.28+** and Python **3.12+**. This does not
+raise the standalone MicrOSAL CMake minimum or remove the v3.7 LTS lane.
+
+Keep the C++20 Kconfig fragment enabled and use
+`k_work_queue_thread_get()` rather than the work queue's deprecated `thread`
+member; the accessor is available in both tested release lines.
+Hardware-cycle conversion helpers use the same
+`CONFIG_TIMER_HAS_64BIT_CYCLE_COUNTER` guard as their callers, avoiding
+unused-function warnings when that capability is disabled.
+Twister tags must be YAML lists (`tags: [osal, rtos, abstraction]`), not
+space-separated strings; the list form also works with v3.7.
+Use a separate west workspace for each release, with MicrOSAL supplied through
+`EXTRA_ZEPHYR_MODULES`. See [Test Coverage](TestCoverage.md#running-the-zephyr-suite)
+for commands and the distinction between local results, configured CI lanes,
+simulation, and hardware validation.
+
 ## Adding a New Backend
 
 Follow these steps to integrate a new RTOS or platform.
+
+For an existing reproducible SDK-backed example, see
+[`tests/threadx/CMakeLists.txt`](../tests/threadx/CMakeLists.txt). It pins the
+ThreadX kernel commit, compiles the actual adapter and C bridge, links the
+upstream Linux/GNU port, and runs focused runtime checks. Reproduction commands
+and evidence limits are in [Test Coverage](TestCoverage.md#running-the-threadx-sdk-suite).
+Keep SDK compilation, simulator execution, hosted-profile emulation, and
+hardware sign-off distinct when reporting backend support.
 
 ---
 

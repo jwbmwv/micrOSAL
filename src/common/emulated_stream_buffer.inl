@@ -122,8 +122,7 @@ extern "C"
     // SPSC ring helpers  (identical acquire/release contract to ring_buffer.hpp)
     // ---------------------------------------------------------------------------
 
-    /// @brief Bytes currently available to read.
-    /// @note  Safe to call from consumer or observer thread.
+    // Note: Safe to call from consumer or observer thread.
     static std::size_t sb_available(const emu_sb_obj* s) noexcept
     {
         const std::size_t h = s->head.load(std::memory_order_acquire);
@@ -131,14 +130,12 @@ extern "C"
         return (h >= t) ? (h - t) : (s->ring_size - t + h);
     }
 
-    /// @brief Free bytes that can be written without blocking.
     static std::size_t sb_free(const emu_sb_obj* s) noexcept
     {
         return s->capacity - sb_available(s);
     }
 
-    /// @brief Write @p len bytes from @p data into the ring.
-    /// @pre   sb_free(s) >= len.  Call only from the producer.
+    // Precondition: sb_free(s) >= len.  Call only from the producer.
     static void sb_write(emu_sb_obj* s, const std::uint8_t* data, std::size_t len) noexcept
     {
         std::size_t       h     = s->head.load(std::memory_order_relaxed);
@@ -152,8 +149,7 @@ extern "C"
         s->head.store(h, std::memory_order_release);
     }
 
-    /// @brief Read @p len bytes from the ring into @p buf.
-    /// @pre   sb_available(s) >= len.  Call only from the consumer.
+    // Precondition: sb_available(s) >= len.  Call only from the consumer.
     static void sb_read(emu_sb_obj* s, std::uint8_t* buf, std::size_t len) noexcept
     {
         std::size_t       t     = s->tail.load(std::memory_order_relaxed);
@@ -167,8 +163,7 @@ extern "C"
         s->tail.store(t, std::memory_order_release);
     }
 
-    /// @brief Discard @p len bytes from the head of the readable region.
-    /// @pre   sb_available(s) >= len.  Call only from the consumer.
+    // Precondition: sb_available(s) >= len.  Call only from the consumer.
     [[maybe_unused]] static void sb_skip(emu_sb_obj* s, std::size_t len) noexcept
     {
         std::size_t t = s->tail.load(std::memory_order_relaxed);
@@ -176,8 +171,7 @@ extern "C"
         s->tail.store(t, std::memory_order_release);
     }
 
-    /// @brief Peek at the next @p len bytes without advancing tail.
-    /// @pre   sb_available(s) >= len.  Call only from the consumer.
+    // Precondition: sb_available(s) >= len.  Call only from the consumer.
     [[maybe_unused]] static void sb_peek(const emu_sb_obj* s, std::uint8_t* buf, std::size_t len) noexcept
     {
         const std::size_t t     = s->tail.load(std::memory_order_relaxed);
@@ -195,18 +189,9 @@ extern "C"
     // C-linkage stream buffer functions
     // ---------------------------------------------------------------------------
 
-    /// @brief Create an emulated stream buffer backed by caller-supplied storage.
-    /// @details Uses a lock-free SPSC byte ring with binary semaphores for blocking
-    ///          I/O and ISR-safe signalling.  The caller must supply @p capacity + 1
-    ///          bytes of storage to accommodate the ring sentinel slot.
-    /// @param[out] handle        Output handle; populated on success.
-    /// @param[in] buffer         Caller-supplied storage; must be at least @p capacity + 1 bytes.
-    /// @param[in] capacity       Usable byte capacity of the stream buffer.
-    /// @param[in] trigger_level  Minimum bytes available before a blocking receive unblocks;
-    ///                      clamped to 1 if 0 is passed.
-    /// @retval osal::ok()                    On success.
-    /// @retval error_code::invalid_argument  For bad parameters.
-    /// @retval error_code::out_of_resources  If the pool or semaphores are exhausted.
+    // Uses a lock-free SPSC byte ring with binary semaphores for blocking
+    // I/O and ISR-safe signalling.  The caller must supply capacity + 1
+    // bytes of storage to accommodate the ring sentinel slot.
     osal::result osal_stream_buffer_create(osal::active_traits::stream_buffer_handle_t* handle, void* buffer,
                                            std::size_t capacity, std::size_t trigger_level) noexcept
     {
@@ -245,10 +230,6 @@ extern "C"
         return osal::ok();
     }
 
-    /// @brief Destroy an emulated stream buffer and release its pool slot.
-    /// @param[in,out] handle  Handle to destroy; silently ignored if null or uninitialized.
-    /// @retval osal::ok()                   On success.
-    /// @retval error_code::not_initialized  If null.
     osal::result osal_stream_buffer_destroy(osal::active_traits::stream_buffer_handle_t* handle) noexcept
     {
         if (!handle || !handle->native) [[unlikely]]
@@ -267,15 +248,6 @@ extern "C"
     // Send (producer)
     // ---------------------------------------------------------------------------
 
-    /// @brief Write @p len bytes into the stream buffer, blocking until space is available.
-    /// @param[in] handle         Stream buffer handle.
-    /// @param[in] data           Data to write.
-    /// @param[in] len            Number of bytes to write; must be <= @p capacity.
-    /// @param[in] timeout_ticks  Maximum ticks to wait for space; use `osal::WAIT_FOREVER` for indefinite.
-    /// @retval osal::ok()                    On success.
-    /// @retval error_code::timeout           If space is not available within the timeout.
-    /// @retval error_code::not_initialized   For bad parameters.
-    /// @retval error_code::invalid_argument  For bad parameters.
     osal::result osal_stream_buffer_send(osal::active_traits::stream_buffer_handle_t* handle, const void* data,
                                          std::size_t len, osal::tick_t timeout_ticks) noexcept
     {
@@ -321,7 +293,6 @@ extern "C"
         }
     }
 
-    /// @brief Send from ISR context.  Never blocks.
     osal::result osal_stream_buffer_send_isr(osal::active_traits::stream_buffer_handle_t* handle, const void* data,
                                              std::size_t len) noexcept
     {
@@ -348,13 +319,6 @@ extern "C"
     // Receive (consumer)
     // ---------------------------------------------------------------------------
 
-    /// @brief Read up to @p max_len bytes from the stream buffer, blocking until the
-    ///        trigger level is reached or the timeout expires.
-    /// @param[in] handle         Stream buffer handle.
-    /// @param[out] buf           Output buffer for received bytes.
-    /// @param[in] max_len        Maximum bytes to read.
-    /// @param[in] timeout_ticks  Maximum ticks to block; use `osal::WAIT_FOREVER` for indefinite.
-    /// @return Number of bytes actually read, or 0 on timeout or bad parameters.
     std::size_t osal_stream_buffer_receive(osal::active_traits::stream_buffer_handle_t* handle, void* buf,
                                            std::size_t max_len, osal::tick_t timeout_ticks) noexcept
     {
@@ -394,7 +358,6 @@ extern "C"
         }
     }
 
-    /// @brief Receive from ISR context.  Never blocks.
     std::size_t osal_stream_buffer_receive_isr(osal::active_traits::stream_buffer_handle_t* handle, void* buf,
                                                std::size_t max_len) noexcept
     {
@@ -420,9 +383,6 @@ extern "C"
     // Query
     // ---------------------------------------------------------------------------
 
-    /// @brief Return the number of bytes currently available to read.
-    /// @param[in] handle  Stream buffer handle (const).
-    /// @return Byte count, or 0 if @p handle is null.
     std::size_t osal_stream_buffer_available(const osal::active_traits::stream_buffer_handle_t* handle) noexcept
     {
         if (!handle || !handle->native) [[unlikely]]
@@ -432,9 +392,6 @@ extern "C"
         return sb_available(static_cast<const emu_sb_obj*>(handle->native));
     }
 
-    /// @brief Return the number of bytes that can be written without blocking.
-    /// @param[in] handle  Stream buffer handle (const).
-    /// @return Free byte count, or 0 if @p handle is null.
     std::size_t osal_stream_buffer_free_space(const osal::active_traits::stream_buffer_handle_t* handle) noexcept
     {
         if (!handle || !handle->native) [[unlikely]]
@@ -448,10 +405,6 @@ extern "C"
     // Reset
     // ---------------------------------------------------------------------------
 
-    /// @brief Discard all buffered data by advancing the consumer tail to the producer head.
-    /// @param[in] handle  Stream buffer handle.
-    /// @retval osal::ok()                   On success.
-    /// @retval error_code::not_initialized  If null.
     osal::result osal_stream_buffer_reset(osal::active_traits::stream_buffer_handle_t* handle) noexcept
     {
         if (!handle || !handle->native) [[unlikely]]

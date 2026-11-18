@@ -49,6 +49,8 @@ enum class notification_action : std::uint8_t
     no_overwrite = 3U,  ///< Fail if the slot already has a pending notification.
 };
 
+/// @tparam Slots Number of independently indexed notification slots; must
+///               satisfy @c valid_notification_slot_count.
 template<std::size_t Slots = 1U>
     requires valid_notification_slot_count<Slots>
 class notification
@@ -57,27 +59,38 @@ public:
     /// @brief Number of notification slots stored in this instance.
     static constexpr std::size_t slot_count = Slots;
 
-    /// @brief Construct an empty notification object.
-    notification() noexcept  = default;
+    /// @brief Constructs an empty notification object.
+    /// @details The internal mutex and condition variable are initialized as
+    ///          members; check valid() before relying on them.
+    notification() noexcept = default;
+    /// @brief Destroys the notification object.
+    /// @details All concurrent operations and waiters must have ended.
     ~notification() noexcept = default;
 
-    notification(const notification&)            = delete;
+    /// @brief Copy construction is disabled; synchronization state has one owner.
+    notification(const notification&) = delete;
+    /// @brief Copy assignment is disabled; synchronization state has one owner.
     notification& operator=(const notification&) = delete;
-    notification(notification&&)                 = delete;
-    notification& operator=(notification&&)      = delete;
+    /// @brief Move construction is disabled; synchronization state is not transferable.
+    notification(notification&&) = delete;
+    /// @brief Move assignment is disabled; synchronization state is not transferable.
+    notification& operator=(notification&&) = delete;
 
     /// @brief Report whether the internal mutex and condition variable exist.
     /// @return `true` when the notification object can be used.
+    /// @details This object and its slots must outlive any waiting or notifying calls.
     [[nodiscard]] bool valid() const noexcept { return mtx_.valid() && cv_.valid(); }
 
     /// @brief Apply a notification action to one slot.
-    /// @param[in] value   Value used by the selected @p action.
-    /// @param[in] action  Update rule applied to the slot.
-    /// @param[in] index   Slot index in the range `[0, Slots)`.
-    /// @retval error_code::ok              The notification was applied.
-    /// @retval error_code::not_initialized The notification object is not initialized.
-    /// @retval error_code::would_block     A no-overwrite notification found a pending slot.
+    /// @param[in] value  Value used by the selected @p action.
+    /// @param[in] action Update rule applied to the slot.
+    /// @param[in] index  Slot index in the range `[0, Slots)`.
+    /// @retval error_code::ok               The notification was applied.
+    /// @retval error_code::not_initialized  The notification object is not initialized.
+    /// @retval error_code::would_block      A no-overwrite action found a pending slot.
     /// @retval error_code::invalid_argument The slot index or notification action is invalid.
+    /// @details Thread-context operation; the update is serialized with waits
+    ///          and other updates by the internal mutex.
     result notify(std::uint32_t value = 0U, notification_action action = notification_action::overwrite,
                   std::size_t index = 0U) const noexcept
     {
@@ -124,11 +137,12 @@ public:
     }
 
     /// @brief Clear a subset of bits in a slot without changing pending state.
-    /// @param[in] bits   Bit mask to clear.
-    /// @param[in] index  Slot index in the range `[0, Slots)`.
-    /// @retval error_code::ok              The bits were cleared.
-    /// @retval error_code::not_initialized The notification object is not initialized.
+    /// @param[in] bits  Bit mask to clear.
+    /// @param[in] index Slot index in the range `[0, Slots)`.
+    /// @retval error_code::ok               The bits were cleared.
+    /// @retval error_code::not_initialized  The notification object is not initialized.
     /// @retval error_code::invalid_argument The slot index is invalid.
+    /// @details Does not change the slot's pending state. Thread context only.
     result clear(std::uint32_t bits, std::size_t index = 0U) const noexcept
     {
         if (!valid())
@@ -146,10 +160,12 @@ public:
     }
 
     /// @brief Reset a slot to value `0` with no pending notification.
-    /// @param[in] index  Slot index in the range `[0, Slots)`.
-    /// @retval error_code::ok              The slot was reset.
-    /// @retval error_code::not_initialized The notification object is not initialized.
+    /// @param[in] index Slot index in the range `[0, Slots)`.
+    /// @retval error_code::ok               The slot was reset.
+    /// @retval error_code::not_initialized  The notification object is not initialized.
     /// @retval error_code::invalid_argument The slot index is invalid.
+    /// @details Clears the value and pending state under the internal mutex.
+    ///          Thread context only.
     result reset(std::size_t index = 0U) const noexcept
     {
         if (!valid())
@@ -167,18 +183,18 @@ public:
     }
 
     /// @brief Wait for one slot to become pending.
-    /// @param[in] index       Slot index in the range `[0, Slots)`.
-    /// @param[in] timeout     Maximum time to wait. A negative value waits forever.
-    /// @param[out] value_out  Optional pointer that receives the slot value observed
-    ///                  when the wait succeeds.
-    /// @param[in] clear_on_entry  Bits cleared before starting the wait.
-    /// @param[in] clear_on_exit   Bits cleared after the wait completes.
-    /// @retval error_code::ok              The slot became pending.
-    /// @retval error_code::not_initialized The notification object is not initialized.
+    /// @param[in]  index          Slot index in the range `[0, Slots)`.
+    /// @param[in]  timeout        Maximum wait; a negative duration waits indefinitely.
+    /// @param[out] value_out      Optional output for the slot value observed on success.
+    /// @param[in]  clear_on_entry Bits cleared before starting the wait.
+    /// @param[in]  clear_on_exit  Bits cleared after the value is observed.
+    /// @retval error_code::ok               The slot became pending.
+    /// @retval error_code::not_initialized  The notification object is not initialized.
     /// @retval error_code::invalid_argument The slot index is invalid.
-    /// @retval error_code::timeout         The wait expired.
+    /// @retval error_code::timeout          The wait expired.
     /// @details A successful wait clears the slot's pending bit before it
-    ///          returns.
+    ///          returns. The value is copied to @p value_out before applying
+    ///          @p clear_on_exit. Thread context only.
     result wait(std::size_t index, milliseconds timeout = milliseconds{-1}, std::uint32_t* value_out = nullptr,
                 std::uint32_t clear_on_entry = 0U, std::uint32_t clear_on_exit = 0xFFFFFFFFU) const noexcept
     {
@@ -222,8 +238,9 @@ public:
     }
 
     /// @brief Report whether a slot has a pending notification.
-    /// @param[in] index  Slot index in the range `[0, Slots)`.
+    /// @param[in] index Slot index in the range `[0, Slots)`.
     /// @return `true` when the slot is pending.
+    /// @details Returns false for an invalid/uninitialized object or an out-of-range index.
     [[nodiscard]] bool pending(std::size_t index = 0U) const noexcept
     {
         if (!valid() || !index_valid(index))
@@ -236,8 +253,10 @@ public:
     }
 
     /// @brief Read the current slot value without consuming pending state.
-    /// @param[in] index  Slot index in the range `[0, Slots)`.
+    /// @param[in] index Slot index in the range `[0, Slots)`.
     /// @return Current 32-bit slot value, or `0` for an invalid slot.
+    /// @details Does not consume pending state; returns zero for an
+    ///          invalid/uninitialized object or an out-of-range index.
     [[nodiscard]] std::uint32_t peek(std::size_t index = 0U) const noexcept
     {
         if (!valid() || !index_valid(index))
